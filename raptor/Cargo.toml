@@ -20,6 +20,7 @@ gtfs-bench = []
 anyhow = "1.0.100"
 criterion = { version = "0.5", features = ["html_reports", "csv_output"] }
 env_logger = "0.11"
+hegel = { git = "https://github.com/hegeldev/hegel-rust", package = "hegeltest" }
 humantime = "2"
 
 [[bench]]

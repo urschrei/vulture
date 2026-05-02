@@ -31,6 +31,9 @@ pub mod simple;
 #[cfg(test)]
 mod test;
 
+#[cfg(test)]
+mod proptest_support;
+
 /// The number of transfers (round number in the RAPTOR algorithm).
 pub type K = usize;
 
