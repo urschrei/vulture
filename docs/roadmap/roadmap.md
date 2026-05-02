@@ -170,23 +170,45 @@ trace.
 
 ### 0.9 Property-based correctness test
 
-**Status:** missing. The current tests are hand-written scenarios.
-They're useful but they don't catch the kinds of bugs above.
+**Status:** landed (Hegel-based). Lives in `raptor/src/proptest_support/`.
+See the module's `README.md` for the trip-count convention, the layer-to-
+soundness-issue map, and the wall-clock budget.
 
-**Fix:** add a `proptest` harness that:
+The harness has three generator layers:
 
-1. Generates random small networks (3–8 stops, 1–4 routes, 1–3 trips
-   per route, optional footpaths).
-2. For each (source, target, departure_time) triple, runs RAPTOR and a
-   brute-force time-expanded Dijkstra reference solver.
-3. Asserts that the Pareto front from RAPTOR equals the Pareto front
-   from Dijkstra, modulo tie-breaking.
+- **Layer 1** (no footpaths) is green on v0.2.0 — it covers the regime the
+  hand-written tests cover and protects against regressions in known-good
+  territory.
+- **Layers 2 and 3** are `#[ignore]`-flagged on v0.2.0 because they expose
+  soundness issues A, B, C, D. Run them via:
 
-The reference solver is ~100 lines and only needs to be correct, not
-fast. Build a node per (stop, time) pair, edges for every trip
-segment and footpath, run Dijkstra. This single test catches every
-correctness bug above and any future regressions in one shot. It is
-the single most valuable test in the repository.
+  ```
+  cargo nextest r -p raptor proptest_support --run-ignored all
+  ```
+
+  The shrunk counterexample on the v0.2.0 baseline is a 2-stop, 1-route,
+  1-footpath network that demonstrates issue B (no footpath relaxation
+  from the source in round 1).
+
+The first deliverable for v0.3 is to remove the `#[ignore]` attributes —
+i.e., the previously-failing property tests turn green as Phase 0 fixes
+land.
+
+The reference solver is a time-expanded multi-criterion Dijkstra in
+`reference.rs` (~200 lines, std-only). It uses atomic board+ride-segment
+edges to avoid the "free re-ride" trap where separate board/ride/wait
+edges admit unboarded trips.
+
+Two implementation choices made during the build that diverge from the
+original handoff brief and are documented in the module's README:
+
+- The brief specified "ps == pt → {(tau, 0)}". The algorithm's
+  `reconstruct_journey` filters out empty plans, so RAPTOR returns `[]`.
+  The reference solver matches that convention.
+- Trips on the same generated route share `leg_durations` and
+  `dwell_times`, making overtaking structurally impossible. This is
+  stricter than the paper but every spec produced is a valid RAPTOR
+  input. Loosening this is a reasonable future enhancement.
 
 ---
 
