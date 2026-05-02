@@ -49,3 +49,103 @@ pub struct QuerySpec {
     pub tau: u16,
     pub max_transfers: u8,
 }
+
+/// Floyd–Warshall transitive closure of the sparse footpath list under
+/// min-plus. Returns an `n × n` matrix; `m[i][j]` is the shortest walk
+/// time from `i` to `j` (saturating on overflow), or `None` if `i == j`
+/// or no walk path exists.
+pub fn close_footpaths(spec: &NetworkSpec) -> Vec<Vec<Option<u16>>> {
+    let n = spec.n_stops as usize;
+    let mut dist: Vec<Vec<Option<u16>>> = vec![vec![None; n]; n];
+
+    for fp in &spec.footpaths {
+        let i = fp.from as usize;
+        let j = fp.to as usize;
+        if i == j || i >= n || j >= n {
+            continue;
+        }
+        dist[i][j] = Some(match dist[i][j] {
+            Some(d) => d.min(fp.walk_time),
+            None => fp.walk_time,
+        });
+    }
+
+    for k in 0..n {
+        for i in 0..n {
+            for j in 0..n {
+                if i == j {
+                    continue;
+                }
+                if let (Some(ik), Some(kj)) = (dist[i][k], dist[k][j]) {
+                    let via_k = ik.saturating_add(kj);
+                    dist[i][j] = Some(match dist[i][j] {
+                        Some(d) => d.min(via_k),
+                        None => via_k,
+                    });
+                }
+            }
+        }
+    }
+
+    dist
+}
+
+#[test]
+fn close_footpaths_two_hop_chain() {
+    let spec = NetworkSpec {
+        n_stops: 3,
+        routes: vec![],
+        footpaths: vec![
+            FootpathSpec {
+                from: 0,
+                to: 1,
+                walk_time: 5,
+            },
+            FootpathSpec {
+                from: 1,
+                to: 2,
+                walk_time: 7,
+            },
+        ],
+        query: QuerySpec {
+            ps: 0,
+            pt: 2,
+            tau: 0,
+            max_transfers: 1,
+        },
+    };
+    let closed = close_footpaths(&spec);
+    assert_eq!(closed[0][1], Some(5));
+    assert_eq!(closed[1][2], Some(7));
+    assert_eq!(closed[0][2], Some(12), "two-hop walk should be closed");
+    assert_eq!(closed[2][0], None, "directed: no return edge added");
+    assert_eq!(closed[0][0], None, "no self-loop");
+}
+
+#[test]
+fn close_footpaths_picks_min_when_duplicate() {
+    let spec = NetworkSpec {
+        n_stops: 2,
+        routes: vec![],
+        footpaths: vec![
+            FootpathSpec {
+                from: 0,
+                to: 1,
+                walk_time: 10,
+            },
+            FootpathSpec {
+                from: 0,
+                to: 1,
+                walk_time: 4,
+            },
+        ],
+        query: QuerySpec {
+            ps: 0,
+            pt: 1,
+            tau: 0,
+            max_transfers: 1,
+        },
+    };
+    let closed = close_footpaths(&spec);
+    assert_eq!(closed[0][1], Some(4));
+}
