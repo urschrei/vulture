@@ -282,3 +282,174 @@ fn render_emits_transitively_closed_footpaths() {
     assert!(from_0.contains(&2u8), "transitive A->C must be present");
     assert_eq!(tt.get_transfer_time(0u8, 2u8), 7);
 }
+
+// -------- Hegel generators ---------------------------------------------
+
+use hegel::generators;
+
+/// Per-layer envelope sizes. Used to parameterize the shared
+/// `network_spec` generator.
+#[derive(Debug, Clone, Copy)]
+pub struct LayerBounds {
+    pub n_stops_min: u8,
+    pub n_stops_max: u8,
+    pub routes_max: u8,
+    pub trips_max: u8,
+    pub footpaths_max: u8,
+    pub stop_seq_max: u8,
+    pub allow_footpaths: bool,
+}
+
+pub fn layer1_bounds() -> LayerBounds {
+    LayerBounds {
+        n_stops_min: 2,
+        n_stops_max: 4,
+        routes_max: 2,
+        trips_max: 2,
+        footpaths_max: 0,
+        stop_seq_max: 4,
+        allow_footpaths: false,
+    }
+}
+
+#[hegel::composite]
+fn route_spec(tc: hegel::TestCase, n_stops: u8, bounds: LayerBounds) -> RouteSpec {
+    let stop_seq_min: u8 = 2;
+    let stop_seq_cap = bounds.stop_seq_max.min(n_stops);
+    let stop_count = tc.draw(
+        generators::integers::<u8>()
+            .min_value(stop_seq_min)
+            .max_value(stop_seq_cap),
+    );
+    let stop_sequence: Vec<u8> = tc.draw(
+        generators::vecs(
+            generators::integers::<u8>()
+                .min_value(0)
+                .max_value(n_stops - 1),
+        )
+        .min_size(stop_count as usize)
+        .max_size(stop_count as usize)
+        .unique(true),
+    );
+
+    let leg_count = stop_sequence.len() - 1;
+    let leg_durations: Vec<u16> = tc.draw(
+        generators::vecs(generators::integers::<u16>().min_value(1).max_value(80))
+            .min_size(leg_count)
+            .max_size(leg_count),
+    );
+
+    let dwell_times: Vec<u16> = tc.draw(
+        generators::vecs(generators::integers::<u16>().min_value(0).max_value(20))
+            .min_size(stop_sequence.len())
+            .max_size(stop_sequence.len()),
+    );
+
+    let trip_count = tc.draw(
+        generators::integers::<u8>()
+            .min_value(1)
+            .max_value(bounds.trips_max),
+    );
+    let mut trips: Vec<TripSpec> = Vec::with_capacity(trip_count as usize);
+    let mut last_dep: u16 = 0;
+    for _ in 0..trip_count {
+        let max_first_dep: u16 = 400;
+        let next_dep = tc.draw(
+            generators::integers::<u16>()
+                .min_value(last_dep)
+                .max_value(max_first_dep),
+        );
+        trips.push(TripSpec {
+            first_dep: next_dep,
+            leg_durations: leg_durations.clone(),
+            dwell_times: dwell_times.clone(),
+        });
+        last_dep = next_dep;
+    }
+
+    RouteSpec {
+        stop_sequence,
+        trips,
+    }
+}
+
+#[hegel::composite]
+fn footpath_spec(tc: hegel::TestCase, n_stops: u8) -> FootpathSpec {
+    let from = tc.draw(
+        generators::integers::<u8>()
+            .min_value(0)
+            .max_value(n_stops - 1),
+    );
+    // Generate `to` distinct from `from` without rejection sampling.
+    let raw = tc.draw(
+        generators::integers::<u8>()
+            .min_value(0)
+            .max_value(n_stops.saturating_sub(2)),
+    );
+    let to = if raw >= from { raw + 1 } else { raw };
+    let walk_time = tc.draw(generators::integers::<u16>().min_value(1).max_value(300));
+    FootpathSpec {
+        from,
+        to,
+        walk_time,
+    }
+}
+
+#[hegel::composite]
+pub fn network_spec(tc: hegel::TestCase, bounds: LayerBounds) -> NetworkSpec {
+    let n_stops = tc.draw(
+        generators::integers::<u8>()
+            .min_value(bounds.n_stops_min)
+            .max_value(bounds.n_stops_max),
+    );
+
+    let route_count = tc.draw(
+        generators::integers::<u8>()
+            .min_value(1)
+            .max_value(bounds.routes_max),
+    );
+    let mut routes: Vec<RouteSpec> = Vec::with_capacity(route_count as usize);
+    for _ in 0..route_count {
+        routes.push(tc.draw(route_spec(n_stops, bounds)));
+    }
+
+    let footpaths: Vec<FootpathSpec> = if bounds.allow_footpaths && n_stops >= 2 {
+        let fp_count = tc.draw(
+            generators::integers::<u8>()
+                .min_value(0)
+                .max_value(bounds.footpaths_max),
+        );
+        let mut v = Vec::with_capacity(fp_count as usize);
+        for _ in 0..fp_count {
+            v.push(tc.draw(footpath_spec(n_stops)));
+        }
+        v
+    } else {
+        Vec::new()
+    };
+
+    let ps = tc.draw(
+        generators::integers::<u8>()
+            .min_value(0)
+            .max_value(n_stops - 1),
+    );
+    let pt = tc.draw(
+        generators::integers::<u8>()
+            .min_value(0)
+            .max_value(n_stops - 1),
+    );
+    let tau = tc.draw(generators::integers::<u16>().min_value(0).max_value(500));
+    let max_transfers = tc.draw(generators::integers::<u8>().min_value(1).max_value(5));
+
+    NetworkSpec {
+        n_stops,
+        routes,
+        footpaths,
+        query: QuerySpec {
+            ps,
+            pt,
+            tau,
+            max_transfers,
+        },
+    }
+}

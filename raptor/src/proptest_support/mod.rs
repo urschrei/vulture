@@ -50,6 +50,39 @@ pub fn raptor_front<R, S>(journeys: &[Journey<R, S>]) -> BTreeSet<(u16, u8)> {
     out
 }
 
+use crate::Timetable;
+
+fn run_property(tc: &hegel::TestCase, spec: &spec::NetworkSpec) {
+    let timetable = spec::render(spec);
+    let ours = timetable.raptor(
+        spec.query.max_transfers as usize,
+        spec.query.tau as usize,
+        spec.query.ps,
+        spec.query.pt,
+    );
+    let theirs = reference::reference_solve(
+        spec,
+        spec.query.ps,
+        spec.query.pt,
+        spec.query.tau,
+        spec.query.max_transfers,
+    );
+    let our_front = raptor_front(&ours);
+    if our_front != theirs {
+        tc.note(&format!("spec: {:#?}", spec));
+        tc.note(&format!("raptor:     {:?}", ours));
+        tc.note(&format!("ours_front: {:?}", our_front));
+        tc.note(&format!("theirs:     {:?}", theirs));
+    }
+    assert_eq!(our_front, theirs);
+}
+
+#[hegel::test]
+fn layer1_matches_reference(tc: hegel::TestCase) {
+    let spec = tc.draw(spec::network_spec(spec::layer1_bounds()));
+    run_property(&tc, &spec);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

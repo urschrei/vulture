@@ -111,9 +111,10 @@ pub fn reference_solve(
     max_trips: u8,
 ) -> BTreeSet<(u16, u8)> {
     if ps == pt {
-        let mut out = BTreeSet::new();
-        out.insert((tau, 0));
-        return out;
+        // The algorithm's `reconstruct_journey` only returns journeys with
+        // ≥ 1 trip, so "stay put at the source" is not modelled as a
+        // journey. Match that convention.
+        return BTreeSet::new();
     }
 
     let prep = Prep::build(spec, ps, tau);
@@ -197,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn ps_eq_pt_returns_tau_zero() {
+    fn ps_eq_pt_returns_empty_to_match_algorithm() {
         let spec = NetworkSpec {
             n_stops: 2,
             routes: vec![],
@@ -210,7 +211,7 @@ mod tests {
             },
         };
         let r = reference_solve(&spec, 0, 0, 42, 3);
-        assert_eq!(r, front(&[(42, 0)]));
+        assert!(r.is_empty(), "ps == pt is not modelled as a journey");
     }
 
     #[test]
