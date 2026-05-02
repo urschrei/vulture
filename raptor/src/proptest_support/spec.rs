@@ -324,6 +324,18 @@ pub fn layer2_bounds() -> LayerBounds {
     }
 }
 
+pub fn layer3_bounds() -> LayerBounds {
+    LayerBounds {
+        n_stops_min: 2,
+        n_stops_max: 6,
+        routes_max: 4,
+        trips_max: 3,
+        footpaths_max: 6,
+        stop_seq_max: 4,
+        allow_footpaths: true,
+    }
+}
+
 #[hegel::composite]
 fn route_spec(tc: hegel::TestCase, n_stops: u8, bounds: LayerBounds) -> RouteSpec {
     let stop_seq_min: u8 = 2;

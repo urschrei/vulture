@@ -90,6 +90,13 @@ fn layer2_matches_reference(tc: hegel::TestCase) {
     run_property(&tc, &spec);
 }
 
+#[ignore = "expected to fail on v0.2.0; full-network coverage"]
+#[hegel::test(test_cases = 500)]
+fn layer3_matches_reference(tc: hegel::TestCase) {
+    let spec = tc.draw(spec::network_spec(spec::layer3_bounds()));
+    run_property(&tc, &spec);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
