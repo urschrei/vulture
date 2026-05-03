@@ -248,6 +248,11 @@ pub trait Timetable {
     /// using at most `transfers` steps. Returns a set of pareto-optimal journeys trading
     /// off between fewer transfers and earlier arrival.
     ///
+    /// "Pareto-optimal" here means: for any two returned journeys A and B,
+    /// neither weakly dominates the other in the (trip count, arrival)
+    /// ordering. The output is sorted by trip count ascending; arrival
+    /// strictly decreases as trip count increases.
+    ///
     /// Returns an empty `Vec` if no journey exists.
     fn raptor(
         &self,
@@ -358,13 +363,34 @@ pub trait Timetable {
 
         let plans = reconstruct_journey(&board_detail_per_k, ps, pt, transfers);
 
-        plans
+        let mut journeys: Vec<Journey<Self::Route, Self::Stop>> = plans
             .into_iter()
             .map(|plan| {
                 let arrival = *labels[plan.len()].get(&pt).unwrap();
 
                 Journey { plan, arrival }
             })
-            .collect()
+            .collect();
+
+        // Output-side Pareto filter. Sort by trip count ascending, then keep
+        // only journeys whose arrival is strictly less than the best seen so
+        // far. After this, no returned journey is dominated by another in
+        // the (trip count, arrival) ordering — i.e. for any two journeys
+        // (k_a, t_a) and (k_b, t_b) with k_a < k_b, we have t_a > t_b.
+        //
+        // Local and target pruning during the rounds *should* already
+        // prevent dominated journeys from being recorded, but this filter
+        // makes the output contract independent of pruning correctness.
+        journeys.sort_by_key(|j| j.plan.len());
+        let mut best = Tau::MAX;
+        journeys.retain(|j| {
+            if j.arrival < best {
+                best = j.arrival;
+                true
+            } else {
+                false
+            }
+        });
+        journeys
     }
 }

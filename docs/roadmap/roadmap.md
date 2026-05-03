@@ -56,17 +56,14 @@ an arrival.
 
 ### 0.5 Pareto-filter the output
 
-**Status:** broken. `reconstruct_journey` emits one plan per
-`k ∈ 1..=transfers` and `Timetable::raptor` collects all of them. A
-2-transfer journey with the same arrival as a 1-transfer journey is not
-dropped. Local/target pruning *should* prevent dominated plans from
-being recorded in the first place; with 0.3 landed this is now more
-reliable, but the explicit filter is cheap insurance.
-
-**Fix:** sort journeys by transfer count ascending, then drop any
-journey whose arrival is not strictly less than the best arrival seen
-so far. Document that "Pareto-optimal" means "no other returned journey
-has both ≤ transfers and ≤ arrival, with at least one strict".
+**Status:** landed on v0.3 branch. `Timetable::raptor` now sorts
+collected journeys by trip count ascending and retains only those whose
+arrival is strictly less than the best arrival seen so far. The trait
+doc comment documents the contract: arrival strictly decreases as trip
+count increases, and no returned journey weakly dominates another. The
+filter is defence-in-depth — local/target pruning should already
+suppress dominated journeys at recording time, but the explicit step
+makes the output independent of pruning correctness.
 
 ### 0.5b Journey reconstruction must trace through walk legs
 

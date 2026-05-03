@@ -139,44 +139,6 @@ purposes; the algorithm operates on synthetic route indices.
 
 ---
 
-### Issue F: Output is not Pareto-filtered
-
-**Severity**: Medium
-
-**Location**: `raptor/src/lib.rs:273–283`, `reconstruct_journey` at
-lines 73–120.
-
-**Paper**: the output is the Pareto front over (arrival, transfers).
-
-**Current code**: `reconstruct_journey` produces one plan per
-`k ∈ 1..=transfers` and returns them all. `Timetable::raptor` wraps each
-plan with the corresponding arrival time and emits the lot.
-
-**Problem**: a 2-transfer journey arriving at the same time as a
-1-transfer journey is dominated and should be dropped. Local and target
-pruning *should* prevent dominated plans from being recorded — but with
-Issue C unfixed, pruning is leaky and dominated plans do reach the
-output. Even with C fixed, an explicit output-side filter is cheap and
-provides a defence in depth.
-
-**Fix**: after collecting the journeys, sort by transfer count ascending
-and drop any whose arrival is not strictly less than the best arrival
-seen so far:
-
-```rust
-let mut journeys: Vec<_> = plans.into_iter().map(...).collect();
-journeys.sort_by_key(|j| j.plan.len());
-let mut best = Tau::MAX;
-journeys.retain(|j| {
-    if j.arrival < best { best = j.arrival; true } else { false }
-});
-journeys
-```
-
-This also makes the output ordering deterministic and easier to test.
-
----
-
 ### Issue G: Saturating arithmetic on `Tau` everywhere
 
 **Severity**: Low
@@ -233,12 +195,11 @@ expensive on large feeds, so it must be opt-in.
 | Issue | Severity | Location | Description |
 |-------|----------|----------|-------------|
 | E | **Critical** | gtfs.rs:215–245 | GTFS adapter conflates route_id with RAPTOR route; binary search unsound |
-| F | Medium | lib.rs reconstruct_journey | Output not Pareto-filtered |
 | G | Low | lib.rs trip arithmetic | Non-saturating Tau arithmetic outside footpath helper |
 | H | Low | trait docs | Footpath transitivity assumption undocumented |
 
-A–D and I are now resolved on the v0.3 branch. See *Resolved Issues*
-below.
+A–D, F, and I are now resolved on the v0.3 branch. See *Resolved
+Issues* below.
 
 ---
 
@@ -252,10 +213,11 @@ three generator layers (footpaths included) and protects against
 regressions on the synthetic side. E itself needs a separate harness
 over `GtfsTimetable` to be exercised under property tests.
 
-**Defence-in-depth**: Issues F and G are individually low-impact but
-worth fixing because they make the algorithm robust to bugs elsewhere.
-F is especially valuable because it makes the output independent of
-pruning correctness, simplifying testing and debugging.
+**Defence-in-depth**: Issue G is individually low-impact but worth
+fixing because it makes the algorithm robust to bugs elsewhere. F was
+in the same category and has now landed; it makes the output
+independent of pruning correctness and simplifies testing and
+debugging.
 
 ---
 
@@ -303,6 +265,19 @@ marked set, including stops whose arrival exceeded τ\*(pₜ).
 
 **Now**: `relax_footpaths_round` only marks `p_dash` if the walk-derived
 arrival strictly improves on `best_arrival[pt]`.
+
+### F: Output is not Pareto-filtered — **Fixed (v0.3)**
+
+**Was**: `Timetable::raptor` collected one journey per
+`k ∈ 1..=transfers` from `reconstruct_journey` without an explicit
+output-side Pareto filter. With local/target pruning leaky (Issue C),
+dominated journeys could leak into the output.
+
+**Now**: after collecting the journeys, `Timetable::raptor` sorts them
+by trip count ascending and retains only those whose arrival is
+strictly less than the best seen so far. The trait doc documents the
+contract: arrival strictly decreases as trip count increases. Output
+is deterministic and independent of pruning correctness.
 
 ### I: Journey reconstruction cannot trace through walk legs — **Fixed (v0.3)**
 
