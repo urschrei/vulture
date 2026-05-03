@@ -28,8 +28,8 @@ for journey in &journeys {
 }
 ```
 
-Each journey in the result is pareto-optimal: no other journey arrives earlier
-with the same or fewer transfers.
+Each returned journey is Pareto-optimal: arrival strictly decreases as trip
+count increases, and no two returned journeys weakly dominate each other.
 
 ## Reading a Journey
 
@@ -46,20 +46,79 @@ For example, going from stop `"A"` to stop `"D"` with two transfers:
 Read as: board `R1` at `A`, get off at `B`, board `R2` at `B`, get off at `C`,
 board `R3` at `C`, get off at `D`.
 
+The plan records transit boardings only. If the optimal journey ends with a
+walk leg from the last boarded alight stop to the target, the plan still ends
+at the boarded alight stop and `arrival` reflects the walk-derived arrival
+time at the target. Compare `journey.plan.last()`'s stop with your target to
+detect this case.
+
+## Implementing `Timetable`
+
+Two contracts the algorithm relies on:
+
+- **Footpaths must be transitively closed.** If `A → B` and `B → C` are both
+  walkable, you must also report `A → C` from `get_footpaths_from(A)`. The
+  algorithm relaxes footpaths once per round; it does not iterate to a fixed
+  point. Most well-formed GTFS feeds satisfy this because `transfers.txt`
+  consists of explicit pairs.
+- **Trips on a route must share a stop sequence and not overtake.** The
+  algorithm binary-searches by departure time at intermediate stops. If your
+  data source groups trips with different stop patterns or overtaking pairs
+  under one route, split them at construction. The bundled GTFS adapter does
+  this automatically (see below).
+
+Both invariants are documented on the `Timetable` trait.
+
+## Performance: reusing a `RaptorCache`
+
+Calling `Timetable::raptor` allocates fresh scratch buffers on every query.
+For server use cases running many queries against the same timetable, prefer
+`raptor_with_cache`:
+
+```rust
+use raptor::{RaptorCache, Timetable};
+
+let mut cache: RaptorCache<MyRoute, MyStop> = RaptorCache::new();
+for query in queries {
+    let journeys = timetable.raptor_with_cache(
+        &mut cache, query.transfers, query.tau, query.ps, query.pt,
+    );
+    // ...
+}
+```
+
+The cache is reset at the start of each call but retains its heap allocations.
+A single `RaptorCache` is not thread-safe; give each worker thread its own.
+
 ## GTFS Support
 
 A ready-made implementation for GTFS feeds ships in the `gtfs` module:
 
 ```rust
 use gtfs_structures::Gtfs;
-use raptor::gtfs::GtfsTimetable;
+use raptor::gtfs::{GtfsTimetable, RouteId};
 use raptor::Timetable;
 
 let gtfs = Gtfs::from_path("path/to/gtfs.zip").unwrap();
 let timetable = GtfsTimetable::new(&gtfs).unwrap();
 
 let journeys = timetable.raptor(10, 69300, "stop_a", "stop_b");
+
+for journey in &journeys {
+    for (route_id, stop) in &journey.plan {
+        // route_id is a synthetic RouteId; recover the original GTFS route_id:
+        let gtfs_route = timetable.route_name(*route_id);
+        // ... look up further metadata on `gtfs.routes[gtfs_route]` ...
+    }
+}
 ```
+
+`GtfsTimetable::new` splits each GTFS `route_id` into one or more synthetic
+`RouteId`s — one per equivalence class of trips with identical, non-overtaking
+stop sequences. This matches the paper's notion of a "route" and makes the
+algorithm sound on real-world feeds (where one `route_id` routinely groups
+short-turns, branches, and deadheads). The original `route_id` is recoverable
+via `GtfsTimetable::route_name(RouteId)` for display.
 
 There's also a runnable example:
 
