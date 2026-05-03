@@ -87,37 +87,26 @@ Issue I (resolved).
 
 ### 0.6 Route-pattern splitting in the GTFS adapter
 
-**Status:** broken. `cache_trips_for_routes` sorts trips by *first-stop*
-departure time and uses `partition_point` to binary-search at an
-*arbitrary intermediate* stop. This is unsound when:
+**Status:** landed on v0.3 branch. `GtfsTimetable::new` now groups trips
+by `(route_id, stop_sequence)`, sorts each group by first-stop
+departure, then greedily splits each group into non-overtaking sub-
+groups. Each sub-group becomes a synthetic `RouteId` (a newtype around
+`u32`). The algorithm operates entirely on `RouteId`s; the original
+GTFS `route_id` is recoverable via `GtfsTimetable::route_name`.
 
-- Two trips on the same `route_id` have different stop sequences (very
-  common in GTFS — short-turns, branching, deadheads).
-- Two trips share a stop sequence but overtake each other (rarer; some
-  feeds have express + local on the same route_id).
+This is a public API change for `GtfsTimetable` users — `Journey`'s
+`Route` type for this adapter is now `RouteId`, not `&str`. Display
+code calls `tt.route_name(route_id)` to get the original GTFS
+`route_id` and looks up route metadata as before. The `gtfs-timetable`
+example has been updated.
 
-The TODO at line 98 acknowledges the first case. The current code
-silently returns wrong answers for both.
+The new `GtfsError::MissingDepartureTime` variant is returned at
+construction time when a stop_time has no departure_time (the algorithm
+relies on departure times for binary-search ordering).
 
-**Fix:** at construction time, split each GTFS `route_id` into one or
-more *RAPTOR routes* — equivalence classes of trips with identical stop
-sequences. Concretely:
-
-1. For each trip, compute its stop sequence as a `Vec<&str>`.
-2. Use `(route_id, stop_sequence)` as the key for the synthetic route
-   map. This gives one synthetic route per pattern.
-3. Within each synthetic route, sort trips by departure at the *first
-   stop*. Because all trips share a stop pattern, this implies sorted
-   by departure at every stop — *unless* trips overtake.
-4. Detect overtaking at construction time: for each consecutive pair of
-   trips, check that arrival/departure times are monotonic at every
-   stop. If overtaking exists, either split further (into non-overtaking
-   sub-groups) or document the assumption and refuse to construct.
-
-This needs a new internal type — `RouteId(u32)` or similar — distinct
-from the user-facing `&str` route IDs. Expose the original route IDs
-through a `route_name(RouteId) -> &str` accessor on the timetable for
-display purposes (e.g., "take the 39A").
+Unit tests cover the splitting logic (`overtakes`,
+`split_non_overtaking`); the smoke test on `aux/dmrc_gtfs.zip` returns
+the same journey as before.
 
 ### 0.7 Footpath transitivity assumption
 

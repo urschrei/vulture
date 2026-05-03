@@ -2,7 +2,10 @@
 
 use gtfs_structures::Gtfs;
 use humantime::format_duration;
-use raptor::{Journey, Timetable, gtfs::GtfsTimetable};
+use raptor::{
+    Journey, Timetable,
+    gtfs::{GtfsTimetable, RouteId},
+};
 use std::{env, time::Duration};
 
 fn main() -> anyhow::Result<()> {
@@ -41,7 +44,7 @@ fn main() -> anyhow::Result<()> {
     for (i, journey) in journeys.iter().enumerate() {
         let travel_time = Duration::from_secs((journey.arrival - departure_time) as u64);
         println!("Journey {} ({}):", i + 1, format_duration(travel_time));
-        print_journey(&gtfs, journey, start);
+        print_journey(&gtfs, &timetable, journey, start);
         println!();
     }
 
@@ -52,7 +55,8 @@ fn main() -> anyhow::Result<()> {
 
 fn print_journey<'gtfs>(
     gtfs: &'gtfs Gtfs,
-    journey: &'gtfs Journey<&'gtfs str, &'gtfs str>,
+    timetable: &GtfsTimetable<'gtfs>,
+    journey: &Journey<RouteId, &'gtfs str>,
     start: &'gtfs str,
 ) {
     // Format: "stop_name" -["route_name"]-> "stop_name" ...
@@ -65,12 +69,12 @@ fn print_journey<'gtfs>(
     print!("\"{}\" ", start_name);
 
     for (route, stop) in journey.plan.iter() {
-        let route: &str = route;
+        let route_id = timetable.route_name(*route);
         let route_name = gtfs
             .routes
-            .get(route)
+            .get(route_id)
             .and_then(|r| r.short_name.as_deref().or(r.long_name.as_deref()))
-            .unwrap_or(route);
+            .unwrap_or(route_id);
 
         let stop_name = gtfs
             .stops

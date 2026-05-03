@@ -76,69 +76,6 @@ time** and **number of transfers** in a public transit network.
 
 ## Outstanding Soundness Issues
 
-### Issue E: GTFS `get_earliest_trip` assumes incorrectly that route_id implies a single stop pattern
-
-**Severity**: Critical (for real GTFS feeds)
-
-**Location**: `raptor/src/gtfs.rs:215–245`, supported by
-`cache_trips_for_routes` at lines 133–156.
-
-**Paper**: a "route" in RAPTOR is an equivalence class of trips with
-*identical* stop sequences. The construction `R` of routes from raw
-trip-pattern data is described in §3.1 of the journal version. A GTFS
-`route_id` is *not* a RAPTOR route — it routinely groups trips with
-different stop patterns (short-turns, branching, deadheads, express vs.
-local).
-
-**Current code**: `cache_trips_for_routes` (line 144) sorts trips on a
-`route_id` by their *first-stop* departure time. `get_earliest_trip`
-(line 236) then `partition_point`s over this list to find trips
-departing at-or-after `at` from an *intermediate* stop:
-
-```rust
-let idx = trips.partition_point(|&trip| {
-    departure_at_stop(trip).map(|dep| dep < at).unwrap_or(true)
-});
-```
-
-**Problem**: when trips on a `route_id` have different stop sequences,
-"sorted by first-stop departure" does not imply "sorted by intermediate-
-stop departure" — different trips visit different first stops, or skip
-the queried stop entirely. The fallback `.find` at line 241 only handles
-trips that don't serve the stop; it does not recover a trip that *does*
-serve the stop but was sorted "after" the partition point because of a
-different first stop.
-
-Even when all trips share a stop pattern, *trip overtaking* (e.g., an
-express trip that overtakes a local) breaks the binary-search ordering.
-RAPTOR assumes no overtaking within a route, but this assumption is only
-sound after route-pattern splitting has been performed.
-
-The TODO at `gtfs.rs:98` ("handle case where multiple trips run on a
-route but with different patterns which require merging stops in a
-meaningful way") acknowledges the first failure mode; the second is not
-flagged anywhere.
-
-**Fix**: at construction time, split each GTFS `route_id` into one or
-more synthetic *RAPTOR routes*, each defined as the equivalence class of
-trips sharing an identical stop sequence:
-
-1. For each trip, compute its stop sequence as a tuple/Vec of stop IDs.
-2. Key synthetic routes by `(route_id, stop_sequence)`.
-3. Within each synthetic route, sort trips by first-stop departure. By
-   construction, all trips share a stop pattern, so first-stop ordering
-   implies ordering at every other stop — *unless* trips overtake.
-4. At construction, verify monotonicity: for each consecutive trip pair
-   on a synthetic route, check that arrival/departure times are
-   monotonic at every stop. On detection of overtaking, either split
-   further into non-overtaking sub-groups or surface a construction-
-   time warning.
-
-The user-facing route ID can be preserved via a side map for display
-purposes; the algorithm operates on synthetic route indices.
-
----
-
 ### Issue G: Saturating arithmetic on `Tau` everywhere
 
 **Severity**: Low
@@ -194,24 +131,24 @@ expensive on large feeds, so it must be opt-in.
 
 | Issue | Severity | Location | Description |
 |-------|----------|----------|-------------|
-| E | **Critical** | gtfs.rs:215–245 | GTFS adapter conflates route_id with RAPTOR route; binary search unsound |
 | G | Low | lib.rs trip arithmetic | Non-saturating Tau arithmetic outside footpath helper |
 | H | Low | trait docs | Footpath transitivity assumption undocumented |
 
-A–D, F, and I are now resolved on the v0.3 branch. See *Resolved
-Issues* below.
+A–F and I are now resolved on the v0.3 branch. See *Resolved Issues*
+below.
 
 ---
 
 ## Impact Assessment
 
-**Correctness on real GTFS feeds**: with A–D and I resolved, the
-remaining critical issue is E (GTFS route-pattern conflation), which
-breaks routing on most non-trivial agency feeds. The hegel-based
-property test in `raptor/src/proptest_support/` is green across all
-three generator layers (footpaths included) and protects against
-regressions on the synthetic side. E itself needs a separate harness
-over `GtfsTimetable` to be exercised under property tests.
+**Correctness on real GTFS feeds**: A–F and I are resolved. No critical
+soundness issues remain in the algorithm or the GTFS adapter on the v0.3
+branch. The remaining items (G, H) are defence-in-depth and
+documentation. The hegel-based property test in
+`raptor/src/proptest_support/` is green across all three generator
+layers (footpaths included). A separate property-test harness over
+`GtfsTimetable` is on the wish list (roadmap step 4.2: CI on real
+feeds with golden files).
 
 **Defence-in-depth**: Issue G is individually low-impact but worth
 fixing because it makes the algorithm robust to bugs elsewhere. F was
@@ -265,6 +202,28 @@ marked set, including stops whose arrival exceeded τ\*(pₜ).
 
 **Now**: `relax_footpaths_round` only marks `p_dash` if the walk-derived
 arrival strictly improves on `best_arrival[pt]`.
+
+### E: GTFS adapter conflated route_id with RAPTOR route — **Fixed (v0.3)**
+
+**Was**: `cache_trips_for_routes` indexed trips by GTFS `route_id` and
+sorted them by first-stop departure. `get_earliest_trip` then binary-
+searched at an *intermediate* stop, which is unsound when (a) trips on
+the same `route_id` have different stop sequences (short-turns,
+branching), or (b) two trips overtake each other on the same pattern.
+Both modes silently returned wrong answers.
+
+**Now**: `GtfsTimetable::new` groups trips by `(route_id,
+stop_sequence)`, sorts each group by first-stop departure, and
+greedily splits each group into non-overtaking sub-groups
+(`split_non_overtaking`). Each sub-group becomes a synthetic
+`RouteId` (a newtype around `u32`); the algorithm operates entirely on
+`RouteId`s. The original GTFS `route_id` is recoverable for display via
+`GtfsTimetable::route_name`.
+
+This is a public API change — `Journey`'s `Route` type for this
+adapter is now `RouteId` rather than `&str`. The binary search in
+`get_earliest_trip` is now sound because every synthetic route's trips
+share a stop sequence and pairwise do not overtake.
 
 ### F: Output is not Pareto-filtered — **Fixed (v0.3)**
 
