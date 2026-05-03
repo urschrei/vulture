@@ -226,65 +226,6 @@ expensive on large feeds, so it must be opt-in.
 
 ---
 
-### Issue I: Journey reconstruction cannot trace through walk legs
-
-**Severity**: **Critical** (correctness gap on any feed with footpaths
-on the optimal path)
-
-**Location**: `raptor/src/lib.rs`, `BoardingTree` and
-`reconstruct_journey`.
-
-**Paper (§3.2)**: a Pareto-optimal journey is a sequence of trip and
-walk segments from `pₛ` to `pₜ`. Both segment types are first-class.
-
-**Current code**: the boarding tree records only route-scan boardings,
-keyed by `(K, Stop) -> (boarding_stop, route)`. Walks performed in the
-footpath stage update the label table but leave no entry in the boarding
-tree. `reconstruct_journey` traces back from `pₜ` through boarding tree
-entries only, and a missing entry terminates the trace.
-
-**Concrete failure modes**:
-
-- **Walk-then-board** (round-0 walk + round-1 board): the boarding stop
-  reached by walking from `pₛ` has no boarding-tree entry, so when
-  reconstruction hits the boarding stop the trace breaks before reaching
-  `pₛ` and the journey is dropped.
-- **Board-walk-board** (e.g. `A→R1→B→walk→C→R2→D`): the walk-reached
-  boarding stop `C` has no entry, so reconstruction can't connect the
-  round-2 boarding event to the round-1 alighting event.
-- **Pure walk-only journeys** (`pₛ → pₜ` with zero boardings): no
-  boarding events at all, plan is empty, dropped by the existing empty-
-  plan filter.
-
-The first two cases mean RAPTOR computes correct *arrival times* in the
-label table after the Phase 0 fixes (A–D), but cannot *emit* the
-corresponding journeys. The existing `footpath_enables_connection` test
-in `raptor/src/test.rs` documents this with `journeys.is_empty()`.
-
-**Detection**: the proptest harness exposes this as soon as Phase 0
-fixes (A–D) are in place — see `raptor/src/proptest_support/`. Layer 2
-shrinks to a 1-trip walk-then-board counterexample.
-
-**Fix sketch**: extend the boarding tree to record both step types, e.g.
-
-```rust
-enum Step<R, S> {
-    Boarded { from: S, route: R },
-    Walked { from: S },
-}
-type BoardingTree<R, S> = BTreeMap<(K, S), Step<R, S>>;
-```
-
-Insert `Walked` entries from `relax_footpaths_round` whenever a walk
-strictly improves a label. Update `reconstruct_journey` to chain through
-walk entries within a round (a walk does not consume a trip / round
-budget). Decide whether the public `Journey::plan` should expose walk
-steps or remain a route-only sequence — keeping it route-only preserves
-the API but loses information about *which* footpath was taken.
-
-This is the next Phase 0 deliverable on the v0.3 branch and the gating
-item before layer-2 of the proptest harness can drop its `#[ignore]`.
-
 ---
 
 ## Summary Table
@@ -295,27 +236,21 @@ item before layer-2 of the proptest harness can drop its `#[ignore]`.
 | F | Medium | lib.rs reconstruct_journey | Output not Pareto-filtered |
 | G | Low | lib.rs trip arithmetic | Non-saturating Tau arithmetic outside footpath helper |
 | H | Low | trait docs | Footpath transitivity assumption undocumented |
-| I | **Critical** | lib.rs reconstruct_journey | Journey reconstruction cannot trace through walk legs |
 
-A–D are now resolved on the v0.3 branch. See *Resolved Issues* below.
+A–D and I are now resolved on the v0.3 branch. See *Resolved Issues*
+below.
 
 ---
 
 ## Impact Assessment
 
-**Correctness on real GTFS feeds**: with A–D resolved, the remaining
-critical issues are E (GTFS route-pattern conflation) and I (walk-leg
-reconstruction). E breaks routing on most non-trivial agency feeds. I
-means RAPTOR computes correct arrival times in its label table but
-cannot emit any journey whose optimal path includes a footpath segment.
-
-**Synthetic test networks** (the kind covered by `raptor/src/test.rs`)
-sidestep both. Each hand-written test either avoids footpaths on the
-optimal path or asserts an empty result for footpath-only transfers (see
-`footpath_enables_connection`, which documents the I limitation
-directly). The hegel-based property test in
-`raptor/src/proptest_support/` does generate footpath-bearing networks
-and is the harness that surfaces I.
+**Correctness on real GTFS feeds**: with A–D and I resolved, the
+remaining critical issue is E (GTFS route-pattern conflation), which
+breaks routing on most non-trivial agency feeds. The hegel-based
+property test in `raptor/src/proptest_support/` is green across all
+three generator layers (footpaths included) and protects against
+regressions on the synthetic side. E itself needs a separate harness
+over `GtfsTimetable` to be exercised under property tests.
 
 **Defence-in-depth**: Issues F and G are individually low-impact but
 worth fixing because they make the algorithm robust to bugs elsewhere.
@@ -368,6 +303,35 @@ marked set, including stops whose arrival exceeded τ\*(pₜ).
 
 **Now**: `relax_footpaths_round` only marks `p_dash` if the walk-derived
 arrival strictly improves on `best_arrival[pt]`.
+
+### I: Journey reconstruction cannot trace through walk legs — **Fixed (v0.3)**
+
+**Was**: the boarding tree recorded only route-scan boardings, so
+reconstruction broke whenever the optimal path involved a walk leg
+(walk-then-board, board-walk-board, or board-then-walk-to-pt). RAPTOR
+computed correct arrival times after A–D landed but could not emit the
+corresponding journeys.
+
+**Now**: the boarding tree is keyed by
+`(K, Stop) -> Step<Route, Stop>` where
+
+```rust
+enum Step<Route, Stop> {
+    Boarded { from: Stop, route: Route },
+    Walked { from: Stop },
+}
+```
+
+`relax_footpaths_round` inserts `Walked` entries whenever a walk
+strictly improves a label. `reconstruct_journey` chains through walk
+entries without decrementing the round index — walks happen within a
+round and do not consume a trip. The hegel proptest layers 2 and 3
+(footpath-bearing networks) turned green on this fix.
+
+The public `Journey::plan` remains route-only for API stability; a
+journey ending in a walk is emitted with its last *boarded* alight stop
+in the plan and the walk-derived arrival time. Surfacing walk steps in
+the public API is a future enhancement.
 
 ### R1: `get_earliest_trip` missing time parameter — **Fixed**
 

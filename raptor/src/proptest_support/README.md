@@ -31,21 +31,13 @@ equality property focus on issues that actually involve transit.
 | Layer | Stops | Routes | Trips/route | Footpaths | Status on v0.3 branch |
 |-------|-------|--------|-------------|-----------|-----------------------|
 | 1     | 2..=4 | 1..=2  | 1..=2       | 0         | passes                |
-| 2     | 2..=5 | 1..=3  | 1..=2       | 1..=4     | fails (issue I)       |
-| 3     | 2..=6 | 1..=4  | 1..=3       | 0..=6     | fails (issue I)       |
+| 2     | 2..=5 | 1..=3  | 1..=2       | 1..=4     | passes                |
+| 3     | 2..=6 | 1..=4  | 1..=3       | 0..=6     | passes                |
 
-Layers 2 and 3 are `#[ignore]`-flagged so `cargo nextest r` stays green
-while issue I is outstanding. Run them with:
-
-```
-cargo nextest r -p raptor proptest_support --run-ignored all
-```
-
-A–D were resolved in the Phase 0 work on the v0.3 branch. The remaining
-failure mode is **issue I** (journey reconstruction cannot trace through
-walk legs) — see `soundness.md` and `docs/roadmap/roadmap.md` step 0.5b.
-Once 0.5b lands, remove the `#[ignore]` attributes; the v0.3 deliverable
-includes "the previously-ignored property tests now pass."
+All three layers are part of the default `cargo nextest r` run. They
+were `#[ignore]`-flagged on v0.2.0 because issues A–D and I made the
+front-equality property fail; resolving Phase 0 (0.1–0.4 + 0.5b) on
+the v0.3 branch turned them green and the flags came off.
 
 ## Layer-to-soundness-issue map
 
@@ -61,7 +53,7 @@ See `soundness.md` at the repo root for the full issue catalogue.
 | F — output not Pareto-filtered | masked by `raptor_front` | Hidden so the front-equality property isolates other issues. A separate test once 0.5 lands. |
 | G — non-saturating Tau arithmetic | (out of scope) | Generator ranges keep `tau`, `walk_time` small enough to never trigger overflow; a targeted unit test is more appropriate. |
 | H — footpath transitivity assumption | (out of scope) | Renderer transitively closes footpaths, so the harness can't observe non-closed inputs. |
-| I — journey reconstruction cannot trace through walk legs | 2 | Current shrunk counterexample on the post-0.4 branch is a 1-trip walk-then-board where the reference emits `(t, 1)` and RAPTOR returns `{}`. Layer-2 stays `#[ignore]` until roadmap step 0.5b lands. |
+| I — journey reconstruction cannot trace through walk legs | resolved in v0.3 | Was the post-0.4 layer-2 blocker. Boarding tree now records walk legs alongside route boardings; reconstruction chains through walks within a round. |
 
 ## Reproducing a failure
 

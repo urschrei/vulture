@@ -495,13 +495,15 @@ fn footpath_enables_connection() {
         .footpath(Stop::B, Stop::C)
         .transfer_time(Stop::B, Stop::C, 5);
 
+    // Optimal: board R1 at A, alight at B (arr 10), walk B→C (arr 15),
+    // board R2 at C (dep 20), alight at D (arr 30). Two boardings, with a
+    // walk leg between them. Reconstruction traces back through the walk.
     let journeys = tt.raptor(3, 0, Stop::A, Stop::D);
-    // NOTE: The algorithm correctly propagates arrival times through footpaths,
-    // but journey reconstruction can't trace back through footpath-only transfers
-    // (no boarding tree entry for the footpath destination). This documents that limitation.
-    assert!(
-        journeys.is_empty(),
-        "footpath-only transfer not reconstructable"
+    assert_eq!(journeys.len(), 1, "expected one journey, got {journeys:?}");
+    assert_eq!(journeys[0].arrival, 30);
+    assert_eq!(
+        journeys[0].plan,
+        vec![(Route::R1, Stop::B), (Route::R2, Stop::D)]
     );
 }
 

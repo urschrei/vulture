@@ -70,48 +70,23 @@ has both ≤ transfers and ≤ arrival, with at least one strict".
 
 ### 0.5b Journey reconstruction must trace through walk legs
 
-**Status:** broken. The boarding tree is keyed by `(K, Stop) -> (Stop,
-Route)` and only records route-scan boardings. Walks performed in the
-footpath stage update the label table but leave no trace, so
-`reconstruct_journey` cannot connect a route-scan event to a walk-
-reached boarding stop. Failure modes:
+**Status:** landed on v0.3 branch. The boarding tree is now keyed by
+`(K, Stop) -> Step<Route, Stop>` where `Step` is either `Boarded { from,
+route }` or `Walked { from }`. `relax_footpaths_round` inserts `Walked`
+entries when a walk strictly improves a label; `reconstruct_journey`
+chains through walks within a round (no `inner_k` decrement on a walk
+step) so walk-then-board, board-walk-board, and board-then-walk-to-pt
+journeys all survive reconstruction.
 
-- *Walk-then-board* (round-0 walk, round-1 board): reconstruction
-  reaches the boarding stop but cannot trace back to `pₛ`, so the
-  journey is dropped. The proptest harness shrinks layer-2 failures
-  straight to this case.
-- *Board-walk-board* (e.g. `A→R1→B→walk→C→R2→D`): the walk-reached
-  boarding stop `C` has no entry, breaking the trace mid-journey. The
-  existing `footpath_enables_connection` test in
-  `raptor/src/test.rs` documents this with `journeys.is_empty()`.
-- *Walk-only* (`pₛ→pₜ` with zero boardings): empty plan, dropped by the
-  empty-plan filter. The proptest harness's reference solver also drops
-  these to match the algorithm's "≥ 1 trip" convention.
+The public `Journey::plan` remains route-only — a journey ending in a
+walk is emitted with the last *boarded* alight stop in the plan and
+the walk-derived arrival time. Surfacing walk steps in the public API
+is a future enhancement; the current shape preserves the existing
+contract.
 
-After the 0.1–0.4 fixes the *arrival times* in the label table are
-correct on these journeys; only the emission step is broken.
-
-**Fix:** extend the boarding tree to record both step types, e.g.
-
-```rust
-enum Step<R, S> {
-    Boarded { from: S, route: R },
-    Walked { from: S },
-}
-type BoardingTree<R, S> = BTreeMap<(K, S), Step<R, S>>;
-```
-
-Insert `Walked` entries from `relax_footpaths_round` whenever a walk
-strictly improves a label. Update `reconstruct_journey` to chain
-through walk entries within a round (a walk does not consume a trip
-and does not advance the round index). Decide whether to surface walk
-steps in the public `Journey::plan` (a `Vec<JourneyStep>` with both
-ride and walk variants) or to keep `plan` as a route-only sequence and
-expose walk legs through a separate accessor — the latter preserves
-the existing API but loses information about which footpath was taken.
-
-This is the gating item before layer-2 of the proptest harness can
-drop its `#[ignore]` flag. See `soundness.md` Issue I.
+The hegel proptest harness layers 2 and 3 turned green on this fix and
+their `#[ignore]` attributes have been removed. See `soundness.md`
+Issue I (resolved).
 
 ### 0.6 Route-pattern splitting in the GTFS adapter
 
@@ -177,28 +152,14 @@ Outstanding: audit any remaining `Tau` arithmetic and switch to
 See the module's `README.md` for the trip-count convention, the layer-to-
 soundness-issue map, and the wall-clock budget.
 
-The harness has three generator layers:
+The harness has three generator layers, all green on the v0.3 branch:
 
-- **Layer 1** (no footpaths) is green and covers the regime the hand-
-  written tests cover, protecting against regressions in known-good
-  territory.
-- **Layers 2 and 3** stay `#[ignore]`-flagged on v0.3 until 0.5b lands.
-  After 0.1–0.4 the soundness fixes for issues A, B, C, D are in place,
-  but the harness still surfaces issue I (walk-leg reconstruction): the
-  algorithm computes correct arrivals for walk-bearing journeys but
-  cannot emit them. Run the ignored layers via:
-
-  ```
-  cargo nextest r -p raptor proptest_support --run-ignored all
-  ```
-
-  The shrunk counterexample on the post-0.4 branch is a small walk-
-  then-board network where the reference emits `(t, 1)` and RAPTOR
-  emits `{}` — see `soundness.md` Issue I.
-
-The remaining deliverable for v0.3 is to remove the `#[ignore]`
-attributes — i.e., the previously-failing property tests turn green
-once 0.5b (walk-leg reconstruction) lands.
+- **Layer 1** (no footpaths) covers the regime the hand-written tests
+  cover, protecting against regressions in known-good territory.
+- **Layers 2 and 3** generate footpath-bearing networks and were
+  `#[ignore]`-flagged on v0.2.0 because they exposed issues A–D and I.
+  Phase 0 (0.1–0.4 + 0.5b) resolved those, the flags came off, and they
+  now run as part of `cargo nextest r`.
 
 The reference solver is a time-expanded multi-criterion Dijkstra in
 `reference.rs` (~200 lines, std-only). It uses atomic board+ride-segment
@@ -605,11 +566,11 @@ substantial. Premature splitting just adds friction.
 Each release is independently usable, and the roadmap is structured so
 that earlier releases don't constrain the design of later ones.
 
-- **v0.3 (Correctness):** Phase 0 in full, plus 1.5 (allocation reuse)
-  and 4.1 (docs pass) because they're cheap. Property-based test must be
-  green (which requires 0.5b — walk-leg reconstruction — alongside the
-  already-landed 0.1–0.4). Announcement post: "raptor-rs now produces
-  correct results."
+- **v0.3 (Correctness):** Phase 0 in full (0.1–0.4 + 0.5b are landed;
+  0.5, 0.6, 0.7, 0.8 outstanding), plus 1.5 (allocation reuse) and 4.1
+  (docs pass) because they're cheap. The property-based test against
+  the reference solver is green across all three generator layers.
+  Announcement post: "raptor-rs now produces correct results."
 
 - **v0.4 (Performance):** Phase 1 in full. Benchmark numbers within
   3× of the published RAPTOR figures. Announcement post: "raptor-rs is

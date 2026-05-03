@@ -169,27 +169,31 @@ pub fn reference_solve(
         }
     }
 
-    // Drop walk-only journeys (k == 0): RAPTOR's `reconstruct_journey`
-    // filters out empty plans, so the algorithm cannot emit a
-    // walk-from-ps-to-pt journey. Match that convention.
     let mut at_pt: Vec<(u16, u8)> = min_trips
         .iter()
         .filter(|((s, _), _)| *s == pt)
-        .filter(|&(_, &k)| k > 0 && k <= max_trips)
+        .filter(|&(_, &k)| k <= max_trips)
         .map(|(&(_, t), &k)| (t, k))
         .collect();
 
-    // Pareto filter: sort by trip count ascending, keep strictly-decreasing arrival.
+    // Pareto filter: sort by trip count ascending, keep strictly-decreasing
+    // arrival. Walk-only journeys (k == 0) are kept here so that they can
+    // dominate higher-k journeys — RAPTOR's local/target pruning has the
+    // same effect, dropping any route-based journey that doesn't improve
+    // on the walk-only τ\*(pt).
     at_pt.sort_by_key(|&(t, k)| (k, t));
     let mut best = u16::MAX;
-    let mut out = BTreeSet::new();
+    let mut pareto: Vec<(u16, u8)> = Vec::new();
     for (t, k) in at_pt {
         if t < best {
             best = t;
-            out.insert((t, k));
+            pareto.push((t, k));
         }
     }
-    out
+
+    // Drop walk-only (k == 0) entries from the *output*: RAPTOR cannot
+    // emit empty plans, so the harness must match that convention.
+    pareto.into_iter().filter(|&(_, k)| k > 0).collect()
 }
 
 #[cfg(test)]

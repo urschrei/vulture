@@ -71,18 +71,32 @@ pub struct Journey<Route, Stop> {
     pub arrival: Tau,
 }
 
-type BoardingTree<Route, Stop> = BTreeMap<(K, Stop), (Stop, Route)>;
+/// One reconstructable step in a journey: either a transit boarding event
+/// (route-scan) or a walk along a footpath. Walks do not consume a round —
+/// they happen *within* round `k` at the stop they alight on — so the
+/// reconstruction logic chains through walk entries without decrementing
+/// the round index.
+#[derive(Debug, Clone, Copy)]
+enum Step<Route, Stop> {
+    Boarded { from: Stop, route: Route },
+    Walked { from: Stop },
+}
+
+type BoardingTree<Route, Stop> = BTreeMap<(K, Stop), Step<Route, Stop>>;
 
 /// Relax footpaths from every stop in `sources` at round `k`.
 ///
 /// Improves `labels[k][p_dash]` and the τ\* table (`best_arrival`) when
-/// walking yields a strictly better arrival. Returns the stops that should
-/// be added to the marked set, after target-pruning against τ\*(pt).
+/// walking yields a strictly better arrival, and records a `Walked` step
+/// in the boarding tree so that `reconstruct_journey` can later trace
+/// back through the walk leg. Returns the stops that should be added to
+/// the marked set, after target-pruning against τ\*(pt).
 fn relax_footpaths_round<T: Timetable + ?Sized>(
     timetable: &T,
     k: K,
     labels: &mut [BTreeMap<T::Stop, Tau>],
     best_arrival: &mut BTreeMap<T::Stop, Tau>,
+    board_detail: &mut BoardingTree<T::Route, T::Stop>,
     sources: &BTreeSet<T::Stop>,
     pt: T::Stop,
 ) -> Vec<T::Stop> {
@@ -97,6 +111,7 @@ fn relax_footpaths_round<T: Timetable + ?Sized>(
             let cur = labels[k].get(&p_dash).copied().unwrap_or(Tau::MAX);
             if via_walk < cur {
                 labels[k].insert(p_dash, via_walk);
+                board_detail.insert((k, p_dash), Step::Walked { from: stop });
                 best_arrival
                     .entry(p_dash)
                     .and_modify(|v| *v = (*v).min(via_walk))
@@ -131,23 +146,38 @@ where
     for k in 1..=transfers {
         let mut plan = Vec::with_capacity(k);
         let mut parent = pt;
+        let mut inner_k = k;
+        // Bound the trace length to avoid pathological loops on a malformed
+        // tree. In a well-formed tree walks are at most one hop per round
+        // (footpaths are transitively closed and the helper only walks from
+        // the round's marked sources), so 2 * k + 1 steps suffice.
+        let mut budget = 2 * k + 1;
 
         log::debug!("outer_k = {k} | parent = {parent:?} | plans = {plans:?}");
 
-        for inner_k in (1..=k).rev() {
+        while parent != ps && budget > 0 {
+            budget -= 1;
             log::debug!("inner_k = {inner_k} | parent = {parent:?} | plan = {plan:?}");
-            if parent == ps {
-                log::debug!("stopping because parent is ps");
-                break;
-            }
 
-            let Some((stop, route)) = tree.get(&(inner_k, parent)).copied() else {
+            let Some(step) = tree.get(&(inner_k, parent)).copied() else {
                 log::debug!("stopping because tree has no entry for current (inner_k, parent)");
                 break;
             };
 
-            plan.push((route, parent));
-            parent = stop;
+            match step {
+                Step::Boarded { from, route } => {
+                    plan.push((route, parent));
+                    parent = from;
+                    if inner_k == 0 {
+                        break;
+                    }
+                    inner_k -= 1;
+                }
+                Step::Walked { from } => {
+                    parent = from;
+                    // walks do not consume a round
+                }
+            }
         }
 
         if !plan.is_empty() && parent == ps {
@@ -239,8 +269,15 @@ pub trait Timetable {
         // Round 0 footpath relaxation: a journey starting with a walk should
         // be discoverable in round 1, which requires `ps`'s walk-neighbours to
         // already appear in labels[0] before the first round.
-        let walked_at_init =
-            relax_footpaths_round(self, 0, &mut labels, &mut best_arrival, &marked_stops, pt);
+        let walked_at_init = relax_footpaths_round(
+            self,
+            0,
+            &mut labels,
+            &mut best_arrival,
+            &mut board_detail_per_k,
+            &marked_stops,
+            pt,
+        );
         marked_stops.extend(walked_at_init);
 
         #[allow(non_snake_case)]
@@ -278,7 +315,13 @@ pub trait Timetable {
                         let time_to_beat = *best_arrival_to_pi.min(best_arrival_to_target);
 
                         if arr < time_to_beat {
-                            board_detail_per_k.insert((k, pi), (boarding_stop, route));
+                            board_detail_per_k.insert(
+                                (k, pi),
+                                Step::Boarded {
+                                    from: boarding_stop,
+                                    route,
+                                },
+                            );
                             labels[k].insert(pi, arr);
                             best_arrival.insert(pi, arr);
                             marked_stops.insert(pi);
@@ -297,8 +340,15 @@ pub trait Timetable {
                 }
             }
 
-            let walked =
-                relax_footpaths_round(self, k, &mut labels, &mut best_arrival, &marked_stops, pt);
+            let walked = relax_footpaths_round(
+                self,
+                k,
+                &mut labels,
+                &mut best_arrival,
+                &mut board_detail_per_k,
+                &marked_stops,
+                pt,
+            );
             marked_stops.extend(walked);
 
             if marked_stops.is_empty() {
