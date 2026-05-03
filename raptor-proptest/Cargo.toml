@@ -1,0 +1,16 @@
+[package]
+name = "raptor-proptest"
+version = "0.0.0"
+edition = "2024"
+description = "Property-based test harness for the raptor crate, using a brute-force reference solver"
+license = "Apache-2.0"
+repository = "https://github.com/keogami/raptor-rs"
+publish = false
+
+[lib]
+name = "raptor_proptest"
+path = "src/lib.rs"
+
+[dependencies]
+raptor = { workspace = true }
+hegel = { git = "https://github.com/hegeldev/hegel-rust", package = "hegeltest" }

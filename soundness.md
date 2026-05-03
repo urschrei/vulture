@@ -98,7 +98,7 @@ See *Resolved Issues* below for the per-issue write-ups.
 
 **Correctness on real GTFS feeds**: A–I are all resolved on v0.3. No
 critical soundness issues remain in the algorithm or the GTFS adapter.
-The hegel-based property test in `raptor/src/proptest_support/` is
+The hegel-based property test in the `raptor-proptest` workspace crate is
 green across all three generator layers (footpaths included). A
 separate property-test harness over `GtfsTimetable` is on the wish list
 (roadmap step 4.2: CI on real feeds with golden files).

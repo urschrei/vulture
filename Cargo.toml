@@ -1,5 +1,5 @@
 [workspace]
-members = ["raptor", "dotgraph"]
+members = ["raptor", "raptor-proptest", "dotgraph"]
 resolver = "3"
 
 [profile.dev]

@@ -132,7 +132,7 @@ underlying timetable but never combines them.
 
 ### 0.9 Property-based correctness test
 
-**Status:** landed (Hegel-based). Lives in `raptor/src/proptest_support/`.
+**Status:** landed (Hegel-based). Lives in the `raptor-proptest` workspace crate.
 See the module's `README.md` for the trip-count convention, the layer-to-
 soundness-issue map, and the wall-clock budget.
 

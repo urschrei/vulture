@@ -86,7 +86,7 @@ expect roughly 20–30 lines of changes in `route_spec` and an explicit
 To add a Layer 4 (e.g., for McRAPTOR in roadmap Phase 2):
 
 1. Add a `LayerBounds` constant via `layerN_bounds()` in `spec.rs`.
-2. Add a `#[hegel::test]` function in `mod.rs` that draws from
+2. Add a `#[hegel::test]` function in `src/lib.rs` that draws from
    `spec::network_spec(spec::layerN_bounds())` and calls `run_property`.
 3. If the new layer requires multi-criterion comparison, the property
    helper (`run_property`) and `raptor_front` will need to be generalised.

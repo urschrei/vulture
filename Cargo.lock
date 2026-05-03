@@ -1447,7 +1447,6 @@ dependencies = [
  "dot_graph",
  "env_logger",
  "gtfs-structures",
- "hegeltest",
  "humantime",
  "log",
  "smallvec",
@@ -1459,6 +1458,14 @@ name = "raptor-dotgraph"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "raptor",
+]
+
+[[package]]
+name = "raptor-proptest"
+version = "0.0.0"
+dependencies = [
+ "hegeltest",
  "raptor",
 ]
 

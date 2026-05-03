@@ -1,9 +1,9 @@
 //! Spec data model, per-layer Hegel composite generators, and the renderer
 //! that turns a `NetworkSpec` into a `SimpleTimetable<u8, u8, u16>`.
 //!
-//! See `mod.rs` for the trip-count convention banner.
+//! See `lib.rs` for the trip-count convention banner.
 
-use crate::simple::SimpleTimetable;
+use raptor::simple::SimpleTimetable;
 
 /// Top-level spec for one randomly-generated test case.
 #[derive(Debug, Clone)]
@@ -73,20 +73,20 @@ pub fn render(spec: &NetworkSpec) -> SimpleTimetable<u8, u8, u16> {
             "leg_durations length mismatch",
         );
 
-        let mut trip_owned: Vec<(u16, Vec<(crate::Tau, crate::Tau)>)> =
+        let mut trip_owned: Vec<(u16, Vec<(raptor::Tau, raptor::Tau)>)> =
             Vec::with_capacity(route.trips.len());
         for trip in &route.trips {
             assert_eq!(trip.leg_durations.len(), stops.len() - 1);
             assert_eq!(trip.dwell_times.len(), stops.len());
 
-            let mut times: Vec<(crate::Tau, crate::Tau)> = Vec::with_capacity(stops.len());
-            let arr0 = trip.first_dep as crate::Tau;
-            let dep0 = arr0 + trip.dwell_times[0] as crate::Tau;
+            let mut times: Vec<(raptor::Tau, raptor::Tau)> = Vec::with_capacity(stops.len());
+            let arr0 = trip.first_dep as raptor::Tau;
+            let dep0 = arr0 + trip.dwell_times[0] as raptor::Tau;
             times.push((arr0, dep0));
             for i in 1..stops.len() {
                 let prev_dep = times[i - 1].1;
-                let arr = prev_dep + trip.leg_durations[i - 1] as crate::Tau;
-                let dep = arr + trip.dwell_times[i] as crate::Tau;
+                let arr = prev_dep + trip.leg_durations[i - 1] as raptor::Tau;
+                let dep = arr + trip.dwell_times[i] as raptor::Tau;
                 times.push((arr, dep));
             }
 
@@ -94,7 +94,7 @@ pub fn render(spec: &NetworkSpec) -> SimpleTimetable<u8, u8, u16> {
             next_trip_id = next_trip_id.checked_add(1).expect("trip id overflow");
         }
 
-        let trip_refs: Vec<(u16, &[(crate::Tau, crate::Tau)])> = trip_owned
+        let trip_refs: Vec<(u16, &[(raptor::Tau, raptor::Tau)])> = trip_owned
             .iter()
             .map(|(id, times)| (*id, times.as_slice()))
             .collect();
@@ -109,7 +109,7 @@ pub fn render(spec: &NetworkSpec) -> SimpleTimetable<u8, u8, u16> {
             }
             if let Some(walk) = closed[from as usize][to as usize] {
                 tt = tt.footpath(from, to);
-                tt = tt.transfer_time(from, to, walk as crate::Tau);
+                tt = tt.transfer_time(from, to, walk as raptor::Tau);
             }
         }
     }
@@ -219,7 +219,7 @@ fn close_footpaths_picks_min_when_duplicate() {
 
 #[test]
 fn render_single_route_two_stops_one_trip() {
-    use crate::Timetable;
+    use raptor::Timetable;
     let spec = NetworkSpec {
         n_stops: 2,
         routes: vec![RouteSpec {
@@ -252,7 +252,7 @@ fn render_single_route_two_stops_one_trip() {
 
 #[test]
 fn render_emits_transitively_closed_footpaths() {
-    use crate::Timetable;
+    use raptor::Timetable;
     let spec = NetworkSpec {
         n_stops: 3,
         routes: vec![],

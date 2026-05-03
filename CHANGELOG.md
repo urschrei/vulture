@@ -61,10 +61,11 @@ are in `soundness.md` (issues A–I, all moved to Resolved Issues).
 - `RaptorCache<Route, Stop>` and `Timetable::raptor_with_cache` for
   reusing scratch buffers across queries — recommended for server use
   cases running many queries against the same timetable.
-- Hegel-based property test harness in `raptor/src/proptest_support/`
-  that checks the algorithm against a brute-force multi-criterion
-  Dijkstra reference solver. Three generator layers (no-footpath,
-  small-footpath, full-network) all green on this release.
+- Hegel-based property test harness in the new `raptor-proptest`
+  workspace crate that checks the algorithm against a brute-force
+  multi-criterion Dijkstra reference solver. Three generator layers
+  (no-footpath, small-footpath, full-network) all green on this
+  release.
 - `gtfs::GtfsError::MissingDepartureTime` variant: `GtfsTimetable::new`
   now refuses to construct from a feed whose `stop_times.txt` is
   missing departure times the algorithm relies on for ordering.

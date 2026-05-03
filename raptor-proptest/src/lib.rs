@@ -11,14 +11,14 @@
 //! Both this harness and the reference solver use trip counts everywhere.
 //! The Pareto front compared in property tests is over `(arrival, trip_count)`.
 //!
-//! Layer-to-issue mapping is documented in `README.md` next to this file.
+//! Layer-to-issue mapping is documented in `README.md` next to this crate.
 
 pub mod reference;
 pub mod spec;
 
 use std::collections::BTreeSet;
 
-use crate::Journey;
+use raptor::Journey;
 
 /// Project the algorithm's `Vec<Journey>` to a Pareto front of
 /// `(arrival, trip_count)`, sorted by trip count ascending, keeping only
@@ -50,8 +50,10 @@ pub fn raptor_front<R, S>(journeys: &[Journey<R, S>]) -> BTreeSet<(u16, u8)> {
     out
 }
 
-use crate::Timetable;
+#[cfg(test)]
+use raptor::Timetable;
 
+#[cfg(test)]
 fn run_property(tc: &hegel::TestCase, spec: &spec::NetworkSpec) {
     let timetable = spec::render(spec);
     let ours = timetable.raptor(

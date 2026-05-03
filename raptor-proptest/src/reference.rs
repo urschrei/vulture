@@ -2,12 +2,12 @@
 //!
 //! Optimise nothing. If we ever debug this, we have gone wrong somewhere.
 //!
-//! See `mod.rs` for the trip-count convention banner.
+//! See `lib.rs` for the trip-count convention banner.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 
-use crate::proptest_support::spec::{NetworkSpec, close_footpaths};
+use crate::spec::{NetworkSpec, close_footpaths};
 
 /// Pre-computed per-trip stop schedules: `(stop, arrival, departure)` per
 /// stop in the trip's stop sequence.
@@ -16,6 +16,10 @@ pub(super) type TripSchedule = Vec<(u8, u16, u16)>;
 /// Pre-computation: per-stop relevant timepoints, per-trip schedules,
 /// transitively-closed footpath matrix.
 pub(super) struct Prep {
+    /// Time-expanded node set: stop -> set of relevant timepoints. Built
+    /// for the unit tests below; the Dijkstra core walks the trips/
+    /// footpaths fields directly without consulting this map.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub nodes: BTreeMap<u8, BTreeSet<u16>>,
     pub trips: Vec<TripSchedule>,
     pub footpaths: Vec<Vec<Option<u16>>>,
@@ -199,7 +203,7 @@ pub fn reference_solve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proptest_support::spec::*;
+    use crate::spec::*;
 
     fn front(items: &[(u16, u8)]) -> BTreeSet<(u16, u8)> {
         items.iter().copied().collect()
