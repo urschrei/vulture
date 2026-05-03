@@ -193,6 +193,34 @@ where
 ///
 /// Implement this trait to describe your transit network's topology and schedule.
 /// The algorithm itself is provided as a default method ([`Timetable::raptor`]).
+///
+/// # Footpath transitivity
+///
+/// The footpath relation returned by [`get_footpaths_from`] must be
+/// **transitively closed**: if you can walk `A → B` and `B → C`, then
+/// `A → C` must also be reported as a footpath from `A` (with a
+/// transfer time at most the sum of the two legs). The algorithm relaxes
+/// footpaths once per round; it does not iterate to a fixed point. A
+/// non-closed relation will cause RAPTOR to miss journeys whose optimal
+/// path involves chained walks within a single round.
+///
+/// Most well-formed GTFS feeds satisfy this because `transfers.txt`
+/// entries are typically explicit pairs. If your data source gives you
+/// transitive walking edges (e.g. coordinate-derived footpaths within a
+/// max radius), close the relation yourself before returning it from
+/// `get_footpaths_from`.
+///
+/// # No overtaking within a route
+///
+/// All trips returned by [`get_earliest_trip`] for a given route must
+/// share a stop sequence and pairwise must not overtake. The algorithm
+/// uses a binary search by departure time at intermediate stops, which
+/// is only sound when the trip ordering is monotone at every stop.
+/// Adapters that ingest data with multiple stop patterns or overtaking
+/// should split such groups into separate routes at construction.
+///
+/// [`get_footpaths_from`]: Timetable::get_footpaths_from
+/// [`get_earliest_trip`]: Timetable::get_earliest_trip
 pub trait Timetable {
     /// Identifier for a transit stop.
     type Stop: Ord + Copy + Debug;
@@ -232,6 +260,11 @@ pub trait Timetable {
     fn get_departure_time(&self, trip: Self::Trip, stop: Self::Stop) -> Tau;
 
     /// Returns all stops reachable from the given stop via walking (footpaths).
+    ///
+    /// **The footpath relation must be transitively closed.** See the
+    /// trait-level docs for details. Without closure, the algorithm will
+    /// miss journeys whose optimal path chains multiple walk legs in a
+    /// single round.
     fn get_footpaths_from(&self, stop: Self::Stop) -> Cow<'_, [Self::Stop]>;
 
     /// Returns the walking transfer time between two stops, in seconds.

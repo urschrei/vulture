@@ -100,6 +100,23 @@ impl<'a> GtfsTimetable<'a> {
     /// Validates that every trip references existing stops and has
     /// stop_times with departure times, then splits each GTFS `route_id`
     /// into synthetic [`RouteId`]s as described in the module docs.
+    ///
+    /// # Footpath assumptions
+    ///
+    /// The adapter passes `transfers.txt` entries through to the
+    /// [`Timetable::get_footpaths_from`] return as-is, without computing
+    /// the transitive closure. The [`Timetable`] trait requires the
+    /// footpath relation to be transitively closed (see the trait-level
+    /// docs). For typical feeds whose `transfers.txt` consists of
+    /// explicit station-pair entries this holds; for feeds that derive
+    /// transfers from coordinates with a max-radius rule it may not, in
+    /// which case the caller is responsible for pre-closing the data
+    /// before constructing the [`Gtfs`] passed in here. (A built-in
+    /// closure pass is on the roadmap but is opt-in because it is
+    /// expensive on large feeds.)
+    ///
+    /// [`Timetable`]: crate::Timetable
+    /// [`Timetable::get_footpaths_from`]: crate::Timetable::get_footpaths_from
     pub fn new(gtfs: &'a Gtfs) -> GtfsResult<Self> {
         let RouteIndex {
             routes_for_stops,

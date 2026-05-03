@@ -110,27 +110,25 @@ the same journey as before.
 
 ### 0.7 Footpath transitivity assumption
 
-**Status:** undocumented. The paper assumes the footpath relation is
-transitively closed — i.e., if A↔B and B↔C are footpaths, then A↔C is
-either also a footpath or A→C is reachable in one stage. Without this,
-a single round of footpath relaxation isn't sufficient.
+**Status:** documented on v0.3 branch. The `Timetable` trait carries a
+"Footpath transitivity" section in its top-level docs and a tightened
+note on `get_footpaths_from`. `GtfsTimetable::new` documents that it
+passes `transfers.txt` through unmodified, leaving closure to the
+caller for feeds that need it.
 
-**Fix (short-term):** document the requirement on the `Timetable` trait
-and on `GtfsTimetable::new`. Most well-formed GTFS feeds satisfy it
-already (transfers.txt entries tend to be explicit pairs).
-
-**Fix (medium-term):** in `GtfsTimetable::new`, optionally compute the
-transitive closure of the footpath graph at construction with a maximum
-walking radius. This is what the OpenTripPlanner ecosystem does. Gate
-behind a feature flag because it's expensive on large feeds.
+The medium-term enhancement — an opt-in transitive-closure pass during
+`GtfsTimetable::new`, gated behind a feature flag and a max-walking-
+distance parameter — is left as a future feature, not a soundness
+prerequisite.
 
 ### 0.8 Saturating arithmetic on Tau
 
-**Status:** partially landed on v0.3 branch — `relax_footpaths_round`
-uses `saturating_add` for the walk-arrival computation. The trip
-arithmetic in route scanning still trusts the underlying timetable.
-Outstanding: audit any remaining `Tau` arithmetic and switch to
-`saturating_add`/`saturating_sub`.
+**Status:** landed on v0.3 branch. `relax_footpaths_round` is the only
+site in the algorithm that combines `Tau` values arithmetically and it
+uses `saturating_add`. A sweep of `Timetable::raptor`, the simple
+adapter, and the GTFS adapter confirmed there is no other `Tau`
+arithmetic — route scanning compares Tau values returned by the
+underlying timetable but never combines them.
 
 ### 0.9 Property-based correctness test
 
@@ -552,11 +550,12 @@ substantial. Premature splitting just adds friction.
 Each release is independently usable, and the roadmap is structured so
 that earlier releases don't constrain the design of later ones.
 
-- **v0.3 (Correctness):** Phase 0 in full (0.1–0.4 + 0.5b are landed;
-  0.5, 0.6, 0.7, 0.8 outstanding), plus 1.5 (allocation reuse) and 4.1
-  (docs pass) because they're cheap. The property-based test against
-  the reference solver is green across all three generator layers.
-  Announcement post: "raptor-rs now produces correct results."
+- **v0.3 (Correctness):** Phase 0 in full — 0.1–0.4, 0.5, 0.5b, 0.6,
+  0.7, 0.8, and 0.9 are all landed on the v0.3 branch. Plus 1.5
+  (allocation reuse) and 4.1 (docs pass) because they're cheap. The
+  property-based test against the reference solver is green across all
+  three generator layers. Announcement post: "raptor-rs now produces
+  correct results."
 
 - **v0.4 (Performance):** Phase 1 in full. Benchmark numbers within
   3× of the published RAPTOR figures. Announcement post: "raptor-rs is

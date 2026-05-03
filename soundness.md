@@ -76,93 +76,40 @@ time** and **number of transfers** in a public transit network.
 
 ## Outstanding Soundness Issues
 
-### Issue G: Saturating arithmetic on `Tau` everywhere
+(none on the v0.3 branch — Phase 0 is complete.)
 
-**Severity**: Low
-
-**Location**: `raptor/src/lib.rs`.
-
-**Current code**: the footpath helper `relax_footpaths_round` uses
-`saturating_add` for the `stop_arrival + transfer_time` computation. The
-remaining `Tau` arithmetic in the algorithm — notably the trip
-arrival/departure lookups — relies on the underlying timetable to return
-sane values.
-
-**Problem**: `Tau = usize`. A misconfigured trip schedule or a custom
-`Timetable` impl returning `Tau::MAX` for a missing trip can still wrap
-on downstream arithmetic outside the helper.
-
-**Fix**: audit the algorithm for any non-saturating `Tau` arithmetic and
-switch to `saturating_add` / `saturating_sub`. The footpath helper is
-already covered.
-
----
-
-### Issue H: Footpath transitivity is undocumented
-
-**Severity**: Low
-
-**Location**: `Timetable` trait documentation, `GtfsTimetable::new`.
-
-**Paper (§3.1)**: the footpath relation F is assumed to be transitively
-closed — i.e., F* = F — so that a single round of footpath relaxation
-suffices. Without this, walking via A→B→C is missed when only A→B and
-B→C are listed as direct footpaths.
-
-**Current code**: nothing documents this assumption. Most well-formed
-GTFS feeds happen to satisfy it because `transfers.txt` entries are
-typically explicit pairs, but feeds that derive transfers from coordinate-
-based proximity often do not.
-
-**Fix (short-term)**: document the assumption on the `Timetable` trait
-and on `GtfsTimetable::new`. Note the failure mode explicitly so users
-know what to check for.
-
-**Fix (medium-term)**: optionally compute the transitive closure during
-`GtfsTimetable::new`, gated behind a feature flag and a maximum-walking-
-distance parameter. This is what OpenTripPlanner does. The closure is
-expensive on large feeds, so it must be opt-in.
-
----
+A possible future hardening: an opt-in transitive-closure pass during
+`GtfsTimetable::new` (gated behind a feature flag and a max-walking-
+distance parameter) for feeds whose `transfers.txt` is not transitively
+closed, mirroring what OpenTripPlanner does. This is a feature
+enhancement, not a soundness fix — the current contract documents the
+closure requirement explicitly and well-formed GTFS feeds satisfy it.
 
 ---
 
 ## Summary Table
 
-| Issue | Severity | Location | Description |
-|-------|----------|----------|-------------|
-| G | Low | lib.rs trip arithmetic | Non-saturating Tau arithmetic outside footpath helper |
-| H | Low | trait docs | Footpath transitivity assumption undocumented |
-
-A–F and I are now resolved on the v0.3 branch. See *Resolved Issues*
-below.
+All catalogued soundness issues (A–I) are resolved on the v0.3 branch.
+See *Resolved Issues* below for the per-issue write-ups.
 
 ---
 
 ## Impact Assessment
 
-**Correctness on real GTFS feeds**: A–F and I are resolved. No critical
-soundness issues remain in the algorithm or the GTFS adapter on the v0.3
-branch. The remaining items (G, H) are defence-in-depth and
-documentation. The hegel-based property test in
-`raptor/src/proptest_support/` is green across all three generator
-layers (footpaths included). A separate property-test harness over
-`GtfsTimetable` is on the wish list (roadmap step 4.2: CI on real
-feeds with golden files).
-
-**Defence-in-depth**: Issue G is individually low-impact but worth
-fixing because it makes the algorithm robust to bugs elsewhere. F was
-in the same category and has now landed; it makes the output
-independent of pruning correctness and simplifies testing and
-debugging.
+**Correctness on real GTFS feeds**: A–I are all resolved on v0.3. No
+critical soundness issues remain in the algorithm or the GTFS adapter.
+The hegel-based property test in `raptor/src/proptest_support/` is
+green across all three generator layers (footpaths included). A
+separate property-test harness over `GtfsTimetable` is on the wish list
+(roadmap step 4.2: CI on real feeds with golden files).
 
 ---
 
 ## Resolved Issues
 
 The following issues were identified in earlier revisions of this
-document and have since been fixed. R1–R5 were resolved by v0.2.0; A–D
-were resolved on the v0.3 development branch.
+document and have since been fixed. R1–R5 were resolved by v0.2.0;
+A–I were resolved on the v0.3 development branch.
 
 ### A: Round labels are not carried forward — **Fixed (v0.3)**
 
@@ -267,6 +214,30 @@ journey ending in a walk is emitted with its last *boarded* alight stop
 in the plan and the walk-derived arrival time. Surfacing walk steps in
 the public API is a future enhancement.
 
+### G: Saturating arithmetic on `Tau` everywhere — **Fixed (v0.3)**
+
+**Was**: the v0.2.0 footpath stage added `transfer_time` without
+`saturating_add`, allowing wrap on misconfigured input.
+
+**Now**: `relax_footpaths_round` is the only site in the algorithm
+that combines `Tau` values arithmetically, and it uses `saturating_add`.
+A 0.8 audit confirmed there is no other `Tau` arithmetic in
+`Timetable::raptor`, in the simple adapter, or in the GTFS adapter
+(beyond reading values out of the underlying timetable, which the
+algorithm only compares, never combines).
+
+### H: Footpath transitivity is undocumented — **Fixed (v0.3)**
+
+**Was**: the assumption that the footpath relation is transitively
+closed was implicit. Feeds whose `transfers.txt` derives from
+coordinate-radius rules can violate it without warning, causing missed
+journeys.
+
+**Now**: the `Timetable` trait documents the closure requirement at
+the trait level and on `get_footpaths_from`. `GtfsTimetable::new`
+documents that it passes `transfers.txt` through unmodified, leaving
+closure to the caller (or to a future opt-in feature).
+
 ### R1: `get_earliest_trip` missing time parameter — **Fixed**
 
 **Was**: the `Timetable::get_earliest_trip` trait method took only
@@ -296,8 +267,7 @@ existing arrival and the origin's arrival, without adding the walking
 duration. Footpaths were effectively teleportation.
 
 **Now**: `relax_footpaths_round` adds
-`self.get_transfer_time(stop, p_dash)` via `saturating_add`. Wider
-saturation in the trip arithmetic is still pending — see Issue G.
+`self.get_transfer_time(stop, p_dash)` via `saturating_add`.
 
 ### R3: `get_stops_after` semantics ambiguous — **Fixed**
 
