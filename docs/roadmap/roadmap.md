@@ -29,69 +29,30 @@ output against a brute-force solver before declaring victory.
 
 ### 0.1 Carry forward round labels (τₖ(p) ← τₖ₋₁(p))
 
-**Status:** broken. The current implementation stores labels in
-`BTreeMap<(K, Stop), Tau>` and never copies forward, so
-`best_arrival_per_k.get(&(k, p))` returns `None` for any stop not
-explicitly improved this round, even when τₖ₋₁(p) was finite.
-
-**Why it matters:** the footpath stage (line 250) reads
-`best_arrival_per_k.get(&(k, stop))` to compute walk arrivals, so
-footpaths only relax from stops touched by route scanning *this same
-round*. Anything reached by a previous round and not re-improved this
-round can't be a footpath origin. Stops reached only by walking from a
-previously-routed stop are also lost.
-
-**Fix:** restructure labels to `Vec<HashMap<Stop, Tau>>` (one map per
-round), and at the start of each round k clone round k-1 into round k as
-the baseline. Or, if we want to keep the sparse representation, walk
-all `(k-1, *)` entries at the start of each round and seed the round-k
-map. The clone path is simpler and the cost is dwarfed by route scanning.
-
-Better still, once stops are interned to `u32` indices (Phase 1), use
-`Vec<Vec<Tau>>` with `Tau::MAX` as the "infinity" sentinel. Then carry-
-forward is `labels[k] = labels[k-1].clone()` — one line, branch-free,
-cache-friendly.
+**Status:** landed on v0.3 branch. Labels now live in
+`Vec<BTreeMap<Stop, Tau>>` indexed by round; each round k starts with
+`labels[k] = labels[k - 1].clone()`. Once stops are interned to `u32`
+indices (Phase 1), this can become `Vec<Vec<Tau>>` for branch-free
+carry-forward — that's a Phase 1 follow-up, not a soundness change.
 
 ### 0.2 Footpath relaxation from the source in round 1
 
-**Status:** broken. `(0, ps) → tau` is set at init, but the footpath
-loop in round 1 reads `best_arrival_per_k.get(&(1, stop))` which is
-empty until something is routed *into* `stop` this round. So if the
-optimal journey is "walk from `ps` to a neighbouring stop, then board",
-round 1 will not discover it.
-
-**Fix:** run the footpath stage once during initialization, propagating
-from `ps` to its neighbours at round 0. Once 0.1 is done, this falls
-out for free if we make round 0's labels include footpath-reachable
-neighbours of `ps`. The cleanest way: introduce `relax_footpaths(k)`
-helper that operates on the round-k label set, call it once at init for
-round 0, then once per round inside the loop.
+**Status:** landed on v0.3 branch. The footpath stage is extracted into
+`relax_footpaths_round` and called once at init for round 0, then once
+per round inside the loop. Combined with 0.1's carry-forward, walk-
+reachable neighbours of `ps` propagate into round 1 as boarding origins.
 
 ### 0.3 Update τ\* in the footpath stage
 
-**Status:** broken (this is `soundness.md` issue 5). The route-scanning
-stage updates both `best_arrival_per_k` and `best_arrival` (τ\*). The
-footpath stage only updates `best_arrival_per_k`. So in round k+1,
-local pruning compares against a stale τ\* that ignores anything
-reached by walking, and the algorithm does redundant work and may emit
-journeys that should have been pruned.
-
-**Fix:** after `best_arrival_per_k.insert((k, p_dash), tau)`, also do
-`best_arrival.entry(p_dash).and_modify(|v| *v = (*v).min(tau)).or_insert(tau)`.
+**Status:** landed on v0.3 branch. `relax_footpaths_round` now updates
+both `labels[k]` and `best_arrival` whenever a walk strictly improves
+an arrival.
 
 ### 0.4 Target pruning in the footpath stage
 
-**Status:** broken (`soundness.md` issue 7). All footpath-reachable
-stops are pushed into `more_marked_stops` unconditionally, including
-those that arrive after the current best at the target.
-
-**Fix:**
-
-```rust
-if tau < *best_arrival.get(&pt).unwrap_or(&Tau::MAX) {
-    more_marked_stops.push(p_dash);
-}
-```
+**Status:** landed on v0.3 branch. `relax_footpaths_round` only marks
+`p_dash` when the walk-derived arrival strictly improves on
+`best_arrival[pt]`.
 
 ### 0.5 Pareto-filter the output
 
@@ -99,14 +60,58 @@ if tau < *best_arrival.get(&pt).unwrap_or(&Tau::MAX) {
 `k ∈ 1..=transfers` and `Timetable::raptor` collects all of them. A
 2-transfer journey with the same arrival as a 1-transfer journey is not
 dropped. Local/target pruning *should* prevent dominated plans from
-being recorded in the first place, but with 0.3 unfixed this isn't
-reliable, and even with 0.3 fixed the explicit filter is cheap
-insurance.
+being recorded in the first place; with 0.3 landed this is now more
+reliable, but the explicit filter is cheap insurance.
 
 **Fix:** sort journeys by transfer count ascending, then drop any
 journey whose arrival is not strictly less than the best arrival seen
 so far. Document that "Pareto-optimal" means "no other returned journey
 has both ≤ transfers and ≤ arrival, with at least one strict".
+
+### 0.5b Journey reconstruction must trace through walk legs
+
+**Status:** broken. The boarding tree is keyed by `(K, Stop) -> (Stop,
+Route)` and only records route-scan boardings. Walks performed in the
+footpath stage update the label table but leave no trace, so
+`reconstruct_journey` cannot connect a route-scan event to a walk-
+reached boarding stop. Failure modes:
+
+- *Walk-then-board* (round-0 walk, round-1 board): reconstruction
+  reaches the boarding stop but cannot trace back to `pₛ`, so the
+  journey is dropped. The proptest harness shrinks layer-2 failures
+  straight to this case.
+- *Board-walk-board* (e.g. `A→R1→B→walk→C→R2→D`): the walk-reached
+  boarding stop `C` has no entry, breaking the trace mid-journey. The
+  existing `footpath_enables_connection` test in
+  `raptor/src/test.rs` documents this with `journeys.is_empty()`.
+- *Walk-only* (`pₛ→pₜ` with zero boardings): empty plan, dropped by the
+  empty-plan filter. The proptest harness's reference solver also drops
+  these to match the algorithm's "≥ 1 trip" convention.
+
+After the 0.1–0.4 fixes the *arrival times* in the label table are
+correct on these journeys; only the emission step is broken.
+
+**Fix:** extend the boarding tree to record both step types, e.g.
+
+```rust
+enum Step<R, S> {
+    Boarded { from: S, route: R },
+    Walked { from: S },
+}
+type BoardingTree<R, S> = BTreeMap<(K, S), Step<R, S>>;
+```
+
+Insert `Walked` entries from `relax_footpaths_round` whenever a walk
+strictly improves a label. Update `reconstruct_journey` to chain
+through walk entries within a round (a walk does not consume a trip
+and does not advance the round index). Decide whether to surface walk
+steps in the public `Journey::plan` (a `Vec<JourneyStep>` with both
+ride and walk variants) or to keep `plan` as a route-only sequence and
+expose walk legs through a separate accessor — the latter preserves
+the existing API but loses information about which footpath was taken.
+
+This is the gating item before layer-2 of the proptest harness can
+drop its `#[ignore]` flag. See `soundness.md` Issue I.
 
 ### 0.6 Route-pattern splitting in the GTFS adapter
 
@@ -160,13 +165,11 @@ behind a feature flag because it's expensive on large feeds.
 
 ### 0.8 Saturating arithmetic on Tau
 
-**Status:** minor. Line 259 does `+ self.get_transfer_time(stop, p_dash)`
-without saturation. With `Tau = usize` and a misconfigured transfer
-time near `Tau::MAX`, this wraps.
-
-**Fix:** `saturating_add` everywhere `Tau` arithmetic happens. Cheap
-and removes a class of bugs we'd otherwise have to debug from a stack
-trace.
+**Status:** partially landed on v0.3 branch — `relax_footpaths_round`
+uses `saturating_add` for the walk-arrival computation. The trip
+arithmetic in route scanning still trusts the underlying timetable.
+Outstanding: audit any remaining `Tau` arithmetic and switch to
+`saturating_add`/`saturating_sub`.
 
 ### 0.9 Property-based correctness test
 
@@ -176,23 +179,26 @@ soundness-issue map, and the wall-clock budget.
 
 The harness has three generator layers:
 
-- **Layer 1** (no footpaths) is green on v0.2.0 — it covers the regime the
-  hand-written tests cover and protects against regressions in known-good
+- **Layer 1** (no footpaths) is green and covers the regime the hand-
+  written tests cover, protecting against regressions in known-good
   territory.
-- **Layers 2 and 3** are `#[ignore]`-flagged on v0.2.0 because they expose
-  soundness issues A, B, C, D. Run them via:
+- **Layers 2 and 3** stay `#[ignore]`-flagged on v0.3 until 0.5b lands.
+  After 0.1–0.4 the soundness fixes for issues A, B, C, D are in place,
+  but the harness still surfaces issue I (walk-leg reconstruction): the
+  algorithm computes correct arrivals for walk-bearing journeys but
+  cannot emit them. Run the ignored layers via:
 
   ```
   cargo nextest r -p raptor proptest_support --run-ignored all
   ```
 
-  The shrunk counterexample on the v0.2.0 baseline is a 2-stop, 1-route,
-  1-footpath network that demonstrates issue B (no footpath relaxation
-  from the source in round 1).
+  The shrunk counterexample on the post-0.4 branch is a small walk-
+  then-board network where the reference emits `(t, 1)` and RAPTOR
+  emits `{}` — see `soundness.md` Issue I.
 
-The first deliverable for v0.3 is to remove the `#[ignore]` attributes —
-i.e., the previously-failing property tests turn green as Phase 0 fixes
-land.
+The remaining deliverable for v0.3 is to remove the `#[ignore]`
+attributes — i.e., the previously-failing property tests turn green
+once 0.5b (walk-leg reconstruction) lands.
 
 The reference solver is a time-expanded multi-criterion Dijkstra in
 `reference.rs` (~200 lines, std-only). It uses atomic board+ride-segment
@@ -204,7 +210,8 @@ original handoff brief and are documented in the module's README:
 
 - The brief specified "ps == pt → {(tau, 0)}". The algorithm's
   `reconstruct_journey` filters out empty plans, so RAPTOR returns `[]`.
-  The reference solver matches that convention.
+  The reference solver matches that convention, and also drops walk-
+  only journeys for `ps != pt` (`k == 0`) for the same reason.
 - Trips on the same generated route share `leg_durations` and
   `dwell_times`, making overtaking structurally impossible. This is
   stricter than the paper but every spec produced is a valid RAPTOR
@@ -600,7 +607,9 @@ that earlier releases don't constrain the design of later ones.
 
 - **v0.3 (Correctness):** Phase 0 in full, plus 1.5 (allocation reuse)
   and 4.1 (docs pass) because they're cheap. Property-based test must be
-  green. Announcement post: "raptor-rs now produces correct results."
+  green (which requires 0.5b — walk-leg reconstruction — alongside the
+  already-landed 0.1–0.4). Announcement post: "raptor-rs now produces
+  correct results."
 
 - **v0.4 (Performance):** Phase 1 in full. Benchmark numbers within
   3× of the published RAPTOR figures. Announcement post: "raptor-rs is

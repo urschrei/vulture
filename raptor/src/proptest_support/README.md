@@ -13,32 +13,39 @@ Similarly, `Journey::plan.len()` is the trip count.
 
 The Pareto front compared in property tests is over `(arrival, trip_count)`.
 
-## ps == pt convention
+## Empty-plan convention (`k == 0`)
 
-When the source and target are the same stop, the algorithm's
-`reconstruct_journey` filters out empty plans, so RAPTOR returns `[]` rather
-than `[(tau, 0)]`. The reference solver matches this behaviour and also
-returns the empty front when `ps == pt`. "Stay put at the source" is not
-modelled as a journey.
+`reconstruct_journey` filters out empty plans (no boarding events), so
+RAPTOR can never emit a `k == 0` journey. The reference solver matches
+this in two cases:
+
+- `ps == pt` ("stay put"): early-return empty front.
+- `ps != pt` walk-only: the final filter drops journeys with `k == 0`.
+
+Either way, "no transit boarding involved" is not modelled as a journey.
+This isolates the harness from RAPTOR's API choice and lets the front-
+equality property focus on issues that actually involve transit.
 
 ## Generator layers
 
-| Layer | Stops | Routes | Trips/route | Footpaths | Status on v0.2.0 |
-|-------|-------|--------|-------------|-----------|-------------------|
-| 1     | 2..=4 | 1..=2  | 1..=2       | 0         | passes            |
-| 2     | 2..=5 | 1..=3  | 1..=2       | 1..=4     | fails (issues A, B, C, D) |
-| 3     | 2..=6 | 1..=4  | 1..=3       | 0..=6     | fails             |
+| Layer | Stops | Routes | Trips/route | Footpaths | Status on v0.3 branch |
+|-------|-------|--------|-------------|-----------|-----------------------|
+| 1     | 2..=4 | 1..=2  | 1..=2       | 0         | passes                |
+| 2     | 2..=5 | 1..=3  | 1..=2       | 1..=4     | fails (issue I)       |
+| 3     | 2..=6 | 1..=4  | 1..=3       | 0..=6     | fails (issue I)       |
 
-Layers 2 and 3 are `#[ignore]`-flagged so `cargo nextest r` stays green on
-the v0.2.0 baseline. Run them with:
+Layers 2 and 3 are `#[ignore]`-flagged so `cargo nextest r` stays green
+while issue I is outstanding. Run them with:
 
 ```
 cargo nextest r -p raptor proptest_support --run-ignored all
 ```
 
-When Phase 0 of `docs/roadmap/roadmap.md` lands, remove the `#[ignore]`
-attributes — the deliverable for v0.3 includes "the previously-ignored
-property tests now pass."
+A–D were resolved in the Phase 0 work on the v0.3 branch. The remaining
+failure mode is **issue I** (journey reconstruction cannot trace through
+walk legs) — see `soundness.md` and `docs/roadmap/roadmap.md` step 0.5b.
+Once 0.5b lands, remove the `#[ignore]` attributes; the v0.3 deliverable
+includes "the previously-ignored property tests now pass."
 
 ## Layer-to-soundness-issue map
 
@@ -46,14 +53,15 @@ See `soundness.md` at the repo root for the full issue catalogue.
 
 | Soundness issue | Layer that detects it | Notes |
 |-----------------|-----------------------|-------|
-| A — labels not carried forward | 2 | Triggered by any journey reaching a stop in round k−1 then walking in round k. |
-| B — no footpath relaxation from source | 2 | Triggered when optimal journey starts with a walk. The current shrunk counterexample on v0.2.0 isolates exactly this. |
-| C — τ\* not updated in footpath stage | 2 (indirect) | Manifests as inflated arrivals via leaky pruning; most easily seen on multi-round journeys with footpaths. |
-| D — no target pruning in footpath stage | 2 (indirect) | Wastes work but is correctness-neutral if F is also fixed; the harness may not directly demonstrate D in isolation. |
+| A — labels not carried forward | resolved in v0.3 | Was layer-2 territory pre-fix. |
+| B — no footpath relaxation from source | resolved in v0.3 | Was layer-2 territory pre-fix. |
+| C — τ\* not updated in footpath stage | resolved in v0.3 | Was layer-2 (indirect) pre-fix. |
+| D — no target pruning in footpath stage | resolved in v0.3 | Was layer-2 (indirect) pre-fix. |
 | E — GTFS adapter route-pattern conflation | (out of scope) | Needs a separate harness over `GtfsTimetable`. |
-| F — output not Pareto-filtered | masked by `raptor_front` | Intentionally hidden in this harness so the front-equality property isolates A/B/C/D. A separate test once Phase 0 lands. |
+| F — output not Pareto-filtered | masked by `raptor_front` | Hidden so the front-equality property isolates other issues. A separate test once 0.5 lands. |
 | G — non-saturating Tau arithmetic | (out of scope) | Generator ranges keep `tau`, `walk_time` small enough to never trigger overflow; a targeted unit test is more appropriate. |
 | H — footpath transitivity assumption | (out of scope) | Renderer transitively closes footpaths, so the harness can't observe non-closed inputs. |
+| I — journey reconstruction cannot trace through walk legs | 2 | Current shrunk counterexample on the post-0.4 branch is a 1-trip walk-then-board where the reference emits `(t, 1)` and RAPTOR returns `{}`. Layer-2 stays `#[ignore]` until roadmap step 0.5b lands. |
 
 ## Reproducing a failure
 

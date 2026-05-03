@@ -73,6 +73,43 @@ pub struct Journey<Route, Stop> {
 
 type BoardingTree<Route, Stop> = BTreeMap<(K, Stop), (Stop, Route)>;
 
+/// Relax footpaths from every stop in `sources` at round `k`.
+///
+/// Improves `labels[k][p_dash]` and the τ\* table (`best_arrival`) when
+/// walking yields a strictly better arrival. Returns the stops that should
+/// be added to the marked set, after target-pruning against τ\*(pt).
+fn relax_footpaths_round<T: Timetable + ?Sized>(
+    timetable: &T,
+    k: K,
+    labels: &mut [BTreeMap<T::Stop, Tau>],
+    best_arrival: &mut BTreeMap<T::Stop, Tau>,
+    sources: &BTreeSet<T::Stop>,
+    pt: T::Stop,
+) -> Vec<T::Stop> {
+    let mut more_marked = Vec::new();
+    for &stop in sources {
+        let stop_arrival = labels[k].get(&stop).copied().unwrap_or(Tau::MAX);
+        if stop_arrival == Tau::MAX {
+            continue;
+        }
+        for &p_dash in timetable.get_footpaths_from(stop).iter() {
+            let via_walk = stop_arrival.saturating_add(timetable.get_transfer_time(stop, p_dash));
+            let cur = labels[k].get(&p_dash).copied().unwrap_or(Tau::MAX);
+            if via_walk < cur {
+                labels[k].insert(p_dash, via_walk);
+                best_arrival
+                    .entry(p_dash)
+                    .and_modify(|v| *v = (*v).min(via_walk))
+                    .or_insert(via_walk);
+                if via_walk < best_arrival.get(&pt).copied().unwrap_or(Tau::MAX) {
+                    more_marked.push(p_dash);
+                }
+            }
+        }
+    }
+    more_marked
+}
+
 fn reconstruct_journey<R, S>(
     tree: &BoardingTree<R, S>,
     ps: S,
@@ -189,20 +226,34 @@ pub trait Timetable {
         ps: Self::Stop,
         pt: Self::Stop,
     ) -> Vec<Journey<Self::Route, Self::Stop>> {
-        // for (i, stop) earliest known arrival time at `stop` with at most `i` transfers
-        let mut best_arrival_per_k = BTreeMap::<(K, Self::Stop), Tau>::new();
+        // labels[k][stop] = earliest known arrival at `stop` reachable using at most `k` trips.
+        let mut labels: Vec<BTreeMap<Self::Stop, Tau>> = vec![BTreeMap::new(); transfers + 1];
         let mut best_arrival = BTreeMap::<Self::Stop, Tau>::new();
 
-        best_arrival_per_k.insert((0, ps), tau);
-        let mut board_detail_per_k: BoardingTree<Self::Route, Self::Stop> = BTreeMap::new();
+        labels[0].insert(ps, tau);
+        best_arrival.insert(ps, tau);
 
+        let mut board_detail_per_k: BoardingTree<Self::Route, Self::Stop> = BTreeMap::new();
         let mut marked_stops = BTreeSet::<Self::Stop>::from([ps]);
+
+        // Round 0 footpath relaxation: a journey starting with a walk should
+        // be discoverable in round 1, which requires `ps`'s walk-neighbours to
+        // already appear in labels[0] before the first round.
+        let walked_at_init =
+            relax_footpaths_round(self, 0, &mut labels, &mut best_arrival, &marked_stops, pt);
+        marked_stops.extend(walked_at_init);
 
         #[allow(non_snake_case)]
         // allowing weird naming to match with the paper
         let mut Q = BTreeMap::<Self::Route, Self::Stop>::new();
 
         for k in 1..=transfers {
+            // Carry forward round k-1's labels into round k as the baseline,
+            // so that any stop reached in a previous round remains usable as a
+            // boarding point or footpath origin even if route scanning in this
+            // round does not re-improve it.
+            labels[k] = labels[k - 1].clone();
+
             Q.clear();
             // find all routes that serve the marked stops, for evaluation in this round
             for &marked_stop in &marked_stops {
@@ -228,13 +279,13 @@ pub trait Timetable {
 
                         if arr < time_to_beat {
                             board_detail_per_k.insert((k, pi), (boarding_stop, route));
-                            best_arrival_per_k.insert((k, pi), arr);
+                            labels[k].insert(pi, arr);
                             best_arrival.insert(pi, arr);
                             marked_stops.insert(pi);
                         }
                     }
 
-                    let t_prev_pi = *best_arrival_per_k.get(&(k - 1, pi)).unwrap_or(&Tau::MAX);
+                    let t_prev_pi = labels[k - 1].get(&pi).copied().unwrap_or(Tau::MAX);
                     if t_prev_pi
                         <= current_trip
                             .map(|trip| self.get_departure_time(trip, pi))
@@ -246,27 +297,9 @@ pub trait Timetable {
                 }
             }
 
-            // look at footpaths, and mark the stops reachable
-            let mut more_marked_stops = Vec::new();
-            for &stop in &marked_stops {
-                for &p_dash in self.get_footpaths_from(stop).iter() {
-                    let tau = best_arrival_per_k
-                        .get(&(k, p_dash))
-                        .copied()
-                        .unwrap_or(Tau::MAX)
-                        .min(
-                            best_arrival_per_k
-                                .get(&(k, stop))
-                                .copied()
-                                .unwrap_or(Tau::MAX)
-                                + self.get_transfer_time(stop, p_dash),
-                        );
-                    best_arrival_per_k.insert((k, p_dash), tau);
-                    more_marked_stops.push(p_dash);
-                }
-            }
-
-            marked_stops.extend(&more_marked_stops);
+            let walked =
+                relax_footpaths_round(self, k, &mut labels, &mut best_arrival, &marked_stops, pt);
+            marked_stops.extend(walked);
 
             if marked_stops.is_empty() {
                 break;
@@ -278,7 +311,7 @@ pub trait Timetable {
         plans
             .into_iter()
             .map(|plan| {
-                let arrival = *best_arrival_per_k.get(&(plan.len(), pt)).unwrap();
+                let arrival = *labels[plan.len()].get(&pt).unwrap();
 
                 Journey { plan, arrival }
             })

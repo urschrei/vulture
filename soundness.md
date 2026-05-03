@@ -11,10 +11,13 @@ An earlier conference version appeared as Delling, Pajor & Werneck (2012),
 *Round-Based Public Transit Routing*, ALENEX. Algorithm line numbers below
 refer to Algorithm 1 in the journal version.
 
-This revision reflects the state of the code as of **v0.2.0**. Prior versions
-of this document described several issues that have since been fixed; those
-are summarized in the *Resolved Issues* section at the end for historical
-reference.
+This revision reflects the state of the code on the v0.3 development
+branch. Prior versions of this document described several issues that
+have since been fixed; those are summarized in the *Resolved Issues*
+section at the end for historical reference.
+
+The footpath/round-label issues A–D were resolved by the Phase 0 work
+on this branch and now live in *Resolved Issues* as well.
 
 ---
 
@@ -72,163 +75,6 @@ time** and **number of transfers** in a public transit network.
 ---
 
 ## Outstanding Soundness Issues
-
-### Issue A: Round labels are not carried forward (Stage 1 missing)
-
-**Severity**: Critical
-
-**Location**: `raptor/src/lib.rs`, throughout the round loop (lines
-202–271).
-
-**Paper (Algorithm 1, line 5)**:
-
-> for each stop p, set τₖ(p) ← τₖ₋₁(p)
-
-**Current code**: labels are stored in
-`best_arrival_per_k: BTreeMap<(K, Stop), Tau>` and entries are only ever
-inserted when a stop is improved in the current round. There is no
-explicit copy-forward of round k−1 labels into round k.
-
-**Problem**: when round k reads `best_arrival_per_k.get(&(k, stop))`
-during footpath relaxation (line 256), the lookup returns `None` for any
-stop that was reached in an earlier round but not re-improved this round.
-The walking-arrival value defaults to `Tau::MAX`, so footpaths cannot
-relax from stops touched only by previous rounds.
-
-**Concrete failure mode**: a journey whose final leg is "walk from a stop
-reached in round k via routing to a target reached in round k via
-walking" is found, but a journey whose final leg is "walk from a stop
-reached in round k−1 via routing" is not, because round k never sees the
-τₖ₋₁ value at the walking origin.
-
-**Fix**: at the start of each round, seed round k's labels from round
-k−1. With the current sparse representation:
-
-```rust
-let prev: Vec<_> = best_arrival_per_k
-    .range((k - 1, Self::Stop::MIN)..(k, Self::Stop::MIN))
-    .map(|(&(_, s), &t)| (s, t))
-    .collect();
-for (s, t) in prev {
-    best_arrival_per_k.entry((k, s)).or_insert(t);
-}
-```
-
-A cleaner fix is to switch the underlying representation to
-`Vec<HashMap<Stop, Tau>>` indexed by k, making carry-forward a single
-`labels[k] = labels[k-1].clone()`.
-
----
-
-### Issue B: Footpath relaxation from the source is missing in round 1
-
-**Severity**: Critical
-
-**Location**: `raptor/src/lib.rs:193–202`.
-
-**Paper**: round 0 sets τ₀(pₛ) = τ and additionally relaxes footpaths
-from pₛ so that walk-reachable neighbours of pₛ have finite τ₀ before
-round 1 begins.
-
-**Current code**: only `best_arrival_per_k.insert((0, ps), tau)` is
-performed at initialization. The footpath stage (lines 246–264) runs
-inside the per-round loop and reads `best_arrival_per_k.get(&(k, stop))`
-for `stop ∈ marked_stops`. At the start of round 1, `marked_stops`
-contains only `ps`, but the lookup is for round k = 1 and `(1, ps)` is
-not yet set.
-
-**Problem**: a journey whose first leg is "walk from pₛ to a neighbour,
-then board" is not discovered. This affects any feed where the optimal
-journey requires a short walk to a higher-frequency stop.
-
-**Fix**: extract the footpath stage into a helper, run it once during
-initialization seeded from round 0, and continue running it once per
-round. After fixing Issue A, the carry-forward will propagate the
-round-0 footpath labels into round 1 automatically.
-
-```rust
-fn relax_footpaths<...>(&self, k: K, marked: &mut BTreeSet<Self::Stop>, ...) { ... }
-
-// In raptor():
-best_arrival_per_k.insert((0, ps), tau);
-self.relax_footpaths(0, &mut marked_stops, ...);
-
-for k in 1..=transfers {
-    // existing route scan + footpath relaxation
-}
-```
-
----
-
-### Issue C: τ\* (`best_arrival`) not updated in the footpath stage
-
-**Severity**: Medium
-
-**Location**: `raptor/src/lib.rs:246–264`.
-
-**Paper**: τ\*(p) tracks the earliest known arrival at p across all
-rounds and is the basis for both local pruning ("don't improve a label
-that doesn't beat τ\*(p)") and target pruning ("don't bother if it
-doesn't beat τ\*(pₜ)"). Updates to τₖ from any stage — including
-footpaths — should be reflected in τ\*.
-
-**Current code**: the route-scanning stage updates both
-`best_arrival_per_k` and `best_arrival` (the τ\* table) at lines 227–229.
-The footpath stage at line 261 updates only `best_arrival_per_k`.
-
-**Problem**: in subsequent rounds, local and target pruning compare
-candidate arrivals against a stale τ\* that ignores walk-reached stops.
-Pruning is therefore weaker than it should be — the algorithm does
-redundant work and admits dominated journeys into the output that should
-have been pruned at recording time. Combined with the missing output-
-side Pareto filter (Issue F), this means dominated journeys can leak to
-the user.
-
-**Fix**: after the footpath update, also update τ\*:
-
-```rust
-best_arrival_per_k.insert((k, p_dash), tau);
-best_arrival
-    .entry(p_dash)
-    .and_modify(|v| *v = (*v).min(tau))
-    .or_insert(tau);
-```
-
----
-
-### Issue D: No target pruning in the footpath stage
-
-**Severity**: Medium
-
-**Location**: `raptor/src/lib.rs:262`.
-
-**Paper (Algorithm 1, lines 18–21)**: stops are only marked when their
-new arrival improves on both τ\*(pᵢ) and τ\*(pₜ). This applies to both
-route-scanning and footpath stages.
-
-**Current code**: the footpath stage marks every walk-reachable stop
-unconditionally:
-
-```rust
-more_marked_stops.push(p_dash);
-```
-
-**Problem**: stops with arrival times worse than τ\*(pₜ) are still marked
-and will cause unnecessary route scans in the next round. Correctness is
-not directly affected — those scans cannot improve τ\*(pₜ) and won't
-emit dominated journeys *if* Issues C and F are also fixed — but the
-algorithm wastes work proportional to the size of the footpath graph
-beyond the target.
-
-**Fix**:
-
-```rust
-if tau < *best_arrival.get(&pt).unwrap_or(&Tau::MAX) {
-    more_marked_stops.push(p_dash);
-}
-```
-
----
 
 ### Issue E: GTFS `get_earliest_trip` assumes incorrectly that route_id implies a single stop pattern
 
@@ -331,25 +177,25 @@ This also makes the output ordering deterministic and easier to test.
 
 ---
 
-### Issue G: Saturating arithmetic on `Tau`
+### Issue G: Saturating arithmetic on `Tau` everywhere
 
 **Severity**: Low
 
-**Location**: `raptor/src/lib.rs:259`.
+**Location**: `raptor/src/lib.rs`.
 
-**Current code**:
+**Current code**: the footpath helper `relax_footpaths_round` uses
+`saturating_add` for the `stop_arrival + transfer_time` computation. The
+remaining `Tau` arithmetic in the algorithm — notably the trip
+arrival/departure lookups — relies on the underlying timetable to return
+sane values.
 
-```rust
-+ self.get_transfer_time(stop, p_dash),
-```
+**Problem**: `Tau = usize`. A misconfigured trip schedule or a custom
+`Timetable` impl returning `Tau::MAX` for a missing trip can still wrap
+on downstream arithmetic outside the helper.
 
-**Problem**: `Tau = usize`. With a misconfigured transfer time near
-`Tau::MAX` (or, more realistically, a footpath-via-footpath chain after
-Issue B is fixed), this addition can wrap.
-
-**Fix**: use `saturating_add` everywhere `Tau` arithmetic happens. Cheap
-and removes a class of bugs that would otherwise have to be debugged
-from a stack trace.
+**Fix**: audit the algorithm for any non-saturating `Tau` arithmetic and
+switch to `saturating_add` / `saturating_sub`. The footpath helper is
+already covered.
 
 ---
 
@@ -380,56 +226,148 @@ expensive on large feeds, so it must be opt-in.
 
 ---
 
+### Issue I: Journey reconstruction cannot trace through walk legs
+
+**Severity**: **Critical** (correctness gap on any feed with footpaths
+on the optimal path)
+
+**Location**: `raptor/src/lib.rs`, `BoardingTree` and
+`reconstruct_journey`.
+
+**Paper (§3.2)**: a Pareto-optimal journey is a sequence of trip and
+walk segments from `pₛ` to `pₜ`. Both segment types are first-class.
+
+**Current code**: the boarding tree records only route-scan boardings,
+keyed by `(K, Stop) -> (boarding_stop, route)`. Walks performed in the
+footpath stage update the label table but leave no entry in the boarding
+tree. `reconstruct_journey` traces back from `pₜ` through boarding tree
+entries only, and a missing entry terminates the trace.
+
+**Concrete failure modes**:
+
+- **Walk-then-board** (round-0 walk + round-1 board): the boarding stop
+  reached by walking from `pₛ` has no boarding-tree entry, so when
+  reconstruction hits the boarding stop the trace breaks before reaching
+  `pₛ` and the journey is dropped.
+- **Board-walk-board** (e.g. `A→R1→B→walk→C→R2→D`): the walk-reached
+  boarding stop `C` has no entry, so reconstruction can't connect the
+  round-2 boarding event to the round-1 alighting event.
+- **Pure walk-only journeys** (`pₛ → pₜ` with zero boardings): no
+  boarding events at all, plan is empty, dropped by the existing empty-
+  plan filter.
+
+The first two cases mean RAPTOR computes correct *arrival times* in the
+label table after the Phase 0 fixes (A–D), but cannot *emit* the
+corresponding journeys. The existing `footpath_enables_connection` test
+in `raptor/src/test.rs` documents this with `journeys.is_empty()`.
+
+**Detection**: the proptest harness exposes this as soon as Phase 0
+fixes (A–D) are in place — see `raptor/src/proptest_support/`. Layer 2
+shrinks to a 1-trip walk-then-board counterexample.
+
+**Fix sketch**: extend the boarding tree to record both step types, e.g.
+
+```rust
+enum Step<R, S> {
+    Boarded { from: S, route: R },
+    Walked { from: S },
+}
+type BoardingTree<R, S> = BTreeMap<(K, S), Step<R, S>>;
+```
+
+Insert `Walked` entries from `relax_footpaths_round` whenever a walk
+strictly improves a label. Update `reconstruct_journey` to chain through
+walk entries within a round (a walk does not consume a trip / round
+budget). Decide whether the public `Journey::plan` should expose walk
+steps or remain a route-only sequence — keeping it route-only preserves
+the API but loses information about *which* footpath was taken.
+
+This is the next Phase 0 deliverable on the v0.3 branch and the gating
+item before layer-2 of the proptest harness can drop its `#[ignore]`.
+
+---
+
 ## Summary Table
 
 | Issue | Severity | Location | Description |
 |-------|----------|----------|-------------|
-| A | **Critical** | lib.rs round loop | Round labels not carried forward (τₖ ← τₖ₋₁) |
-| B | **Critical** | lib.rs:193–202 | Footpath relaxation from source missing in round 1 |
-| C | Medium | lib.rs:246–264 | τ\* not updated in footpath stage |
-| D | Medium | lib.rs:262 | No target pruning in footpath stage |
 | E | **Critical** | gtfs.rs:215–245 | GTFS adapter conflates route_id with RAPTOR route; binary search unsound |
-| F | Medium | lib.rs:273–283 | Output not Pareto-filtered |
-| G | Low | lib.rs:259 | Non-saturating Tau arithmetic |
+| F | Medium | lib.rs reconstruct_journey | Output not Pareto-filtered |
+| G | Low | lib.rs trip arithmetic | Non-saturating Tau arithmetic outside footpath helper |
 | H | Low | trait docs | Footpath transitivity assumption undocumented |
+| I | **Critical** | lib.rs reconstruct_journey | Journey reconstruction cannot trace through walk legs |
+
+A–D are now resolved on the v0.3 branch. See *Resolved Issues* below.
 
 ---
 
 ## Impact Assessment
 
-**Correctness on real GTFS feeds**: the combination of Issues A, B, and E
-means the algorithm produces wrong answers on realistic inputs. Issue E
-alone is sufficient to break routing on most non-trivial agency feeds —
-practically any feed where one `route_id` covers more than one service
-pattern, which is the norm.
+**Correctness on real GTFS feeds**: with A–D resolved, the remaining
+critical issues are E (GTFS route-pattern conflation) and I (walk-leg
+reconstruction). E breaks routing on most non-trivial agency feeds. I
+means RAPTOR computes correct arrival times in its label table but
+cannot emit any journey whose optimal path includes a footpath segment.
 
 **Synthetic test networks** (the kind covered by `raptor/src/test.rs`)
-sidestep all three. Each test constructs a `SimpleTimetable` whose
-routes have a single stop sequence and whose footpaths are trivial,
-hiding A, B, and E. The existing test suite is therefore green despite
-the implementation being unsound on real inputs — a strong argument for
-adding a property-based test that compares output against a brute-force
-reference solver on randomly-generated networks.
-
-**Performance**: Issues C and D weaken pruning. The algorithm still
-terminates and produces *a* result, but does redundant work in
-proportion to the size of the footpath graph and the breadth of the
-network. Not a correctness problem in isolation, but combined with F it
-allows dominated journeys into the output.
+sidestep both. Each hand-written test either avoids footpaths on the
+optimal path or asserts an empty result for footpath-only transfers (see
+`footpath_enables_connection`, which documents the I limitation
+directly). The hegel-based property test in
+`raptor/src/proptest_support/` does generate footpath-bearing networks
+and is the harness that surfaces I.
 
 **Defence-in-depth**: Issues F and G are individually low-impact but
-worth fixing because they make the algorithm robust to bugs in the rest
-of the implementation. F is especially valuable because it makes the
-output independent of pruning correctness, simplifying both testing and
-debugging.
+worth fixing because they make the algorithm robust to bugs elsewhere.
+F is especially valuable because it makes the output independent of
+pruning correctness, simplifying testing and debugging.
 
 ---
 
 ## Resolved Issues
 
 The following issues were identified in earlier revisions of this
-document and have since been fixed (as of v0.2.0). They are retained
-here for historical reference.
+document and have since been fixed. R1–R5 were resolved by v0.2.0; A–D
+were resolved on the v0.3 development branch.
+
+### A: Round labels are not carried forward — **Fixed (v0.3)**
+
+**Was**: labels lived in `BTreeMap<(K, Stop), Tau>` and entries were
+only inserted on improvement, so footpath relaxation in round k could
+not see arrivals from round k−1 that had not been re-improved.
+
+**Now**: labels are stored in `Vec<BTreeMap<Stop, Tau>>` indexed by
+round. At the top of each round, `labels[k] = labels[k-1].clone()`
+seeds round k with the previous round's values. Footpath origins
+reached in earlier rounds remain visible.
+
+### B: Footpath relaxation from the source missing in round 1 — **Fixed (v0.3)**
+
+**Was**: only `(0, ps) = tau` was set at init; the footpath stage ran
+inside the round loop and never relaxed walks from `ps` itself before
+round 1's route scanning.
+
+**Now**: the footpath logic is extracted into `relax_footpaths_round`
+and called once at init for round 0. Combined with A, walk-reachable
+neighbours of `ps` carry forward into round 1 and are usable as
+boarding points for the first route scan.
+
+### C: τ\* not updated in the footpath stage — **Fixed (v0.3)**
+
+**Was**: walk-derived label updates were written to
+`best_arrival_per_k` only; `best_arrival` (τ\*) remained stale, leaving
+local and target pruning unaware of walk-reached arrivals.
+
+**Now**: `relax_footpaths_round` updates both `labels[k]` and
+`best_arrival` whenever a walk strictly improves an arrival.
+
+### D: No target pruning in the footpath stage — **Fixed (v0.3)**
+
+**Was**: every walk-reachable stop was unconditionally pushed into the
+marked set, including stops whose arrival exceeded τ\*(pₜ).
+
+**Now**: `relax_footpaths_round` only marks `p_dash` if the walk-derived
+arrival strictly improves on `best_arrival[pt]`.
 
 ### R1: `get_earliest_trip` missing time parameter — **Fixed**
 
@@ -459,9 +397,9 @@ implement this correctly.
 existing arrival and the origin's arrival, without adding the walking
 duration. Footpaths were effectively teleportation.
 
-**Now**: the footpath update at `raptor/src/lib.rs:259` adds
-`self.get_transfer_time(stop, p_dash)`. (Saturation is still missing —
-see Issue G.)
+**Now**: `relax_footpaths_round` adds
+`self.get_transfer_time(stop, p_dash)` via `saturating_add`. Wider
+saturation in the trip arithmetic is still pending — see Issue G.
 
 ### R3: `get_stops_after` semantics ambiguous — **Fixed**
 

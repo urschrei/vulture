@@ -111,9 +111,10 @@ pub fn reference_solve(
     max_trips: u8,
 ) -> BTreeSet<(u16, u8)> {
     if ps == pt {
-        // The algorithm's `reconstruct_journey` only returns journeys with
-        // ≥ 1 trip, so "stay put at the source" is not modelled as a
-        // journey. Match that convention.
+        // `reconstruct_journey` only returns journeys with ≥ 1 trip, so
+        // "stay put at the source" is not modelled as a journey. The
+        // sibling case for `ps != pt` (a walk-only journey with 0 trips)
+        // is filtered below.
         return BTreeSet::new();
     }
 
@@ -168,10 +169,13 @@ pub fn reference_solve(
         }
     }
 
+    // Drop walk-only journeys (k == 0): RAPTOR's `reconstruct_journey`
+    // filters out empty plans, so the algorithm cannot emit a
+    // walk-from-ps-to-pt journey. Match that convention.
     let mut at_pt: Vec<(u16, u8)> = min_trips
         .iter()
         .filter(|((s, _), _)| *s == pt)
-        .filter(|&(_, &k)| k <= max_trips)
+        .filter(|&(_, &k)| k > 0 && k <= max_trips)
         .map(|(&(_, t), &k)| (t, k))
         .collect();
 
@@ -256,7 +260,10 @@ mod tests {
     }
 
     #[test]
-    fn walk_only_journey() {
+    fn walk_only_journey_is_dropped() {
+        // RAPTOR's `reconstruct_journey` cannot emit a walk-only journey
+        // (no boarding events → empty plan → filtered). The reference
+        // solver matches that convention by dropping `k == 0` journeys.
         let spec = NetworkSpec {
             n_stops: 2,
             routes: vec![],
@@ -273,7 +280,7 @@ mod tests {
             },
         };
         let r = reference_solve(&spec, 0, 1, 100, 3);
-        assert_eq!(r, front(&[(105, 0)]));
+        assert!(r.is_empty(), "walk-only journey should be filtered out");
     }
 
     #[test]
