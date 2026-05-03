@@ -1,3 +1,4 @@
+use crate::RaptorCache;
 use crate::Timetable;
 use crate::simple::SimpleTimetable;
 
@@ -614,4 +615,60 @@ fn dominance_prunes_slower_arrival() {
     // Both routes are discovered in round 1, so the slower one is dominated
     assert_eq!(journeys.len(), 1, "dominated journey should be pruned");
     assert_eq!(journeys[0].arrival, 50);
+}
+
+#[test]
+fn raptor_with_cache_matches_fresh_run() {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    enum Stop {
+        A,
+        B,
+        C,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    enum Route {
+        R1,
+        R2,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    enum Trip {
+        T1,
+        T2,
+    }
+
+    let tt = SimpleTimetable::new()
+        .route(
+            Route::R1,
+            &[Stop::A, Stop::B],
+            &[(Trip::T1, &[(0, 0), (10, 10)])],
+        )
+        .route(
+            Route::R2,
+            &[Stop::B, Stop::C],
+            &[(Trip::T2, &[(15, 15), (25, 25)])],
+        );
+
+    // Run several queries with varying parameters through one cache and
+    // confirm each result matches a fresh-run baseline.
+    let queries = [
+        (3, 0, Stop::A, Stop::C),
+        (1, 0, Stop::A, Stop::B),
+        (5, 5, Stop::A, Stop::C),
+        (2, 0, Stop::B, Stop::C),
+    ];
+
+    let mut cache: RaptorCache<Route, Stop> = RaptorCache::new();
+    for &(transfers, tau, ps, pt) in &queries {
+        let baseline = tt.raptor(transfers, tau, ps, pt);
+        let cached = tt.raptor_with_cache(&mut cache, transfers, tau, ps, pt);
+        assert_eq!(
+            cached.len(),
+            baseline.len(),
+            "journey count differs at query {ps:?}->{pt:?}"
+        );
+        for (b, c) in baseline.iter().zip(cached.iter()) {
+            assert_eq!(b.arrival, c.arrival);
+            assert_eq!(b.plan, c.plan);
+        }
+    }
 }

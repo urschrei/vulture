@@ -89,8 +89,10 @@ type BoardingTree<Route, Stop> = BTreeMap<(K, Stop), Step<Route, Stop>>;
 /// Improves `labels[k][p_dash]` and the τ\* table (`best_arrival`) when
 /// walking yields a strictly better arrival, and records a `Walked` step
 /// in the boarding tree so that `reconstruct_journey` can later trace
-/// back through the walk leg. Returns the stops that should be added to
-/// the marked set, after target-pruning against τ\*(pt).
+/// back through the walk leg. Stops that should be added to the marked
+/// set after target-pruning against τ\*(pt) are pushed onto `out`; the
+/// caller is responsible for clearing/draining it.
+#[allow(clippy::too_many_arguments)]
 fn relax_footpaths_round<T: Timetable + ?Sized>(
     timetable: &T,
     k: K,
@@ -99,8 +101,8 @@ fn relax_footpaths_round<T: Timetable + ?Sized>(
     board_detail: &mut BoardingTree<T::Route, T::Stop>,
     sources: &BTreeSet<T::Stop>,
     pt: T::Stop,
-) -> Vec<T::Stop> {
-    let mut more_marked = Vec::new();
+    out: &mut Vec<T::Stop>,
+) {
     for &stop in sources {
         let stop_arrival = labels[k].get(&stop).copied().unwrap_or(Tau::MAX);
         if stop_arrival == Tau::MAX {
@@ -117,12 +119,11 @@ fn relax_footpaths_round<T: Timetable + ?Sized>(
                     .and_modify(|v| *v = (*v).min(via_walk))
                     .or_insert(via_walk);
                 if via_walk < best_arrival.get(&pt).copied().unwrap_or(Tau::MAX) {
-                    more_marked.push(p_dash);
+                    out.push(p_dash);
                 }
             }
         }
     }
-    more_marked
 }
 
 fn reconstruct_journey<R, S>(
@@ -287,6 +288,10 @@ pub trait Timetable {
     /// strictly decreases as trip count increases.
     ///
     /// Returns an empty `Vec` if no journey exists.
+    ///
+    /// Allocates fresh scratch buffers on every call. For server use cases
+    /// running thousands of queries against the same timetable, prefer
+    /// [`Timetable::raptor_with_cache`] and reuse a [`RaptorCache`].
     fn raptor(
         &self,
         transfers: usize,
@@ -294,33 +299,54 @@ pub trait Timetable {
         ps: Self::Stop,
         pt: Self::Stop,
     ) -> Vec<Journey<Self::Route, Self::Stop>> {
-        // labels[k][stop] = earliest known arrival at `stop` reachable using at most `k` trips.
-        let mut labels: Vec<BTreeMap<Self::Stop, Tau>> = vec![BTreeMap::new(); transfers + 1];
-        let mut best_arrival = BTreeMap::<Self::Stop, Tau>::new();
+        let mut cache = RaptorCache::new();
+        self.raptor_with_cache(&mut cache, transfers, tau, ps, pt)
+    }
+
+    /// Same as [`Timetable::raptor`], but reuses scratch buffers from
+    /// `cache`. The cache is reset at the start of the call.
+    ///
+    /// Use this when running many queries against the same timetable —
+    /// the per-query allocation cost (label maps, the boarding tree, the
+    /// Q map, the marked-stops set) becomes the dominant overhead
+    /// otherwise. A single `RaptorCache` is *not* thread-safe; use one
+    /// per worker thread.
+    fn raptor_with_cache(
+        &self,
+        cache: &mut RaptorCache<Self::Route, Self::Stop>,
+        transfers: usize,
+        tau: usize,
+        ps: Self::Stop,
+        pt: Self::Stop,
+    ) -> Vec<Journey<Self::Route, Self::Stop>> {
+        cache.reset_for_query(transfers);
+        let RaptorCache {
+            labels,
+            best_arrival,
+            board_detail,
+            marked_stops,
+            q,
+            walked_buf,
+        } = cache;
 
         labels[0].insert(ps, tau);
         best_arrival.insert(ps, tau);
-
-        let mut board_detail_per_k: BoardingTree<Self::Route, Self::Stop> = BTreeMap::new();
-        let mut marked_stops = BTreeSet::<Self::Stop>::from([ps]);
+        marked_stops.insert(ps);
 
         // Round 0 footpath relaxation: a journey starting with a walk should
         // be discoverable in round 1, which requires `ps`'s walk-neighbours to
         // already appear in labels[0] before the first round.
-        let walked_at_init = relax_footpaths_round(
+        relax_footpaths_round(
             self,
             0,
-            &mut labels,
-            &mut best_arrival,
-            &mut board_detail_per_k,
-            &marked_stops,
+            labels,
+            best_arrival,
+            board_detail,
+            marked_stops,
             pt,
+            walked_buf,
         );
-        marked_stops.extend(walked_at_init);
-
-        #[allow(non_snake_case)]
-        // allowing weird naming to match with the paper
-        let mut Q = BTreeMap::<Self::Route, Self::Stop>::new();
+        marked_stops.extend(walked_buf.drain(..));
 
         for k in 1..=transfers {
             // Carry forward round k-1's labels into round k as the baseline,
@@ -329,11 +355,11 @@ pub trait Timetable {
             // round does not re-improve it.
             labels[k] = labels[k - 1].clone();
 
-            Q.clear();
+            q.clear();
             // find all routes that serve the marked stops, for evaluation in this round
-            for &marked_stop in &marked_stops {
+            for &marked_stop in marked_stops.iter() {
                 for &route in self.get_routes_serving_stop(marked_stop).iter() {
-                    let p_dash = Q.entry(route).or_insert(marked_stop);
+                    let p_dash = q.entry(route).or_insert(marked_stop);
 
                     *p_dash = self.get_earlier_stop(route, marked_stop, *p_dash);
                 }
@@ -342,7 +368,7 @@ pub trait Timetable {
             marked_stops.clear();
 
             // scanning each route
-            for (&route, &p) in Q.iter() {
+            for (&route, &p) in q.iter() {
                 let mut current_trip: Option<Self::Trip> = None;
                 let mut boarding_stop = p;
 
@@ -353,7 +379,7 @@ pub trait Timetable {
                         let time_to_beat = *best_arrival_to_pi.min(best_arrival_to_target);
 
                         if arr < time_to_beat {
-                            board_detail_per_k.insert(
+                            board_detail.insert(
                                 (k, pi),
                                 Step::Boarded {
                                     from: boarding_stop,
@@ -378,23 +404,24 @@ pub trait Timetable {
                 }
             }
 
-            let walked = relax_footpaths_round(
+            relax_footpaths_round(
                 self,
                 k,
-                &mut labels,
-                &mut best_arrival,
-                &mut board_detail_per_k,
-                &marked_stops,
+                labels,
+                best_arrival,
+                board_detail,
+                marked_stops,
                 pt,
+                walked_buf,
             );
-            marked_stops.extend(walked);
+            marked_stops.extend(walked_buf.drain(..));
 
             if marked_stops.is_empty() {
                 break;
             }
         }
 
-        let plans = reconstruct_journey(&board_detail_per_k, ps, pt, transfers);
+        let plans = reconstruct_journey(board_detail, ps, pt, transfers);
 
         let mut journeys: Vec<Journey<Self::Route, Self::Stop>> = plans
             .into_iter()
@@ -425,5 +452,76 @@ pub trait Timetable {
             }
         });
         journeys
+    }
+}
+
+/// Reusable scratch buffers for [`Timetable::raptor_with_cache`].
+///
+/// All internal allocations the algorithm needs — round labels, the τ\*
+/// table, the boarding tree, the marked-stops set, the per-round route
+/// queue, and a small reusable scratch vector for footpath relaxation —
+/// live here. Construct one with [`RaptorCache::new`] and pass it to
+/// every query against the same timetable.
+///
+/// A `RaptorCache` is *not* thread-safe and must not be shared across
+/// queries running concurrently. For parallel query workloads, give
+/// each worker thread its own cache.
+pub struct RaptorCache<R, S>
+where
+    R: Ord + Copy + Debug,
+    S: Ord + Copy + Debug,
+{
+    labels: Vec<BTreeMap<S, Tau>>,
+    best_arrival: BTreeMap<S, Tau>,
+    board_detail: BoardingTree<R, S>,
+    marked_stops: BTreeSet<S>,
+    q: BTreeMap<R, S>,
+    walked_buf: Vec<S>,
+}
+
+impl<R, S> RaptorCache<R, S>
+where
+    R: Ord + Copy + Debug,
+    S: Ord + Copy + Debug,
+{
+    /// Constructs an empty cache.
+    pub fn new() -> Self {
+        Self {
+            labels: Vec::new(),
+            best_arrival: BTreeMap::new(),
+            board_detail: BTreeMap::new(),
+            marked_stops: BTreeSet::new(),
+            q: BTreeMap::new(),
+            walked_buf: Vec::new(),
+        }
+    }
+
+    /// Resets every buffer to "empty" while retaining the heap
+    /// allocations. Called at the start of every query.
+    fn reset_for_query(&mut self, transfers: K) {
+        for m in self.labels.iter_mut() {
+            m.clear();
+        }
+        let needed = transfers + 1;
+        if self.labels.len() < needed {
+            self.labels.resize_with(needed, BTreeMap::new);
+        } else {
+            self.labels.truncate(needed);
+        }
+        self.best_arrival.clear();
+        self.board_detail.clear();
+        self.marked_stops.clear();
+        self.q.clear();
+        self.walked_buf.clear();
+    }
+}
+
+impl<R, S> Default for RaptorCache<R, S>
+where
+    R: Ord + Copy + Debug,
+    S: Ord + Copy + Debug,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
