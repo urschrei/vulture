@@ -33,6 +33,7 @@ required-features = ["gtfs-bench"]
 
 [dependencies]
 dot_graph = { version = "0.2", optional = true }
+fixedbitset = "0.5"
 gtfs-structures = "0.46.1"
 log = "0.4.29"
 smallvec = "1.15.1"

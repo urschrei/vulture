@@ -20,8 +20,10 @@
 //! Based on the paper:
 //! *Round-Based Public Transit Routing* by Daniel Delling, Thomas Pajor, and Renato F. Werneck.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
+
+use fixedbitset::FixedBitSet;
 
 pub mod gtfs;
 /// In-memory timetable for testing and simple use cases.
@@ -199,29 +201,30 @@ type BoardingTree = BTreeMap<(K, StopIdx), Step>;
 fn relax_footpaths_round<T: Timetable + ?Sized>(
     timetable: &T,
     k: K,
-    labels: &mut [BTreeMap<StopIdx, Tau>],
-    best_arrival: &mut BTreeMap<StopIdx, Tau>,
+    labels: &mut [Vec<Tau>],
+    best_arrival: &mut [Tau],
     board_detail: &mut BoardingTree,
-    sources: &BTreeSet<StopIdx>,
+    sources: &FixedBitSet,
     pt: StopIdx,
     out: &mut Vec<StopIdx>,
 ) {
-    for &stop in sources {
-        let stop_arrival = labels[k].get(&stop).copied().unwrap_or(Tau::MAX);
+    for stop_bit in sources.ones() {
+        let stop = StopIdx::new(stop_bit as u32);
+        let stop_arrival = labels[k][stop.idx()];
         if stop_arrival == Tau::MAX {
             continue;
         }
         for &p_dash in timetable.get_footpaths_from(stop) {
             let via_walk = stop_arrival.saturating_add(timetable.get_transfer_time(stop, p_dash));
-            let cur = labels[k].get(&p_dash).copied().unwrap_or(Tau::MAX);
+            let cur = labels[k][p_dash.idx()];
             if via_walk < cur {
-                labels[k].insert(p_dash, via_walk);
+                labels[k][p_dash.idx()] = via_walk;
                 board_detail.insert((k, p_dash), Step::Walked { from: stop });
-                best_arrival
-                    .entry(p_dash)
-                    .and_modify(|v| *v = (*v).min(via_walk))
-                    .or_insert(via_walk);
-                if via_walk < best_arrival.get(&pt).copied().unwrap_or(Tau::MAX) {
+                let cur_best = best_arrival[p_dash.idx()];
+                if via_walk < cur_best {
+                    best_arrival[p_dash.idx()] = via_walk;
+                }
+                if via_walk < best_arrival[pt.idx()] {
                     out.push(p_dash);
                 }
             }
@@ -395,18 +398,16 @@ pub trait Timetable {
             best_arrival,
             board_detail,
             marked_stops,
-            q,
+            q_entry,
+            q_routes,
             walked_buf,
             ..
         } = cache;
 
-        labels[0].insert(ps, tau);
-        best_arrival.insert(ps, tau);
-        marked_stops.insert(ps);
+        labels[0][ps.idx()] = tau;
+        best_arrival[ps.idx()] = tau;
+        marked_stops.insert(ps.idx());
 
-        // Round 0 footpath relaxation: a journey starting with a walk should
-        // be discoverable in round 1, which requires `ps`'s walk-neighbours to
-        // already appear in labels[0] before the first round.
         relax_footpaths_round(
             self,
             0,
@@ -417,36 +418,46 @@ pub trait Timetable {
             pt,
             walked_buf,
         );
-        marked_stops.extend(walked_buf.drain(..));
+        for s in walked_buf.drain(..) {
+            marked_stops.insert(s.idx());
+        }
 
         for k in 1..=transfers {
-            // Carry forward round k-1's labels into round k as the baseline,
-            // so that any stop reached in a previous round remains usable as a
-            // boarding point or footpath origin even if route scanning in this
-            // round does not re-improve it.
-            labels[k] = labels[k - 1].clone();
+            // Carry forward labels[k-1] into labels[k].
+            let (prev_labels, this_labels) = labels.split_at_mut(k);
+            let src = &prev_labels[k - 1];
+            let dst = &mut this_labels[0];
+            dst.copy_from_slice(src);
 
-            q.clear();
-            // find all routes that serve the marked stops, for evaluation in this round
-            for &marked_stop in marked_stops.iter() {
+            // Build the route queue for this round.
+            for stop_bit in marked_stops.ones() {
+                let marked_stop = StopIdx::new(stop_bit as u32);
                 for &route in self.get_routes_serving_stop(marked_stop) {
-                    let p_dash = q.entry(route).or_insert(marked_stop);
-                    *p_dash = self.get_earlier_stop(route, marked_stop, *p_dash);
+                    match q_entry[route.idx()] {
+                        None => {
+                            q_entry[route.idx()] = Some(marked_stop);
+                            q_routes.push(route);
+                        }
+                        Some(prev) => {
+                            let earlier = self.get_earlier_stop(route, marked_stop, prev);
+                            q_entry[route.idx()] = Some(earlier);
+                        }
+                    }
                 }
             }
 
             marked_stops.clear();
 
-            // scanning each route
-            for (&route, &p) in q.iter() {
+            for &route in q_routes.iter() {
+                let p = q_entry[route.idx()].expect("route in q_routes must have an entry");
                 let mut current_trip: Option<TripIdx> = None;
                 let mut boarding_stop = p;
 
                 for &pi in self.get_stops_after(route, p) {
                     if let Some(arr) = current_trip.map(|trip| self.get_arrival_time(trip, pi)) {
-                        let best_arrival_to_target = best_arrival.get(&pt).unwrap_or(&Tau::MAX);
-                        let best_arrival_to_pi = best_arrival.get(&pi).unwrap_or(&Tau::MAX);
-                        let time_to_beat = *best_arrival_to_pi.min(best_arrival_to_target);
+                        let best_to_pt = best_arrival[pt.idx()];
+                        let best_to_pi = best_arrival[pi.idx()];
+                        let time_to_beat = best_to_pi.min(best_to_pt);
 
                         if arr < time_to_beat {
                             board_detail.insert(
@@ -456,22 +467,26 @@ pub trait Timetable {
                                     route,
                                 },
                             );
-                            labels[k].insert(pi, arr);
-                            best_arrival.insert(pi, arr);
-                            marked_stops.insert(pi);
+                            labels[k][pi.idx()] = arr;
+                            best_arrival[pi.idx()] = arr;
+                            marked_stops.insert(pi.idx());
                         }
                     }
 
-                    let t_prev_pi = labels[k - 1].get(&pi).copied().unwrap_or(Tau::MAX);
-                    if t_prev_pi
-                        <= current_trip
-                            .map(|trip| self.get_departure_time(trip, pi))
-                            .unwrap_or(Tau::MAX)
-                    {
+                    let t_prev_pi = labels[k - 1][pi.idx()];
+                    let dep_at_pi = current_trip
+                        .map(|trip| self.get_departure_time(trip, pi))
+                        .unwrap_or(Tau::MAX);
+                    if t_prev_pi <= dep_at_pi {
                         current_trip = self.get_earliest_trip(route, t_prev_pi, pi);
                         boarding_stop = pi;
                     }
                 }
+            }
+
+            // Sparse-set reset of the route queue.
+            for r in q_routes.drain(..) {
+                q_entry[r.idx()] = None;
             }
 
             relax_footpaths_round(
@@ -484,9 +499,11 @@ pub trait Timetable {
                 pt,
                 walked_buf,
             );
-            marked_stops.extend(walked_buf.drain(..));
+            for s in walked_buf.drain(..) {
+                marked_stops.insert(s.idx());
+            }
 
-            if marked_stops.is_empty() {
+            if marked_stops.is_clear() {
                 break;
             }
         }
@@ -496,7 +513,7 @@ pub trait Timetable {
         let mut journeys: Vec<Journey> = plans
             .into_iter()
             .map(|plan| {
-                let arrival = *labels[plan.len()].get(&pt).unwrap();
+                let arrival = labels[plan.len()][pt.idx()];
                 Journey { plan, arrival }
             })
             .collect();
@@ -537,11 +554,27 @@ pub struct RaptorCache {
     n_stops: u32,
     n_routes: u32,
 
-    labels: Vec<BTreeMap<StopIdx, Tau>>,
-    best_arrival: BTreeMap<StopIdx, Tau>,
+    /// labels[k][stop.idx()] = earliest arrival at stop with at most k trips.
+    /// Tau::MAX sentinel for "unreached".
+    labels: Vec<Vec<Tau>>,
+
+    /// τ* — best arrival at each stop across all rounds.
+    best_arrival: Vec<Tau>,
+
+    /// Boarding tree for journey reconstruction.
     board_detail: BoardingTree,
-    marked_stops: BTreeSet<StopIdx>,
-    q: BTreeMap<RouteIdx, StopIdx>,
+
+    /// Bitset of marked stops, sized to n_stops.
+    marked_stops: FixedBitSet,
+
+    /// Per-round route queue. `q_entry[r.idx()] = Some(boarding_stop)` when
+    /// route r has been entered this round; `q_routes` is the dense list
+    /// of routes that have entries (for cheap iteration without scanning
+    /// `n_routes` empty slots).
+    q_entry: Vec<Option<StopIdx>>,
+    q_routes: Vec<RouteIdx>,
+
+    /// Scratch buffer for footpath relaxation output.
     walked_buf: Vec<StopIdx>,
 }
 
@@ -559,10 +592,11 @@ impl RaptorCache {
             n_stops,
             n_routes,
             labels: Vec::new(),
-            best_arrival: BTreeMap::new(),
+            best_arrival: vec![Tau::MAX; n_stops as usize],
             board_detail: BTreeMap::new(),
-            marked_stops: BTreeSet::new(),
-            q: BTreeMap::new(),
+            marked_stops: FixedBitSet::with_capacity(n_stops as usize),
+            q_entry: vec![None; n_routes as usize],
+            q_routes: Vec::new(),
             walked_buf: Vec::new(),
         }
     }
@@ -579,19 +613,30 @@ impl RaptorCache {
             self.n_routes, tt_n_routes
         );
 
-        for m in self.labels.iter_mut() {
-            m.clear();
-        }
+        // Resize labels: (transfers + 1) Vecs, each n_stops long, all Tau::MAX.
         let needed = transfers + 1;
+        for v in self.labels.iter_mut() {
+            v.iter_mut().for_each(|x| *x = Tau::MAX);
+        }
         if self.labels.len() < needed {
-            self.labels.resize_with(needed, BTreeMap::new);
+            self.labels
+                .resize_with(needed, || vec![Tau::MAX; self.n_stops as usize]);
         } else {
             self.labels.truncate(needed);
         }
-        self.best_arrival.clear();
+
+        for v in &mut self.best_arrival {
+            *v = Tau::MAX;
+        }
+
         self.board_detail.clear();
         self.marked_stops.clear();
-        self.q.clear();
+
+        // Sparse-set reset: walk q_routes, clear corresponding q_entry slots.
+        for r in self.q_routes.drain(..) {
+            self.q_entry[r.idx()] = None;
+        }
+
         self.walked_buf.clear();
     }
 }
