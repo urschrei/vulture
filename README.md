@@ -75,6 +75,13 @@ To reproduce these numbers on your own hardware:
 cargo bench -p raptor --features gtfs-bench --bench gtfs
 ```
 
+For numbers on larger feeds — Helsinki HSL (~8k stops), Berlin VBB
+(~42k stops), Paris IDFM (~54k stops) — see
+[`docs/cross-city-benchmarks.md`](docs/cross-city-benchmarks.md). That
+page also documents three real-feed limitations the cross-city run
+surfaced (parent-station handling, calendar filtering, transfer-graph
+density), all of which are queued as follow-up work.
+
 ## Reading a Journey
 
 A `Journey` has a `plan` and an `arrival` time. The plan is a

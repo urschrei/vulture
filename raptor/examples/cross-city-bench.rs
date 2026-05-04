@@ -1,0 +1,238 @@
+//! Cross-city benchmark across multiple GTFS feeds.
+//!
+//! Looks for feeds in `aux/external/{helsinki,berlin,paris}.zip` and the
+//! tracked `aux/dmrc_gtfs.zip`. For each feed found, loads it, runs three
+//! representative queries, and reports load time, query latency
+//! (median of 50 runs), and journey arrival time.
+//!
+//! Skips feeds that are not present without failing — fetch them with
+//! `scripts/fetch-bench-feeds.sh` first if you want the full table.
+//!
+//! Usage:
+//!     cargo run --release --example cross-city-bench
+
+use gtfs_structures::Gtfs;
+use raptor::gtfs::GtfsTimetable;
+use raptor::{RaptorCache, Tau, Timetable};
+use std::path::Path;
+use std::time::Instant;
+
+const DEPARTURE_TIME: Tau = 9 * 3600;
+const QUERY_REPEATS: usize = 50;
+
+struct FeedSpec {
+    name: &'static str,
+    path: &'static str,
+    queries: &'static [QuerySpec],
+}
+
+struct QuerySpec {
+    label: &'static str,
+    origin_stop_id: &'static str,
+    target_stop_id: &'static str,
+}
+
+const FEEDS: &[FeedSpec] = &[
+    FeedSpec {
+        name: "Delhi Metro",
+        path: "aux/dmrc_gtfs.zip",
+        queries: &[
+            QuerySpec {
+                label: "Dilshad Garden -> Shahdara (1 trip)",
+                origin_stop_id: "1",
+                target_stop_id: "4",
+            },
+            QuerySpec {
+                label: "Dilshad Garden -> Vishwavidyalaya (2 trips)",
+                origin_stop_id: "1",
+                target_stop_id: "44",
+            },
+            QuerySpec {
+                label: "Paschim Vihar West -> Ghitorni (3 trips)",
+                origin_stop_id: "29",
+                target_stop_id: "65",
+            },
+        ],
+    },
+    FeedSpec {
+        name: "Helsinki HSL",
+        path: "aux/external/helsinki.zip",
+        queries: &[
+            QuerySpec {
+                label: "Kamppi metro -> Itäkeskus metro (direct, M1/M2 line)",
+                origin_stop_id: "1040601",
+                target_stop_id: "1453601",
+            },
+            QuerySpec {
+                label: "Rautatientori -> Pasila (~3 km north, may need transfer)",
+                origin_stop_id: "1020112",
+                target_stop_id: "1174501",
+            },
+        ],
+    },
+    FeedSpec {
+        name: "Berlin VBB",
+        path: "aux/external/berlin.zip",
+        queries: &[
+            QuerySpec {
+                label: "Berlin Hauptbahnhof -> Alexanderplatz (S-Bahn platforms)",
+                origin_stop_id: "de:11000:900003201:3:54",
+                target_stop_id: "de:11000:900100003:1:50",
+            },
+        ],
+    },
+    FeedSpec {
+        name: "Paris IDFM",
+        path: "aux/external/paris.zip",
+        queries: &[
+            QuerySpec {
+                label: "Châtelet -> Gare du Nord",
+                origin_stop_id: "IDFM:monomodalStopPlace:45102",
+                target_stop_id: "IDFM:monomodalStopPlace:462394",
+            },
+            QuerySpec {
+                label: "Châtelet -> La Défense",
+                origin_stop_id: "IDFM:monomodalStopPlace:45102",
+                target_stop_id: "IDFM:monomodalStopPlace:470549",
+            },
+            QuerySpec {
+                label: "Châtelet -> Versailles Rive Droite",
+                origin_stop_id: "IDFM:monomodalStopPlace:45102",
+                target_stop_id: "IDFM:monomodalStopPlace:44602",
+            },
+        ],
+    },
+];
+
+fn main() -> anyhow::Result<()> {
+    println!("# Cross-city benchmark\n");
+    println!("Departure: 09:00 ({DEPARTURE_TIME}s since midnight); query repeats: {QUERY_REPEATS} (warm cache; median reported)\n");
+    println!("| Feed | Stops | Routes | Trips | Load time |");
+    println!("|------|------:|-------:|------:|----------:|");
+
+    let mut feed_results: Vec<(String, Vec<String>)> = Vec::new();
+
+    for feed in FEEDS {
+        if !Path::new(feed.path).exists() {
+            eprintln!("skipping {} (file missing: {})", feed.name, feed.path);
+            continue;
+        }
+
+        let load_start = Instant::now();
+        let gtfs = Gtfs::new(feed.path)?;
+        let timetable = GtfsTimetable::new(&gtfs)?;
+        let load_elapsed = load_start.elapsed();
+
+        println!(
+            "| {} | {} | {} | {} | {} |",
+            feed.name,
+            timetable.n_stops(),
+            timetable.n_routes(),
+            gtfs.trips.len(),
+            format_duration(load_elapsed.as_nanos() as u64),
+        );
+
+        let mut cache = RaptorCache::for_timetable(&timetable);
+        let mut query_lines: Vec<String> = Vec::new();
+
+        for q in feed.queries {
+            let origin = match timetable.stop_idx(q.origin_stop_id) {
+                Some(idx) => idx,
+                None => {
+                    query_lines.push(format!(
+                        "| {} | (missing origin stop `{}`) |",
+                        q.label, q.origin_stop_id
+                    ));
+                    continue;
+                }
+            };
+            let target = match timetable.stop_idx(q.target_stop_id) {
+                Some(idx) => idx,
+                None => {
+                    query_lines.push(format!(
+                        "| {} | (missing target stop `{}`) |",
+                        q.label, q.target_stop_id
+                    ));
+                    continue;
+                }
+            };
+
+            // Warm up.
+            for _ in 0..3 {
+                let _ = timetable.raptor_with_cache(&mut cache, 10, DEPARTURE_TIME, origin, target);
+            }
+
+            // Measure.
+            let mut samples_ns: Vec<u128> = Vec::with_capacity(QUERY_REPEATS);
+            let mut last_arrival: Option<Tau> = None;
+            let mut last_journey_count: usize = 0;
+            for _ in 0..QUERY_REPEATS {
+                let t0 = Instant::now();
+                let journeys = timetable.raptor_with_cache(
+                    &mut cache,
+                    10,
+                    DEPARTURE_TIME,
+                    origin,
+                    target,
+                );
+                samples_ns.push(t0.elapsed().as_nanos());
+                last_journey_count = journeys.len();
+                last_arrival = journeys.iter().map(|j| j.arrival).min();
+            }
+            samples_ns.sort_unstable();
+            let median = samples_ns[samples_ns.len() / 2];
+            let arrival_str = match last_arrival {
+                Some(t) if t >= DEPARTURE_TIME => {
+                    let travel = t - DEPARTURE_TIME;
+                    format!(
+                        "{}m {}s (arr {})",
+                        travel / 60,
+                        travel % 60,
+                        format_hms(t)
+                    )
+                }
+                Some(t) => format!("ARR<DEP ({} < {})", format_hms(t), format_hms(DEPARTURE_TIME)),
+                None => "no journey".to_string(),
+            };
+            query_lines.push(format!(
+                "| {} | {} | {} journey(s); travel {} |",
+                q.label,
+                format_duration(median as u64),
+                last_journey_count,
+                arrival_str,
+            ));
+        }
+
+        feed_results.push((feed.name.to_string(), query_lines));
+    }
+
+    for (name, lines) in &feed_results {
+        println!("\n## {name}\n");
+        println!("| Query | Median latency | Result |");
+        println!("|-------|---------------:|--------|");
+        for line in lines {
+            println!("{line}");
+        }
+    }
+
+    Ok(())
+}
+
+fn format_hms(t: Tau) -> String {
+    let h = t / 3600;
+    let m = (t % 3600) / 60;
+    let s = t % 60;
+    format!("{h:02}:{m:02}:{s:02}")
+}
+
+fn format_duration(ns: u64) -> String {
+    if ns < 1_000 {
+        format!("{ns} ns")
+    } else if ns < 1_000_000 {
+        format!("{:.2} µs", ns as f64 / 1_000.0)
+    } else if ns < 1_000_000_000 {
+        format!("{:.2} ms", ns as f64 / 1_000_000.0)
+    } else {
+        format!("{:.2} s", ns as f64 / 1_000_000_000.0)
+    }
+}
