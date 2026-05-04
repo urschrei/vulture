@@ -408,10 +408,25 @@ entirely — every trip is assumed to run on every day. This is wrong on
 real feeds, where trips have service patterns (weekdays only, Sundays
 only, holidays excluded).
 
+**Promoted to Phase 0.10 (soundness).** The cross-city benchmarking work
+in v0.4 confirmed this produces silently-wrong journey output on
+multi-day GTFS feeds (Paris IDFM returns "best journey" with arrival
+times before the query departure — likely because trips encoded for
+service patterns the algorithm has no way to filter out are entering
+the route-scan). Wrong output is worse than no output, so this moves
+ahead of any further perf work.
+
 **Fix:** at construction time, accept a service date and filter trips
 to those active on that date. Or store per-trip service IDs and resolve
 at query time. The former is simpler; the latter supports multi-day
 queries. Start with the former.
+
+**Date type:** introduce `jiff::civil::Date` as the public surface for
+the service date (and any future date arithmetic). `gtfs-structures`
+exposes its calendar as `chrono::NaiveDate`, so convert at the
+boundary. We don't currently use any date type directly — `Tau =
+usize` (seconds since midnight) is the only time representation — so
+this is an additive change, not a migration.
 
 ### 3.4 First-class footpath construction from stop coordinates
 
