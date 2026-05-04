@@ -123,7 +123,7 @@ fn main() {
     .init();
 
     let mock = TwoRoutes;
-    let journey = mock.raptor(10, 0, StopIdx::new(1), StopIdx::new(9));
+    let journey = mock.raptor(10, 0, &[(StopIdx::new(1), 0)], &[(StopIdx::new(9), 0)]);
 
     println!("{journey:#?}");
 }

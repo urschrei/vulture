@@ -27,7 +27,7 @@
 //! let target = timetable.stop_idx("vishwavidyalaya").expect("unknown stop");
 //!
 //! // 10 = max transfers; 32400 = depart at 09:00 (seconds since midnight).
-//! let journeys = timetable.raptor(10, 32400, start, target);
+//! let journeys = timetable.raptor(10, 32400, &[(start, 0)], &[(target, 0)]);
 //!
 //! for journey in &journeys {
 //!     print!("arrives {}s, plan: ", journey.arrival);
@@ -206,16 +206,28 @@ impl From<TripIdx> for u32 {
 /// final arrival time. Multiple journeys may be returned for a single query,
 /// representing pareto-optimal trade-offs between fewer transfers and earlier
 /// arrival.
+///
+/// `origin` is whichever of the user-supplied origin stops this journey
+/// actually started from — relevant for multi-source queries (e.g. "any
+/// platform of this station") where the algorithm picks the best origin
+/// internally. Similarly `target` is the target stop reached.
 #[derive(Debug, Clone)]
 pub struct Journey {
+    /// The origin stop this journey starts from, picked from the
+    /// user-supplied origin set.
+    pub origin: StopIdx,
+    /// The target stop this journey ends at, picked from the user-supplied
+    /// target set.
+    pub target: StopIdx,
     /// Sequence of steps, each a (route, alight stop) pair.
     ///
-    /// The source stop is implicit — it is not part of the plan. Each entry
+    /// The origin stop is implicit — it is not part of the plan. Each entry
     /// means "take this route until this stop". The first step boards at the
-    /// source stop passed to [`Timetable::raptor`], and each subsequent step
-    /// boards at the stop where the previous step got off.
+    /// origin stop, and each subsequent step boards at the stop where the
+    /// previous step got off (possibly via an intermediate footpath).
     pub plan: Vec<(RouteIdx, StopIdx)>,
-    /// Arrival time at the target stop, in seconds since midnight.
+    /// Effective arrival time, in seconds since midnight. Includes the
+    /// user-supplied walk-time offset for the chosen `target` stop.
     pub arrival: Tau,
 }
 
@@ -238,8 +250,12 @@ type BoardingTree = BTreeMap<(K, StopIdx), Step>;
 /// walking yields a strictly better arrival, and records a `Walked` step
 /// in the boarding tree so that `reconstruct_journey` can later trace
 /// back through the walk leg. Stops that should be added to the marked
-/// set after target-pruning against τ\*(pt) are pushed onto `out`; the
-/// caller is responsible for clearing/draining it.
+/// set after target-pruning against `pt_threshold` are pushed onto `out`;
+/// the caller is responsible for clearing/draining it.
+///
+/// `pt_threshold` is the current best effective arrival at any of the
+/// query's target stops (i.e. `min over targets of best_arrival[t] + w_t`).
+/// Caller is responsible for keeping it up to date between calls.
 #[allow(clippy::too_many_arguments)]
 fn relax_footpaths_round<T: Timetable + ?Sized>(
     timetable: &T,
@@ -248,7 +264,7 @@ fn relax_footpaths_round<T: Timetable + ?Sized>(
     best_arrival: &mut [Tau],
     board_detail: &mut BoardingTree,
     sources: &FixedBitSet,
-    pt: StopIdx,
+    pt_threshold: Tau,
     out: &mut Vec<StopIdx>,
 ) {
     for stop_bit in sources.ones() {
@@ -267,7 +283,7 @@ fn relax_footpaths_round<T: Timetable + ?Sized>(
                 if via_walk < cur_best {
                     best_arrival[p_dash.idx()] = via_walk;
                 }
-                if via_walk < best_arrival[pt.idx()] {
+                if via_walk < pt_threshold {
                     out.push(p_dash);
                 }
             }
@@ -275,15 +291,29 @@ fn relax_footpaths_round<T: Timetable + ?Sized>(
     }
 }
 
+/// Returns the minimum of `best_arrival[t] + w` across all `(t, w)`
+/// in `targets`, saturating on overflow. Returns `Tau::MAX` if every
+/// target is unreached.
+fn best_to_any_target(best_arrival: &[Tau], targets: &[(StopIdx, Tau)]) -> Tau {
+    targets
+        .iter()
+        .map(|&(t, w)| best_arrival[t.idx()].saturating_add(w))
+        .min()
+        .unwrap_or(Tau::MAX)
+}
+
+/// Reconstruct candidate plans terminating at `pt`. For each k from 1
+/// to `transfers`, traces back through the boarding tree; if the trace
+/// reaches some stop in `origins`, emits a plan along with that origin.
 fn reconstruct_journey(
     tree: &BoardingTree,
-    ps: StopIdx,
+    origins: &FixedBitSet,
     pt: StopIdx,
     transfers: K,
-) -> Vec<Vec<(RouteIdx, StopIdx)>> {
+) -> Vec<(StopIdx, Vec<(RouteIdx, StopIdx)>)> {
     if tree.is_empty() {
         // Either no trips were taken, or we never reached target. The latter is
-        // possible if ps and pt are nodes of a disjoint graph
+        // possible if origin and target are nodes of a disjoint graph
         return Default::default();
     }
 
@@ -301,7 +331,7 @@ fn reconstruct_journey(
 
         log::debug!("outer_k = {k} | parent = {parent:?} | plans = {plans:?}");
 
-        while parent != ps && budget > 0 {
+        while !origins.contains(parent.idx()) && budget > 0 {
             budget -= 1;
             log::debug!("inner_k = {inner_k} | parent = {parent:?} | plan = {plan:?}");
 
@@ -326,9 +356,9 @@ fn reconstruct_journey(
             }
         }
 
-        if !plan.is_empty() && parent == ps {
+        if !plan.is_empty() && origins.contains(parent.idx()) {
             plan.reverse();
-            plans.push(plan)
+            plans.push((parent, plan));
         }
     }
 
@@ -424,17 +454,36 @@ pub trait Timetable {
         1
     }
 
-    /// Runs the RAPTOR algorithm and returns all pareto-optimal journeys.
+    /// Runs the RAPTOR algorithm and returns all Pareto-optimal journeys
+    /// from any of the `origins` to any of the `targets`.
+    ///
+    /// Each `(stop, walk)` entry in `origins` says "the user can reach
+    /// this stop at time `tau + walk`". Each entry in `targets` says
+    /// "reaching this stop is worth `walk` more seconds of walking to
+    /// arrive at the user's actual destination". The algorithm minimises
+    /// effective arrival = `arrival_at_target_stop + walk_time`.
+    ///
+    /// For a single-stop query, pass `&[(stop, 0)]`. For a station with
+    /// multiple platforms, pass each platform with its walk time from the
+    /// station entrance (often 0 if the user is willing to use any
+    /// platform). Multi-source/multi-target also fits geocoding: pass all
+    /// nearby stops with their walking times from the user's GPS.
     ///
     /// Allocates fresh scratch buffers on every call. For server use cases
     /// running thousands of queries against the same timetable, prefer
     /// [`Timetable::raptor_with_cache`] and reuse a [`RaptorCache`].
-    fn raptor(&self, transfers: usize, tau: Tau, ps: StopIdx, pt: StopIdx) -> Vec<Journey>
+    fn raptor(
+        &self,
+        transfers: usize,
+        tau: Tau,
+        origins: &[(StopIdx, Tau)],
+        targets: &[(StopIdx, Tau)],
+    ) -> Vec<Journey>
     where
         Self: Sized,
     {
         let mut cache = RaptorCache::for_timetable(self);
-        self.raptor_with_cache(&mut cache, transfers, tau, ps, pt)
+        self.raptor_with_cache(&mut cache, transfers, tau, origins, targets)
     }
 
     /// Same as [`Timetable::raptor`], but reuses scratch buffers from
@@ -445,8 +494,8 @@ pub trait Timetable {
         cache: &mut RaptorCache,
         transfers: usize,
         tau: Tau,
-        ps: StopIdx,
-        pt: StopIdx,
+        origins: &[(StopIdx, Tau)],
+        targets: &[(StopIdx, Tau)],
     ) -> Vec<Journey>
     where
         Self: Sized,
@@ -460,12 +509,27 @@ pub trait Timetable {
             q_entry,
             q_routes,
             walked_buf,
+            origin_set,
             ..
         } = cache;
 
-        labels[0][ps.idx()] = tau;
-        best_arrival[ps.idx()] = tau;
-        marked_stops.insert(ps.idx());
+        // Clear and populate the origin set used by reconstruction.
+        origin_set.clear();
+        for &(o, _) in origins {
+            origin_set.insert(o.idx());
+        }
+
+        // Seed labels for each origin at tau + its walk-time offset.
+        for &(o, walk) in origins {
+            let t = tau.saturating_add(walk);
+            if t < labels[0][o.idx()] {
+                labels[0][o.idx()] = t;
+                best_arrival[o.idx()] = t;
+                marked_stops.insert(o.idx());
+            }
+        }
+
+        let mut pt_threshold = best_to_any_target(best_arrival, targets);
 
         relax_footpaths_round(
             self,
@@ -474,12 +538,13 @@ pub trait Timetable {
             best_arrival,
             board_detail,
             marked_stops,
-            pt,
+            pt_threshold,
             walked_buf,
         );
         for s in walked_buf.drain(..) {
             marked_stops.insert(s.idx());
         }
+        pt_threshold = best_to_any_target(best_arrival, targets);
 
         for k in 1..=transfers {
             // Carry forward labels[k-1] into labels[k].
@@ -521,9 +586,8 @@ pub trait Timetable {
                     let pos = p_pos + offset as u32;
 
                     if let Some(arr) = current_trip.map(|trip| self.get_arrival_time(trip, pos)) {
-                        let best_to_pt = best_arrival[pt.idx()];
                         let best_to_pi = best_arrival[pi.idx()];
-                        let time_to_beat = best_to_pi.min(best_to_pt);
+                        let time_to_beat = best_to_pi.min(pt_threshold);
 
                         if arr < time_to_beat {
                             board_detail.insert(
@@ -555,6 +619,10 @@ pub trait Timetable {
                 q_entry[r.idx()] = None;
             }
 
+            // Refresh target threshold after the route scan, then run
+            // footpath relax. Refresh again after the footpath round so
+            // the next round's boarding decisions use a current threshold.
+            pt_threshold = best_to_any_target(best_arrival, targets);
             relax_footpaths_round(
                 self,
                 k,
@@ -562,27 +630,40 @@ pub trait Timetable {
                 best_arrival,
                 board_detail,
                 marked_stops,
-                pt,
+                pt_threshold,
                 walked_buf,
             );
             for s in walked_buf.drain(..) {
                 marked_stops.insert(s.idx());
             }
+            pt_threshold = best_to_any_target(best_arrival, targets);
 
             if marked_stops.is_clear() {
                 break;
             }
         }
 
-        let plans = reconstruct_journey(board_detail, ps, pt, transfers);
-
-        let mut journeys: Vec<Journey> = plans
-            .into_iter()
-            .map(|plan| {
-                let arrival = labels[plan.len()][pt.idx()];
-                Journey { plan, arrival }
-            })
-            .collect();
+        // For each target stop the algorithm reached, reconstruct candidate
+        // plans and pair each with its origin (one of the user's origins,
+        // chosen during the trace). Effective arrival = label at target +
+        // target's walk-time offset.
+        let mut journeys: Vec<Journey> = Vec::new();
+        for &(target, walk) in targets {
+            let plans = reconstruct_journey(board_detail, origin_set, target, transfers);
+            for (origin, plan) in plans {
+                let raw_arrival = labels[plan.len()][target.idx()];
+                if raw_arrival == Tau::MAX {
+                    continue;
+                }
+                let arrival = raw_arrival.saturating_add(walk);
+                journeys.push(Journey {
+                    origin,
+                    target,
+                    plan,
+                    arrival,
+                });
+            }
+        }
 
         // Output-side Pareto filter. Sort by trip count ascending, then keep
         // only journeys whose arrival is strictly less than the best seen so
@@ -642,6 +723,10 @@ pub struct RaptorCache {
 
     /// Scratch buffer for footpath relaxation output.
     walked_buf: Vec<StopIdx>,
+
+    /// Bitset of origin stops for the current query. Reconstruction
+    /// terminates when the trace reaches any bit set here.
+    origin_set: FixedBitSet,
 }
 
 impl RaptorCache {
@@ -664,6 +749,7 @@ impl RaptorCache {
             q_entry: vec![None; n_routes as usize],
             q_routes: Vec::new(),
             walked_buf: Vec::new(),
+            origin_set: FixedBitSet::with_capacity(n_stops as usize),
         }
     }
 

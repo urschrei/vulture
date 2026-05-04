@@ -129,6 +129,11 @@ pub struct GtfsTimetable<'gtfs> {
 
     footpaths_for_stops: Vec<SmallVec<[StopIdx; TYPICAL_TRANSFERS_PER_STOP]>>,
     transfer_times: HashMap<(StopIdx, StopIdx), Tau>,
+
+    /// For each parent-station GTFS id, the child platform `StopIdx`es
+    /// (each paired with a default zero walk time, ready to pass to
+    /// [`Timetable::raptor`] as a multi-source/multi-target query).
+    station_children: HashMap<&'gtfs str, Vec<(StopIdx, Tau)>>,
 }
 
 impl<'gtfs> GtfsTimetable<'gtfs> {
@@ -296,6 +301,24 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             }
         }
 
+        // 5. Group child stops by their parent_station, so that callers
+        //    can later query "all platforms of station X" with one lookup.
+        let mut station_children: HashMap<&'gtfs str, Vec<(StopIdx, Tau)>> = HashMap::new();
+        for (stop_id, stop) in &gtfs.stops {
+            if let Some(parent) = stop.parent_station.as_deref()
+                && let Some(&child_idx) = stop_by_id.get(stop_id.as_str())
+            {
+                // Resolve `parent` against gtfs.stops to find its &'gtfs str
+                // key (so the map's key has the right lifetime).
+                if let Some((parent_key, _)) = gtfs.stops.get_key_value(parent) {
+                    station_children
+                        .entry(parent_key.as_str())
+                        .or_default()
+                        .push((child_idx, 0));
+                }
+            }
+        }
+
         Ok(Self {
             stop_ids,
             route_ids,
@@ -312,7 +335,22 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             route_for_trip,
             footpaths_for_stops,
             transfer_times,
+            station_children,
         })
+    }
+
+    /// Returns the child platforms of a parent station as a slice ready
+    /// to pass to [`Timetable::raptor`] as origins or targets.
+    ///
+    /// Each entry is `(platform_stop_idx, walk_time)` where `walk_time`
+    /// defaults to 0 (the user is willing to use any platform without
+    /// further wait). Returns an empty slice if `parent_id` is not the
+    /// GTFS id of a parent station, or if the station has no children.
+    pub fn station_stops(&self, parent_id: &str) -> &[(StopIdx, Tau)] {
+        self.station_children
+            .get(parent_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Number of trips active on the timetable's service date (i.e. the

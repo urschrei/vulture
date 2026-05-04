@@ -64,8 +64,13 @@ fn bench_gtfs_query(c: &mut Criterion) {
             &(start, target),
             |b, &(start, target)| {
                 b.iter(|| {
-                    let journeys =
-                        timetable.raptor_with_cache(&mut cache, 10, DEPARTURE_TIME, start, target);
+                    let journeys = timetable.raptor_with_cache(
+                        &mut cache,
+                        10,
+                        DEPARTURE_TIME,
+                        &[(start, 0)],
+                        &[(target, 0)],
+                    );
                     black_box(&journeys);
                 });
             },

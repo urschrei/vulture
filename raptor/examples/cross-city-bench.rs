@@ -33,8 +33,16 @@ struct FeedSpec {
 
 struct QuerySpec {
     label: &'static str,
-    origin_stop_id: &'static str,
-    target_stop_id: &'static str,
+    origin: Endpoint,
+    target: Endpoint,
+}
+
+enum Endpoint {
+    /// Single stop ID — interpreted as a child platform / standalone stop.
+    Stop(&'static str),
+    /// Parent station ID — expanded to all child platforms via
+    /// `tt.station_stops(...)`.
+    Station(&'static str),
 }
 
 // Service dates for each feed. Built once at startup; can't be in a
@@ -48,18 +56,18 @@ fn feeds() -> Vec<FeedSpec> {
             queries: &[
                 QuerySpec {
                     label: "Dilshad Garden -> Shahdara (1 trip)",
-                    origin_stop_id: "1",
-                    target_stop_id: "4",
+                    origin: Endpoint::Stop("1"),
+                    target: Endpoint::Stop("4"),
                 },
                 QuerySpec {
                     label: "Dilshad Garden -> Vishwavidyalaya (2 trips)",
-                    origin_stop_id: "1",
-                    target_stop_id: "44",
+                    origin: Endpoint::Stop("1"),
+                    target: Endpoint::Stop("44"),
                 },
                 QuerySpec {
                     label: "Paschim Vihar West -> Ghitorni (3 trips)",
-                    origin_stop_id: "29",
-                    target_stop_id: "65",
+                    origin: Endpoint::Stop("29"),
+                    target: Endpoint::Stop("65"),
                 },
             ],
         },
@@ -70,13 +78,13 @@ fn feeds() -> Vec<FeedSpec> {
             queries: &[
                 QuerySpec {
                     label: "Kamppi metro -> Itäkeskus metro (direct, M1/M2 line)",
-                    origin_stop_id: "1040601",
-                    target_stop_id: "1453601",
+                    origin: Endpoint::Stop("1040601"),
+                    target: Endpoint::Stop("1453601"),
                 },
                 QuerySpec {
                     label: "Rautatientori -> Pasila (~3 km north, may need transfer)",
-                    origin_stop_id: "1020112",
-                    target_stop_id: "1174501",
+                    origin: Endpoint::Stop("1020112"),
+                    target: Endpoint::Stop("1174501"),
                 },
             ],
         },
@@ -84,15 +92,26 @@ fn feeds() -> Vec<FeedSpec> {
             name: "Berlin VBB",
             path: "aux/external/berlin.zip",
             service_date: date(2026, 5, 4),
-            queries: &[QuerySpec {
-                // Eastbound S-Bahn platform pair: trip 277442991 boards Hbf at
-                // 09:15:24 and reaches Alex at 09:21:48 (~6.5 min). Until
-                // parent-station aggregation lands, callers picking Berlin
-                // platform IDs by hand have to match direction explicitly.
-                label: "Berlin Hauptbahnhof -> Alexanderplatz (S-Bahn, eastbound)",
-                origin_stop_id: "de:11000:900003201:1:50",
-                target_stop_id: "de:11000:900100003:1:50",
-            }],
+            queries: &[
+                QuerySpec {
+                    // Hand-picked eastbound S-Bahn platform pair (Hbf 1:50 ->
+                    // Alex 1:50). Trip 277442991 boards Hbf at 09:15:24 and
+                    // reaches Alex at 09:21:48 (~6.5 min ride; query waits
+                    // ~15 min for the next eastbound train).
+                    label: "Berlin Hauptbahnhof -> Alexanderplatz (hand-picked platforms)",
+                    origin: Endpoint::Stop("de:11000:900003201:1:50"),
+                    target: Endpoint::Stop("de:11000:900100003:1:50"),
+                },
+                QuerySpec {
+                    // Same Hbf -> Alex journey, but expressed station-to-station:
+                    // expand each parent station to all of its child platforms
+                    // (~301 children for Hbf, ~50 for Alex) and let the
+                    // multi-source/target algorithm pick the best combination.
+                    label: "Berlin Hauptbahnhof -> Alexanderplatz (station-to-station)",
+                    origin: Endpoint::Station("de:11000:900003201"),
+                    target: Endpoint::Station("de:11000:900100003"),
+                },
+            ],
         },
         FeedSpec {
             name: "Paris IDFM",
@@ -101,18 +120,18 @@ fn feeds() -> Vec<FeedSpec> {
             queries: &[
                 QuerySpec {
                     label: "Châtelet -> Gare du Nord",
-                    origin_stop_id: "IDFM:monomodalStopPlace:45102",
-                    target_stop_id: "IDFM:monomodalStopPlace:462394",
+                    origin: Endpoint::Stop("IDFM:monomodalStopPlace:45102"),
+                    target: Endpoint::Stop("IDFM:monomodalStopPlace:462394"),
                 },
                 QuerySpec {
                     label: "Châtelet -> La Défense",
-                    origin_stop_id: "IDFM:monomodalStopPlace:45102",
-                    target_stop_id: "IDFM:monomodalStopPlace:470549",
+                    origin: Endpoint::Stop("IDFM:monomodalStopPlace:45102"),
+                    target: Endpoint::Stop("IDFM:monomodalStopPlace:470549"),
                 },
                 QuerySpec {
                     label: "Châtelet -> Versailles Rive Droite",
-                    origin_stop_id: "IDFM:monomodalStopPlace:45102",
-                    target_stop_id: "IDFM:monomodalStopPlace:44602",
+                    origin: Endpoint::Stop("IDFM:monomodalStopPlace:45102"),
+                    target: Endpoint::Stop("IDFM:monomodalStopPlace:44602"),
                 },
             ],
         },
@@ -154,30 +173,25 @@ fn main() -> anyhow::Result<()> {
         let mut query_lines: Vec<String> = Vec::new();
 
         for q in feed.queries {
-            let origin = match timetable.stop_idx(q.origin_stop_id) {
-                Some(idx) => idx,
-                None => {
-                    query_lines.push(format!(
-                        "| {} | (missing origin stop `{}`) |",
-                        q.label, q.origin_stop_id
-                    ));
+            let origins = match resolve_endpoint(&timetable, &q.origin) {
+                Ok(v) => v,
+                Err(e) => {
+                    query_lines.push(format!("| {} | (origin: {e}) |", q.label));
                     continue;
                 }
             };
-            let target = match timetable.stop_idx(q.target_stop_id) {
-                Some(idx) => idx,
-                None => {
-                    query_lines.push(format!(
-                        "| {} | (missing target stop `{}`) |",
-                        q.label, q.target_stop_id
-                    ));
+            let targets = match resolve_endpoint(&timetable, &q.target) {
+                Ok(v) => v,
+                Err(e) => {
+                    query_lines.push(format!("| {} | (target: {e}) |", q.label));
                     continue;
                 }
             };
 
             // Warm up.
             for _ in 0..3 {
-                let _ = timetable.raptor_with_cache(&mut cache, 10, DEPARTURE_TIME, origin, target);
+                let _ =
+                    timetable.raptor_with_cache(&mut cache, 10, DEPARTURE_TIME, &origins, &targets);
             }
 
             // Measure.
@@ -187,7 +201,7 @@ fn main() -> anyhow::Result<()> {
             for _ in 0..QUERY_REPEATS {
                 let t0 = Instant::now();
                 let journeys =
-                    timetable.raptor_with_cache(&mut cache, 10, DEPARTURE_TIME, origin, target);
+                    timetable.raptor_with_cache(&mut cache, 10, DEPARTURE_TIME, &origins, &targets);
                 samples_ns.push(t0.elapsed().as_nanos());
                 last_journey_count = journeys.len();
                 last_arrival = journeys.iter().map(|j| j.arrival).min();
@@ -228,6 +242,29 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Resolve a `QuerySpec` endpoint to a `Vec<(StopIdx, walk_time)>`.
+/// `Stop` endpoints become a single-element vec; `Station` endpoints
+/// expand to all child platforms via `tt.station_stops(...)`.
+fn resolve_endpoint(
+    tt: &GtfsTimetable,
+    e: &Endpoint,
+) -> Result<Vec<(raptor::StopIdx, Tau)>, String> {
+    match *e {
+        Endpoint::Stop(id) => match tt.stop_idx(id) {
+            Some(idx) => Ok(vec![(idx, 0)]),
+            None => Err(format!("unknown stop `{id}`")),
+        },
+        Endpoint::Station(id) => {
+            let children = tt.station_stops(id);
+            if children.is_empty() {
+                Err(format!("unknown station or no children: `{id}`"))
+            } else {
+                Ok(children.to_vec())
+            }
+        }
+    }
 }
 
 fn format_hms(t: Tau) -> String {

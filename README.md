@@ -28,8 +28,10 @@ let timetable = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?;
 let start = timetable.stop_idx("dilshad_garden").expect("unknown stop");
 let target = timetable.stop_idx("vishwavidyalaya").expect("unknown stop");
 
+// `raptor` is multi-source / multi-target: pass each origin and target as
+// (stop, walk_time_offset). Single-stop queries use [(stop, 0)].
 // 10 = max transfers; 32400 = depart at 09:00 (seconds since midnight).
-let journeys = timetable.raptor(10, 32400, start, target);
+let journeys = timetable.raptor(10, 32400, &[(start, 0)], &[(target, 0)]);
 
 for journey in &journeys {
     print!("arrives {}s, plan: ", journey.arrival);
@@ -42,10 +44,22 @@ for journey in &journeys {
 }
 ```
 
-A returned `Journey`'s `plan` is a `Vec<(RouteIdx, StopIdx)>` — each entry
-means "take this route, get off at this stop", source stop implicit. Each
-returned journey is Pareto-optimal: arrival strictly decreases as trip count
-increases, and no two returned journeys weakly dominate each other.
+A returned `Journey` has `plan: Vec<(RouteIdx, StopIdx)>` (each entry is
+"take this route, get off at this stop"), plus `origin` and `target` fields
+recording which user-supplied stops the algorithm picked, and `arrival`
+in seconds since midnight (including the chosen target's walk-time offset).
+Each returned journey is Pareto-optimal: arrival strictly decreases as trip
+count increases, and no two returned journeys weakly dominate each other.
+
+For station-level queries (where any platform of a parent station is an
+acceptable origin or target), `GtfsTimetable::station_stops(parent_id)`
+returns the children as a slice ready to pass to `raptor`:
+
+```rust,ignore
+let origins = timetable.station_stops("berlin_hbf");      // 301 platforms
+let targets = timetable.station_stops("berlin_alex");     // 50 platforms
+let journeys = timetable.raptor(10, 32400, origins, targets);
+```
 
 A runnable version of the above is in `examples/gtfs-timetable.rs`:
 

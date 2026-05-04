@@ -72,7 +72,7 @@ fn main() {
     .init();
 
     let mock = SingleRoute;
-    let journey = mock.raptor(10, 0, StopIdx::new(0), StopIdx::new(9));
+    let journey = mock.raptor(10, 0, &[(StopIdx::new(0), 0)], &[(StopIdx::new(9), 0)]);
 
     println!("{journey:#?}");
 }

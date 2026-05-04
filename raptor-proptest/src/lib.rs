@@ -61,8 +61,8 @@ fn run_property(tc: &hegel::TestCase, spec: &spec::NetworkSpec) {
     let ours = timetable.raptor(
         spec.query.max_transfers as usize,
         spec.query.tau as usize,
-        ps_idx,
-        pt_idx,
+        &[(ps_idx, 0)],
+        &[(pt_idx, 0)],
     );
     let theirs = reference::reference_solve(
         spec,
@@ -106,6 +106,8 @@ mod tests {
 
     fn j(arrival: usize, plan: Vec<(u32, u32)>) -> Journey {
         Journey {
+            origin: StopIdx::new(0),
+            target: StopIdx::new(0),
             plan: plan
                 .into_iter()
                 .map(|(r, s)| (RouteIdx::new(r), StopIdx::new(s)))

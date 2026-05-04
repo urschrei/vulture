@@ -37,7 +37,7 @@ fn main() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("unknown target stop: {target}"))?;
 
     let departure_time = 19 * 3600 + 15 * 60;
-    let journeys = timetable.raptor(10, departure_time, start_idx, target_idx);
+    let journeys = timetable.raptor(10, departure_time, &[(start_idx, 0)], &[(target_idx, 0)]);
 
     if journeys.is_empty() {
         println!("No journeys found.");

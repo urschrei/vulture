@@ -1,5 +1,63 @@
 # Changelog
 
+## [0.7.0] — 2026-05-05
+
+Multi-source / multi-target queries. The `Timetable::raptor` and
+`raptor_with_cache` signatures now take `&[(StopIdx, Tau)]` slices for
+both origins and targets — each tuple is a `(stop, walk_time_offset)`
+pair. The user supplies the candidate stops near their actual origin
+(and destination) along with how long it takes to walk to each;
+the algorithm minimises effective arrival = arrival_at_target_stop +
+walk_time, picking the best combination internally.
+
+Motivating use case: GTFS feeds use a parent-station / child-platform
+model where trips serve specific platforms (`location_type=0`) and
+the named station is a separate parent stop (`location_type=1`) with
+no trips. Querying with the parent's stop ID returns no journey;
+users were forced to know which child platform served their direction
+of travel. The new shape lets callers pass *all* of a station's child
+platforms as origins/targets and have the algorithm pick correctly.
+
+### Breaking changes
+
+- `Timetable::raptor` and `raptor_with_cache` change from
+  `(transfers, tau, ps: StopIdx, pt: StopIdx)` to
+  `(transfers, tau, origins: &[(StopIdx, Tau)], targets: &[(StopIdx, Tau)])`.
+  Single-stop queries become `&[(stop, 0)]`.
+- `Journey` gains two fields: `origin: StopIdx` (which of the supplied
+  origins this journey actually started from) and `target: StopIdx`
+  (which target stop was reached). `arrival` now includes the
+  user-supplied walk-time offset for the chosen target.
+
+### Added
+
+- `GtfsTimetable::station_stops(parent_id) -> &[(StopIdx, Tau)]`:
+  returns the child platforms of a parent station, ready to pass
+  directly to `raptor` as origins or targets. Each entry has walk
+  time 0 by default; callers wanting platform-specific walk times
+  can clone and adjust.
+
+### Test infrastructure
+
+- Three new unit tests cover multi-source / multi-target semantics:
+  picking the best origin from a set, walk-time offsets changing the
+  preferred origin, and walk-time offsets changing the preferred
+  target.
+- `raptor-proptest` continues to pass — the existing harness wraps
+  single-stop queries as `&[(stop, 0)]` and the algorithm degrades to
+  the old single-stop behaviour cleanly.
+
+### Cross-city benchmark
+
+The bench's Berlin query now appears in two forms: hand-picked S-Bahn
+platforms (the v0.6 form, 20m 36s including 15-minute wait at a
+specific eastbound platform) and station-to-station (Hbf parent to
+Alex parent, 7m 6s — the algorithm picks the best of 301 × 50 platform
+combinations and finds the actually-fastest direct S-Bahn). The
+station-to-station form is ~3-4× slower in latency (~370 µs vs ~110
+µs) because of the extra origins/targets to consider, but still
+well under a millisecond on the 42k-stop Berlin feed.
+
 ## [0.6.0] — 2026-05-04
 
 Phase 0.10 (soundness). The GTFS adapter now filters trips by

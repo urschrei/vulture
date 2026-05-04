@@ -145,7 +145,7 @@ fn main() {
     println!("Expected: S --(R2)--> B --(R3/early)--> D, arrives @ t=50\n");
 
     let timetable = ReBoardingTimetable;
-    let journeys = timetable.raptor(3, 0, S, D);
+    let journeys = timetable.raptor(3, 0, &[(S, 0)], &[(D, 0)]);
 
     println!("{journeys:#?}");
 }
