@@ -1,5 +1,67 @@
 # Changelog
 
+## [0.5.0] — 2026-05-04
+
+Phase 0.11 (soundness). Fixes a bug surfaced by cross-city
+benchmarking against real-world GTFS feeds: trips that revisit a stop
+within their `stop_sequence` (bus loops, terminus turnarounds — common
+in Berlin, Paris, and most US city feeds) caused silently-wrong
+journey output, including journeys with arrival times *before* the
+query departure time. The fix is a position-aware redesign of the
+`Timetable` trait's accessors, eliminating the `Vec::position()`
+ambiguity that was the root cause.
+
+### Breaking changes
+
+- `Timetable` trait accessors now take a position-within-route (`u32`)
+  instead of a `StopIdx` where the algorithm needs to disambiguate
+  which visit of a stop on a route it means:
+  - `get_routes_serving_stop` returns `&[(RouteIdx, u32)]` (each
+    serving route paired with the *earliest* position of the stop on
+    that route).
+  - `get_stops_after(route, pos: u32) -> &[StopIdx]` (was
+    `(route, stop)`).
+  - `get_arrival_time(trip, pos: u32) -> Tau` (was `(trip, stop)`).
+  - `get_departure_time(trip, pos: u32) -> Tau` (was `(trip, stop)`).
+  - `get_earliest_trip(route, at, pos: u32) -> Option<TripIdx>` (was
+    `(route, at, stop)`).
+- New trait method: `stop_at(route, pos: u32) -> StopIdx` — looks up
+  the stop at the given position within a route's sequence.
+- Removed: `get_earlier_stop`. The algorithm now folds boarding
+  positions via `min(prev_pos, new_pos)` directly.
+
+Custom `Timetable` implementors must update their impls. The shape of
+the change is mechanical: replace `position(|&s| s == stop)` lookups
+with the supplied `pos` argument, dedup `routes_for_stop`-style
+reverse maps so each route appears once with its earliest position.
+
+### Performance
+
+- Eliminating the per-call `Vec::position()` lookup in
+  `GtfsTimetable::get_arrival_time` / `get_departure_time` makes them
+  genuinely `O(1)`. Query latency improves 45–60% across all bundled
+  benchmark feeds:
+  - Delhi direct 1-trip: 3.5 µs → 1.9 µs
+  - Delhi 2-trip transfer: 43 µs → 17 µs
+  - Delhi 3-trip cross-line: 91 µs → 35 µs
+  - Helsinki direct metro: 30 µs → 26 µs
+  - Berlin algorithm cost: 33 ms → 17 ms
+  - Paris Châtelet→Versailles: 163 ms → 38 ms
+
+### Test infrastructure
+
+- `raptor-proptest`: layer 3 of the proptest harness now generates
+  loop trips (`LayerBounds.allow_loops` toggle; `unique(true)` is
+  dropped on stop_sequence when set). The brute-force reference
+  solver already handled loops; the algorithm now passes against it
+  on layer 3.
+
+### Removed
+
+- `examples/diagnose-paris.rs` and `examples/check-symmetry.rs`. These
+  were one-shot diagnostics used to identify the loop-route bug; the
+  proptest harness now covers the class.
+
 ## [0.4.0] — 2026-05-04
 
 This release closes the data-representation half of Phase 1: the

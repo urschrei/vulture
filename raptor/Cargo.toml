@@ -1,6 +1,6 @@
 [package]
 name = "raptor"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 authors = ["keogami <https://github.com/keogami>", "Stephan Hügel <https://github.com/urschrei>"]
 description = "Rust impl of RAPTOR (Round-bAsed Public Transit Routing)"

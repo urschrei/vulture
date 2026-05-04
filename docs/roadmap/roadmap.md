@@ -403,6 +403,23 @@ implement the GTFS-RT parser until v0.6.
 
 ### 0.11 Routes that revisit a stop (loop routes)
 
+**Status:** landed (v0.5). The fix took option (c) from the original
+options list — position-aware accessors throughout the trait — rather
+than (a) (reject loops) or (b) (split loops at construction). Trait
+signature change is breaking; nothing was published prior to v0.5.
+The proptest harness's layer 3 generator now produces loop trips
+(`unique(true)` removed when `LayerBounds.allow_loops` is set) and
+the algorithm passes against the brute-force reference solver. The
+cross-city Paris queries that previously produced ARR<DEP now return
+single sensible journeys. Side benefit: the position-aware accessors
+also eliminated a per-stop linear scan in
+`GtfsTimetable::get_arrival_time` / `get_departure_time`, making
+queries 45–60% faster across the board.
+
+The historical context below is preserved for reference.
+
+---
+
 **Promoted to Phase 0 (soundness) — discovered during Phase 1.7
 cross-city benchmarking.**
 

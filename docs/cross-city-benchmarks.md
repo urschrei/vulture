@@ -43,15 +43,15 @@ multi-leg journeys use shared physical interchange stops.
 
 | Query                                              | Median latency |              Result |
 |----------------------------------------------------|---------------:|--------------------:|
-| Dilshad Garden → Shahdara (1 trip, Red Line east)  |         3.7 µs | arr 09:09:32 (9 m)  |
-| Dilshad Garden → Vishwavidyalaya (2 trips)         |          46 µs | arr 09:31:49 (32 m) |
-| Paschim Vihar West → Ghitorni (3 trips, 3 lines)   |          91 µs | arr 10:22:52 (83 m) |
+| Dilshad Garden → Shahdara (1 trip, Red Line east)  |         1.9 µs | arr 09:09:32 (9 m)  |
+| Dilshad Garden → Vishwavidyalaya (2 trips)         |          17 µs | arr 09:31:49 (32 m) |
+| Paschim Vihar West → Ghitorni (3 trips, 3 lines)   |          35 µs | arr 10:22:52 (83 m) |
 
 ### Helsinki HSL
 
 | Query                                              | Median latency |              Result |
 |----------------------------------------------------|---------------:|--------------------:|
-| Kamppi metro (1040601) → Itäkeskus metro (1453601) |          30 µs | arr 09:17:00 (17 m) |
+| Kamppi metro (1040601) → Itäkeskus metro (1453601) |          26 µs | arr 09:17:00 (17 m) |
 
 The Kamppi-to-Itäkeskus leg is a single direct trip on the M1/M2
 metro line. A second query (`Rautatientori 1020112 → Pasila 1174501`,
@@ -64,7 +64,7 @@ discussed in [Known limitations](#known-limitations) below.
 
 | Query                                                              | Median latency |               Result |
 |--------------------------------------------------------------------|---------------:|---------------------:|
-| Berlin Hauptbahnhof platform 15 → Alexanderplatz S-Bahn platform 1 |          33 ms | arr 13:05:00 (245 m) |
+| Berlin Hauptbahnhof platform 15 → Alexanderplatz S-Bahn platform 1 |          17 ms | arr 13:05:00 (245 m) |
 
 Berlin returns a journey but the 245-minute travel time is an order
 of magnitude longer than reality (Hbf to Alexanderplatz on the
@@ -78,25 +78,19 @@ algorithm against ~42k stops and ~18k synthetic routes.
 
 ### Paris IDFM
 
-| Query                                | Median latency |    Result |
-|--------------------------------------|---------------:|----------:|
-| Châtelet → Gare du Nord              |          23 ms | see below |
-| Châtelet → La Défense                |          26 ms | see below |
-| Châtelet → Versailles Rive Droite    |         163 ms | see below |
+| Query                              | Median latency |              Result |
+|------------------------------------|---------------:|--------------------:|
+| Châtelet → Gare du Nord            |        0.91 ms | arr 09:05:00 (5 m)  |
+| Châtelet → La Défense              |         1.7 ms | arr 09:10:09 (10 m) |
+| Châtelet → Versailles Rive Droite  |          38 ms | arr 09:43:00 (43 m) |
 
-Paris query results are **currently incorrect** — many returned
-journeys have arrival times *before* the 09:00 departure. The
-specific journeys affected vary across runs (the GTFS adapter's
-internal `StopIdx`/`RouteIdx` assignments depend on `HashMap`
-iteration order, which is randomised per-process), but the pattern
-is reproducible: any query that touches a route whose trips revisit
-a stop will pull in an "earlier" arrival from the wrong visit.
-See [Known limitations](#known-limitations) below — the cause is
-loop routes, not calendar filtering as we initially suspected. The
-latency numbers are still informative — 23–163 ms is the algorithm's
-actual run time scanning Paris's ~54k stops and ~14k synthetic
-routes — but the journey output is unreliable on this feed until the
-loop-route handling lands.
+All three queries return single sensible journeys — the loop-route
+soundness bug that produced ARR<DEP results in earlier benchmark runs
+was fixed in Phase 0.11 (see [Known limitations](#known-limitations) §2
+for the diagnosis history). Latencies are roughly 5–6× faster than the
+v0.4 numbers because the position-aware accessors that fixed the
+soundness bug also eliminated a per-stop linear scan in
+`GtfsTimetable::get_arrival_time` / `get_departure_time`.
 
 ## Known limitations
 
@@ -121,23 +115,24 @@ follow-up could either (a) skip parent stations during interning, or
 (b) aggregate trips at child platforms onto the parent for query
 purposes.
 
-### 2. Routes whose trips revisit a stop (loops)
+### 2. Routes whose trips revisit a stop (loops) — fixed in Phase 0.11
 
-This is the actual root cause of the Paris ARR<DEP results. Diagnosed
-during Phase 1.7 by stepping a bad journey through the algorithm.
+This was the root cause of the Paris ARR<DEP results in earlier
+benchmark runs. Diagnosed by stepping a bad journey through the
+algorithm; fixed by the v0.5 trait redesign.
 
-GTFS allows a trip's `stop_sequence` to revisit the same stop_id (bus
-loops, shuttles that turn around, terminus loops). Our adapter
-collapses each trip's stop sequence into a `Vec<StopIdx>` and then
-uses `Vec::position()` to find a stop's index within that sequence —
-but `position()` returns the **first** occurrence. When a trip
-visits stop X at sequence-index 0 (early morning) and again at
-sequence-index 12 (late morning), `get_arrival_time(trip, X)` returns
-the early-morning value regardless of which visit the algorithm meant.
-The algorithm then writes labels at downstream stops with these
-impossibly-early arrivals.
+The bug: GTFS allows a trip's `stop_sequence` to revisit the same
+stop_id (bus loops, shuttles that turn around, terminus loops). The
+v0.4 adapter collapsed each trip's stop sequence into a
+`Vec<StopIdx>` and used `Vec::position()` to find a stop's index
+within that sequence — `position()` returns the **first** occurrence.
+When a trip visited stop X at sequence-index 0 (early morning) and
+again at sequence-index 12 (late morning), `get_arrival_time(trip, X)`
+returned the early-morning value regardless of which visit the
+algorithm meant. The algorithm then wrote labels at downstream stops
+with these impossibly-early arrivals.
 
-Trip counts with this property in the bundled and fetched feeds:
+Trip counts with this property across the benchmarked feeds:
 
 | Feed         | Trips with duplicate stops |             of total | Distinct GTFS `route_id`s affected |
 |--------------|---------------------------:|---------------------:|-----------------------------------:|
@@ -146,16 +141,16 @@ Trip counts with this property in the bundled and fetched feeds:
 | Berlin VBB   |                      6,872 |             275,263  |                                205 |
 | Paris IDFM   |                     12,352 |             459,152  |                                207 |
 
-Helsinki and Delhi are unaffected, which is why their queries returned
-sensible answers. Berlin and Paris are bus-network-heavy, where
-terminus-loop trips are common.
+Helsinki and Delhi were never affected (zero loop trips). Berlin and
+Paris had hundreds of bus loop routes each; this is why Paris queries
+were the most visibly broken.
 
-Roadmap item: **Phase 0.11 (soundness)** — at construction, either
-reject loop trips (with a clear error), split each loop trip into
-distinct sub-trips at the revisit boundary, or change all
-stop-position lookups to disambiguate the visit number. Until then,
-correctness on feeds with bus-loop routes (Berlin, Paris, most
-US city feeds) is not guaranteed.
+The v0.5 fix added an explicit "position within route" parameter to
+the `Timetable` trait's accessors, eliminating the `position()`
+ambiguity. The proptest harness's layer 3 generator now produces
+loop trips and the algorithm passes against the brute-force reference
+solver. The cross-city Paris queries above now return single sensible
+journeys.
 
 ### 3. No calendar / service-day filtering
 
