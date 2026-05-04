@@ -63,7 +63,8 @@
 //! Based on the paper: *Round-Based Public Transit Routing* by Daniel
 //! Delling, Thomas Pajor, and Renato F. Werneck.
 
-use std::collections::BTreeMap;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap};
 use std::fmt;
 
 use fixedbitset::FixedBitSet;
@@ -244,18 +245,22 @@ enum Step {
 
 type BoardingTree = BTreeMap<(K, StopIdx), Step>;
 
-/// Relax footpaths from every stop in `sources` at round `k`.
+/// Relax footpaths from every stop in `sources` at round `k`, propagating
+/// to a fixed point.
 ///
-/// Improves `labels[k][p_dash]` and the τ\* table (`best_arrival`) when
-/// walking yields a strictly better arrival, and records a `Walked` step
-/// in the boarding tree so that `reconstruct_journey` can later trace
-/// back through the walk leg. Stops that should be added to the marked
-/// set after target-pruning against `pt_threshold` are pushed onto `out`;
-/// the caller is responsible for clearing/draining it.
+/// Iteratively improves `labels[k][p_dash]` and the τ\* table
+/// (`best_arrival`) until no walk produces a strictly better arrival.
+/// Each improvement records a `Walked` step in the boarding tree so that
+/// `reconstruct_journey` can later trace back through the walk leg.
 ///
-/// `pt_threshold` is the current best effective arrival at any of the
-/// query's target stops (i.e. `min over targets of best_arrival[t] + w_t`).
-/// Caller is responsible for keeping it up to date between calls.
+/// Because relaxation iterates to a fixed point, the trait's footpath
+/// relation does **not** need to be transitively closed: if A→B and B→C
+/// are both in the relation, the algorithm chains them within a single
+/// round and reaches C with the combined walk time.
+///
+/// Stops that should be added to the marked set for the next round are
+/// pushed onto `out`, gated by `pt_threshold` (the current best effective
+/// arrival at any target). Caller drains `out` between calls.
 #[allow(clippy::too_many_arguments)]
 fn relax_footpaths_round<T: Timetable + ?Sized>(
     timetable: &T,
@@ -266,15 +271,31 @@ fn relax_footpaths_round<T: Timetable + ?Sized>(
     sources: &FixedBitSet,
     pt_threshold: Tau,
     out: &mut Vec<StopIdx>,
+    heap: &mut BinaryHeap<Reverse<(Tau, u32)>>,
 ) {
-    for stop_bit in sources.ones() {
-        let stop = StopIdx::new(stop_bit as u32);
-        let stop_arrival = labels[k][stop.idx()];
-        if stop_arrival == Tau::MAX {
+    // Multi-source Dijkstra over the footpath graph at round `k`. Each
+    // source's initial label is its current `labels[k]` value; transfer
+    // times are non-negative so Dijkstra is sound. Uses lazy deletion —
+    // stale heap entries are skipped on pop.
+    //
+    // O(E log V) per round; replaces an earlier LIFO Vec-based queue
+    // that degenerated to O(V·E) on dense walking graphs.
+    heap.clear();
+    for bit in sources.ones() {
+        let arrival = labels[k][bit];
+        if arrival != Tau::MAX {
+            heap.push(Reverse((arrival, bit as u32)));
+        }
+    }
+
+    while let Some(Reverse((arrival, stop_bit))) = heap.pop() {
+        let stop = StopIdx::new(stop_bit);
+        // Skip stale entries — a strictly better label was popped earlier.
+        if arrival > labels[k][stop.idx()] {
             continue;
         }
         for &p_dash in timetable.get_footpaths_from(stop) {
-            let via_walk = stop_arrival.saturating_add(timetable.get_transfer_time(stop, p_dash));
+            let via_walk = arrival.saturating_add(timetable.get_transfer_time(stop, p_dash));
             let cur = labels[k][p_dash.idx()];
             if via_walk < cur {
                 labels[k][p_dash.idx()] = via_walk;
@@ -286,6 +307,7 @@ fn relax_footpaths_round<T: Timetable + ?Sized>(
                 if via_walk < pt_threshold {
                     out.push(p_dash);
                 }
+                heap.push(Reverse((via_walk, p_dash.get())));
             }
         }
     }
@@ -324,10 +346,13 @@ fn reconstruct_journey(
         let mut parent = pt;
         let mut inner_k = k;
         // Bound the trace length to avoid pathological loops on a malformed
-        // tree. In a well-formed tree walks are at most one hop per round
-        // (footpaths are transitively closed and the helper only walks from
-        // the round's marked sources), so 2 * k + 1 steps suffice.
-        let mut budget = 2 * k + 1;
+        // tree. With fixed-point footpath relaxation a walk chain within a
+        // round can in principle visit every stop at most once, but the
+        // tree is well-formed by construction (each insertion overwrites
+        // the previous entry at the same (k, stop) key, so no cycles).
+        // The budget is just defensive: 100 walk-hops per round is well
+        // beyond anything realistic.
+        let mut budget = (k + 1) * 100;
 
         log::debug!("outer_k = {k} | parent = {parent:?} | plans = {plans:?}");
 
@@ -375,15 +400,17 @@ fn reconstruct_journey(
 /// [`TripIdx`]). Adapters intern from external IDs (e.g. GTFS string IDs)
 /// at construction time.
 ///
-/// # Footpath transitivity
+/// # Footpaths
 ///
-/// The footpath relation returned by [`get_footpaths_from`] must be
-/// **transitively closed**: if you can walk `A → B` and `B → C`, then
-/// `A → C` must also be reported as a footpath from `A` (with a transfer
-/// time at most the sum of the two legs). The algorithm relaxes footpaths
-/// once per round; it does not iterate to a fixed point. A non-closed
-/// relation will cause RAPTOR to miss journeys whose optimal path involves
-/// chained walks within a single round.
+/// The footpath relation returned by [`get_footpaths_from`] does **not**
+/// need to be transitively closed: if you can walk `A → B` and `B → C`,
+/// the algorithm will chain them within a single round, reaching `C`
+/// from `A` with the combined walk time. Footpath relaxation iterates to
+/// a fixed point per round.
+///
+/// Closure can still be useful as an optimisation — pre-closed graphs
+/// have fewer edges to traverse — but it is not a soundness
+/// prerequisite.
 ///
 /// # No overtaking within a route
 ///
@@ -440,11 +467,11 @@ pub trait Timetable {
     /// route's sequence.
     fn get_departure_time(&self, trip: TripIdx, pos: u32) -> Tau;
 
-    /// Returns all stops reachable from the given stop via walking
-    /// (footpaths).
+    /// Returns all stops directly reachable from the given stop via
+    /// walking (footpaths).
     ///
-    /// **The footpath relation must be transitively closed.** See the
-    /// trait-level docs for details.
+    /// The relation does not need to be transitively closed — the
+    /// algorithm chains walks within a round. See the trait-level docs.
     fn get_footpaths_from(&self, stop: StopIdx) -> &[StopIdx];
 
     /// Returns the walking transfer time between two stops, in seconds.
@@ -510,6 +537,7 @@ pub trait Timetable {
             q_routes,
             walked_buf,
             origin_set,
+            relax_heap,
             ..
         } = cache;
 
@@ -540,6 +568,7 @@ pub trait Timetable {
             marked_stops,
             pt_threshold,
             walked_buf,
+            relax_heap,
         );
         for s in walked_buf.drain(..) {
             marked_stops.insert(s.idx());
@@ -632,6 +661,7 @@ pub trait Timetable {
                 marked_stops,
                 pt_threshold,
                 walked_buf,
+                relax_heap,
             );
             for s in walked_buf.drain(..) {
                 marked_stops.insert(s.idx());
@@ -727,6 +757,10 @@ pub struct RaptorCache {
     /// Bitset of origin stops for the current query. Reconstruction
     /// terminates when the trace reaches any bit set here.
     origin_set: FixedBitSet,
+
+    /// Min-heap reused across footpath relaxations. Entries are
+    /// `(arrival_time, stop_bit)`; lazy deletion via the time field.
+    relax_heap: BinaryHeap<Reverse<(Tau, u32)>>,
 }
 
 impl RaptorCache {
@@ -750,6 +784,7 @@ impl RaptorCache {
             q_routes: Vec::new(),
             walked_buf: Vec::new(),
             origin_set: FixedBitSet::with_capacity(n_stops as usize),
+            relax_heap: BinaryHeap::new(),
         }
     }
 

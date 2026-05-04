@@ -158,20 +158,39 @@ It is non-generic. Identifiers are dense `u32` newtypes — `StopIdx`,
 loop. Adapters are responsible for interning external identifiers (e.g. GTFS
 string IDs) to dense indices at construction.
 
-Two contracts the algorithm relies on:
+One contract the algorithm relies on:
 
-- **Footpaths must be transitively closed.** If `A → B` and `B → C` are both
-  walkable, you must also report `A → C` from `get_footpaths_from(A)`. The
-  algorithm relaxes footpaths once per round; it does not iterate to a fixed
-  point. Most well-formed GTFS feeds satisfy this because `transfers.txt`
-  consists of explicit pairs.
 - **Trips on a route must share a stop sequence and not overtake.** The
   algorithm binary-searches by departure time at intermediate stops. If your
   data source groups trips with different stop patterns or overtaking pairs
   under one route, split them at construction. The bundled GTFS adapter does
   this automatically.
 
-Both invariants are documented on the `Timetable` trait.
+Footpaths returned by `get_footpaths_from` describe direct walks only — they
+do not need to be transitively closed. The algorithm relaxes footpaths to a
+fixed point per round (multi-source Dijkstra), so chained walks `A → B → C`
+are reached automatically with the combined walk time.
+
+Both points are documented on the `Timetable` trait.
+
+### Walking footpaths from coordinates
+
+For GTFS feeds whose `transfers.txt` is empty or sparse,
+`GtfsTimetable::with_walking_footpaths(&gtfs, max_distance_m, walking_speed_m_per_s)`
+augments the footpath graph with bidirectional walking edges between every
+pair of stops within straight-line `max_distance_m`. It uses an R-tree over
+an equirectangular projection (accurate to ~0.5% at city scale) and
+preserves any existing `transfers.txt` entries.
+
+```rust,no_run
+use jiff::civil::date;
+use raptor::gtfs::GtfsTimetable;
+
+let gtfs = gtfs_structures::Gtfs::new("helsinki.zip")?;
+let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?
+    .with_walking_footpaths(&gtfs, 500.0, 1.4); // 500m at 5 km/h
+# Ok::<(), anyhow::Error>(())
+```
 
 ## License
 

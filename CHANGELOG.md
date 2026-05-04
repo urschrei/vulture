@@ -1,5 +1,72 @@
 # Changelog
 
+## [0.8.0] — 2026-05-05
+
+Transfer-graph density. The `Timetable` trait no longer requires the
+footpath relation to be transitively closed: if `A → B` and `B → C` are
+both reported as direct walks, the algorithm chains them within a single
+round and reaches `C` from `A` with the combined walk time. Closure is
+still useful as an optimisation (fewer edges to traverse) but is no
+longer a soundness prerequisite.
+
+### Trait change
+
+- `get_footpaths_from` now returns *direct* walks only — the relation
+  does not need to be transitively closed. Existing custom adapters that
+  pre-closed the relation continue to work without modification (closure
+  is a valid superset of the direct-walks relation). The trait-level docs
+  have been rewritten accordingly.
+
+### Algorithm
+
+- `relax_footpaths_round` now runs a multi-source Dijkstra over the
+  footpath graph at each round, propagating walk improvements to a fixed
+  point. Standard lazy-deletion min-heap; `O(E log V)` per round.
+  Replaces an earlier single-pass relaxation that required the input to
+  be closed; a Bellman-Ford-style intermediate form turned out to
+  degenerate to `O(V·E)` on dense walking graphs.
+- `RaptorCache` gains a `relax_heap` field (`BinaryHeap<Reverse<(Tau,
+  u32)>>`) reused across rounds. Construction API is unchanged
+  (`RaptorCache::for_timetable` / `with_capacity`).
+
+### Added
+
+- `GtfsTimetable::with_walking_footpaths(&gtfs, max_distance_m,
+  walking_speed_m_per_s) -> Self`: augments the footpath graph with
+  bidirectional walking edges between every pair of stops within
+  `max_distance_m` straight-line distance. Builds an R-tree over an
+  equirectangular projection anchored at the feed's mean latitude
+  (accurate to ~0.5% at city scale) and queries it with
+  `locate_within_distance`. Existing `transfers.txt` entries are
+  preserved — coordinate-derived edges are only added where no explicit
+  transfer between the pair already exists.
+- New dependency: `rstar = "0.12"` (spatial index for the new builder).
+
+### Cross-city benchmark
+
+- The Helsinki Rautatientori → Pasila query now returns a 7-minute
+  journey via walking footpaths. Previously this returned no journey at
+  all because the HSL feed has no `transfers.txt` and the two stations
+  use different parent IDs — the only path was a metro/bus combination
+  that needed a walking interchange the algorithm couldn't see. The
+  bench now passes `walking_footpaths_m: Some(500.0)` for Helsinki to
+  exercise the new builder.
+- Paris IDFM query latencies regressed by roughly an order of magnitude
+  on this run (Châtelet → Gare du Nord 0.4 ms → 8.7 ms; Châtelet →
+  Versailles 9.8 ms → 34.5 ms). The cause is the Dijkstra heap overhead:
+  on graphs whose `transfers.txt` is already close to transitively
+  closed, the old single-pass relaxation visited each footpath edge
+  exactly once with no heap ops; Dijkstra still visits each edge once
+  but pays an `O(log V)` heap operation per visit. Berlin (closed
+  transfers.txt, similar density to Paris) shows only a ~20% regression
+  on the hand-picked-platforms query (88 µs → 106 µs) and still finishes
+  the station-to-station query in 385 µs — the regression scale depends
+  on how many footpath edges the round actually touches.
+
+- A detect-closed-graph optimisation (skip the heap when the graph is
+  known to be transitively closed) is a reasonable future addition; for
+  now correctness on non-closed graphs is the priority.
+
 ## [0.7.0] — 2026-05-05
 
 Multi-source / multi-target queries. The `Timetable::raptor` and

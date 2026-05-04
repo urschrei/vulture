@@ -28,6 +28,11 @@ struct FeedSpec {
     /// calendar ends 2025-12-31, so it gets an older date; the recently
     /// fetched feeds use 2026-05-04 (a Monday).
     service_date: jiff::civil::Date,
+    /// If `Some(distance_m)`, the timetable is augmented with
+    /// coordinate-derived walking footpaths via
+    /// [`GtfsTimetable::with_walking_footpaths`] using the standard
+    /// 1.4 m/s walking speed.
+    walking_footpaths_m: Option<f64>,
     queries: &'static [QuerySpec],
 }
 
@@ -53,6 +58,7 @@ fn feeds() -> Vec<FeedSpec> {
             name: "Delhi Metro",
             path: "aux/dmrc_gtfs.zip",
             service_date: date(2024, 1, 15), // a Monday in the Delhi calendar window
+            walking_footpaths_m: None,
             queries: &[
                 QuerySpec {
                     label: "Dilshad Garden -> Shahdara (1 trip)",
@@ -75,6 +81,7 @@ fn feeds() -> Vec<FeedSpec> {
             name: "Helsinki HSL",
             path: "aux/external/helsinki.zip",
             service_date: date(2026, 5, 4),
+            walking_footpaths_m: Some(500.0),
             queries: &[
                 QuerySpec {
                     label: "Kamppi metro -> Itäkeskus metro (direct, M1/M2 line)",
@@ -82,9 +89,9 @@ fn feeds() -> Vec<FeedSpec> {
                     target: Endpoint::Stop("1453601"),
                 },
                 QuerySpec {
-                    label: "Rautatientori -> Pasila (~3 km north, may need transfer)",
-                    origin: Endpoint::Stop("1020112"),
-                    target: Endpoint::Stop("1174501"),
+                    label: "Rautatientori -> Pasila (station-to-station, ~3 km north)",
+                    origin: Endpoint::Station("1000003"),
+                    target: Endpoint::Station("1000202"),
                 },
             ],
         },
@@ -92,6 +99,7 @@ fn feeds() -> Vec<FeedSpec> {
             name: "Berlin VBB",
             path: "aux/external/berlin.zip",
             service_date: date(2026, 5, 4),
+            walking_footpaths_m: None,
             queries: &[
                 QuerySpec {
                     // Hand-picked eastbound S-Bahn platform pair (Hbf 1:50 ->
@@ -117,6 +125,7 @@ fn feeds() -> Vec<FeedSpec> {
             name: "Paris IDFM",
             path: "aux/external/paris.zip",
             service_date: date(2026, 5, 4),
+            walking_footpaths_m: None,
             queries: &[
                 QuerySpec {
                     label: "Châtelet -> Gare du Nord",
@@ -156,7 +165,13 @@ fn main() -> anyhow::Result<()> {
 
         let load_start = Instant::now();
         let gtfs = Gtfs::new(feed.path)?;
-        let timetable = GtfsTimetable::new(&gtfs, feed.service_date)?;
+        let timetable = {
+            let mut tt = GtfsTimetable::new(&gtfs, feed.service_date)?;
+            if let Some(d) = feed.walking_footpaths_m {
+                tt = tt.with_walking_footpaths(&gtfs, d, 1.4);
+            }
+            tt
+        };
         let load_elapsed = load_start.elapsed();
 
         println!(

@@ -1,6 +1,6 @@
 # Cross-city benchmarks
 
-Real-feed performance numbers for `raptor-rs` v0.4.0 across four GTFS
+Real-feed performance numbers for `raptor-rs` v0.8.0 across four GTFS
 feeds spanning two orders of magnitude in network size. Measured on
 Apple Silicon (arm64 macOS), single laptop, single thread; warm
 `RaptorCache` reused across queries; criterion-style methodology
@@ -17,10 +17,10 @@ and building the per-route arrival/departure tables.
 
 | Feed         | Service date | Stops  | Routes (synthetic, post-filter) | Trips (active) | Load time |
 |--------------|--------------|-------:|------------------------------:|---------------:|----------:|
-| Delhi Metro  | 2024-01-15   |    262 |                            35 |          5,379 |    101 ms |
+| Delhi Metro  | 2024-01-15   |    262 |                            35 |          5,379 |    107 ms |
 | Helsinki HSL | 2026-05-04   |  8,376 |                           912 |         24,379 |   11.28 s |
-| Berlin VBB   | 2026-05-04   | 41,986 |                        10,758 |         71,037 |    6.67 s |
-| Paris IDFM   | 2026-05-04   | 54,018 |                         8,621 |        145,551 |   10.61 s |
+| Berlin VBB   | 2026-05-04   | 41,986 |                        10,757 |         71,037 |    6.55 s |
+| Paris IDFM   | 2026-05-04   | 54,018 |                         8,620 |        145,551 |   10.44 s |
 
 The "Routes" column counts the *synthetic* routes the adapter creates
 after splitting each GTFS `route_id` by stop pattern and overtaking,
@@ -46,58 +46,74 @@ multi-leg journeys use shared physical interchange stops.
 
 | Query                                              | Median latency |              Result |
 |----------------------------------------------------|---------------:|--------------------:|
-| Dilshad Garden → Shahdara (1 trip, Red Line east)  |         1.4 µs | arr 09:09:32 (9 m)  |
-| Dilshad Garden → Vishwavidyalaya (2 trips)         |          16 µs | arr 09:31:49 (32 m) |
-| Paschim Vihar West → Ghitorni (3 trips, 3 lines)   |          37 µs | arr 10:22:52 (83 m) |
+| Dilshad Garden → Shahdara (1 trip, Red Line east)  |         5.2 µs | arr 09:09:32 (9 m)  |
+| Dilshad Garden → Vishwavidyalaya (2 trips)         |          22 µs | arr 09:31:49 (32 m) |
+| Paschim Vihar West → Ghitorni (3 trips, 3 lines)   |          41 µs | arr 10:22:52 (83 m) |
 
 ### Helsinki HSL
 
+The Helsinki run augments the feed with coordinate-derived walking
+footpaths via `GtfsTimetable::with_walking_footpaths(&gtfs, 500.0,
+1.4)` — without them the Rautatientori → Pasila query returns no
+journey because HSL ships an empty `transfers.txt`.
+
 | Query                                              | Median latency |              Result |
 |----------------------------------------------------|---------------:|--------------------:|
-| Kamppi metro (1040601) → Itäkeskus metro (1453601) |          26 µs | arr 09:17:00 (17 m) |
+| Kamppi metro (1040601) → Itäkeskus metro (1453601) |        5.88 ms | arr 09:17:00 (17 m) |
+| Rautatientori → Pasila (station-to-station, ~3 km) |        4.99 ms |  arr 09:07:00 (7 m) |
 
 The Kamppi-to-Itäkeskus leg is a single direct trip on the M1/M2
-metro line. A second query (`Rautatientori 1020112 → Pasila 1174501`,
-~3 km between two tram-served plaza stops) currently returns no
-journey at this departure time even with 10 transfers allowed; this
-appears to be a footpath/transfer-graph density limitation and is
-discussed in [Known limitations](#known-limitations) below.
+metro line; the latency is the Dijkstra footpath-relaxation cost on
+the dense walking graph (8,376 stops × walking-radius 500 m). The
+Rautatientori → Pasila query lands on a single S-Bahn ride to Pasila
+at 09:07. Both queries previously returned no journey.
 
 ### Berlin VBB
 
 | Query                                                              | Median latency |              Result |
 |--------------------------------------------------------------------|---------------:|--------------------:|
-| Berlin Hauptbahnhof → Alexanderplatz (S-Bahn, eastbound platforms) |          88 µs | arr 09:20:36 (20 m) |
+| Berlin Hauptbahnhof → Alexanderplatz (S-Bahn, hand-picked plats)   |        106 µs | arr 09:20:36 (20 m) |
+| Berlin Hauptbahnhof → Alexanderplatz (station-to-station)          |        385 µs |  arr 09:07:06 (7 m) |
 
-The 20-minute travel time is the actual S-Bahn journey from Hbf to
-Alex *plus the wait* for the next eastbound train: in this snapshot,
-the next train boards at 09:15:24 and arrives Alex at 09:21:48, so a
-09:00 query waits ~15 minutes plus the ~6-minute ride.
+The hand-picked-platforms query takes 20 minutes because the chosen
+ID is one specific eastbound S-Bahn platform: the 09:00 query waits
+~15 minutes for the next train at 09:15:24 plus the ~6-minute ride.
 
-This query benefits from the loop-route fix in v0.5 (the previous
-version reported a 245-minute "best journey" — the algorithm couldn't
-find a direct S-Bahn between the platforms originally chosen because
-the IDs were for opposite-direction tracks, and the loop-route bug
-was producing further nonsense in the long alternate routes it
-considered). It also illustrates limitation §1 below: until parent-
-station aggregation lands, callers picking platform IDs by hand have
-to match direction explicitly.
+The station-to-station query passes the parent station IDs straight
+to `raptor` (via `GtfsTimetable::station_stops`, added in v0.7),
+expanding each parent to its ~50–300 child platforms and letting the
+multi-source/target search pick the actually-fastest combination — in
+this case a direct S-Bahn that leaves Hbf at 09:01 and arrives Alex at
+09:07. The cost is ~3.6× the hand-picked latency because of the extra
+origins and targets to consider, but the answer is correct without
+requiring the caller to know which platform serves their direction.
+
+The hand-picked query benefits from the loop-route fix in v0.5 (the
+previous version reported a 245-minute "best journey" — the algorithm
+couldn't find a direct S-Bahn between the platforms originally chosen
+because the IDs were for opposite-direction tracks, and the loop-route
+bug was producing further nonsense in the long alternate routes it
+considered).
 
 ### Paris IDFM
 
 | Query                              | Median latency |              Result |
 |------------------------------------|---------------:|--------------------:|
-| Châtelet → Gare du Nord            |        0.41 ms | arr 09:05:00 (5 m)  |
-| Châtelet → La Défense              |         0.6 ms | arr 09:10:09 (10 m) |
-| Châtelet → Versailles Rive Droite  |         9.8 ms | arr 09:43:00 (43 m) |
+| Châtelet → Gare du Nord            |         8.7 ms | arr 09:05:00 (5 m)  |
+| Châtelet → La Défense              |        14.0 ms | arr 09:10:09 (10 m) |
+| Châtelet → Versailles Rive Droite  |        34.5 ms | arr 09:43:00 (43 m) |
 
 All three queries return single sensible journeys — the loop-route
 soundness bug that produced ARR<DEP results in earlier benchmark runs
 was fixed in Phase 0.11 (see [Known limitations](#known-limitations) §2
-for the diagnosis history). Latencies are roughly 5–6× faster than the
-v0.4 numbers because the position-aware accessors that fixed the
-soundness bug also eliminated a per-stop linear scan in
-`GtfsTimetable::get_arrival_time` / `get_departure_time`.
+for the diagnosis history).
+
+These latencies are an order of magnitude slower than the v0.7 numbers
+(0.41 ms, 0.6 ms, 9.8 ms respectively). The cause is the v0.8 switch
+from a single-pass footpath relaxation to multi-source Dijkstra: on
+Paris's already-closed `transfers.txt` graph, the heap operations cost
+more than the previous direct iteration. See limitation §4 for the
+trade-off and a possible future optimisation.
 
 ## Known limitations
 
@@ -106,21 +122,19 @@ on the roadmap as future work but had not previously been hit on real
 feeds (the bundled Delhi feed is small and clean enough to avoid
 them).
 
-### 1. Parent stations are not aggregated
+### 1. Parent stations are not aggregated — fixed in v0.7
 
 Most large GTFS feeds use a parent-station / child-platform model:
-the parent (`location_type=1`) is the named station and the children
+the parent (`location_type=1`) is the named station, the children
 (`location_type=0`) are the individual platforms that trips actually
-serve. The `Timetable::raptor` query takes a `StopIdx`, and our GTFS
-adapter interns one `StopIdx` per row in `stops.txt` — *including*
-parent stations, which have no `stop_times` entries and therefore no
-routes serving them. A query for a parent-station ID returns no
-journey because no route is found.
+serve. v0.6 and earlier only accepted a single `StopIdx` per query, so
+asking with a parent-station ID returned nothing because no route
+serves the parent directly.
 
-For now, callers must look up child platform IDs themselves. A
-follow-up could either (a) skip parent stations during interning, or
-(b) aggregate trips at child platforms onto the parent for query
-purposes.
+v0.7 generalises the query to `&[(StopIdx, Tau)]` for both origins and
+targets, and adds `GtfsTimetable::station_stops(parent_id)` returning
+the parent's child platforms ready to pass straight to `raptor`. The
+algorithm picks the best origin/target combination internally.
 
 ### 2. Routes whose trips revisit a stop (loops) — fixed in Phase 0.11
 
@@ -169,13 +183,34 @@ window, and only trips active on that day enter the timetable. Per-feed
 trip counts dropped substantially (Helsinki's 490k → 35k, Paris's 459k
 → 49k), with corresponding query-latency speedups in the 3–6× range.
 
-### 4. Transfer-graph density
+### 4. Transfer-graph density — fixed in v0.8
 
-The Helsinki Rautatientori → Pasila query returns no journey despite
-10 max transfers. Both stops are well-served, but `transfers.txt` may
-not chain them within the algorithm's per-round footpath relaxation.
-Roadmap item 3.4 (coordinate-derived walking footpaths) would fill in
-the missing edges.
+Two changes in v0.8 close this gap:
+
+- The `Timetable` trait no longer requires the footpath relation to be
+  transitively closed. The algorithm runs a multi-source Dijkstra over
+  the footpath graph at each round, chaining direct walks `A → B → C`
+  to a fixed point.
+- `GtfsTimetable::with_walking_footpaths(&gtfs, max_distance_m,
+  walking_speed_m_per_s)` augments the footpath graph with
+  coordinate-derived walking edges between every pair of stops within
+  straight-line `max_distance_m`, using an R-tree over an
+  equirectangular projection. Existing `transfers.txt` entries are
+  preserved.
+
+The Helsinki Rautatientori → Pasila query above uses both: HSL ships
+an empty `transfers.txt`, the bench passes
+`walking_footpaths_m: Some(500.0)`, and the resulting journey is a
+single S-Bahn ride after a short walk between stops on the
+Rautatientori plaza.
+
+Trade-off: on graphs whose `transfers.txt` is already close to
+transitively closed (Berlin, Paris), Dijkstra's per-edge `O(log V)`
+heap operations cost more than v0.7's single-pass relaxation. Paris's
+Châtelet → Versailles query went from 9.8 ms to 34.5 ms; Berlin's
+hand-picked-platforms query is a ~20% regression. Both still finish
+well under the 100 ms interactive threshold on networks at this
+scale.
 
 These four items are the priority follow-ups for Phase 0.x; each is
 independently scoped, with loop routes (Phase 0.11) being the

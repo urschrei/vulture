@@ -110,16 +110,13 @@ the same journey as before.
 
 ### 0.7 Footpath transitivity assumption
 
-**Status:** documented on v0.3 branch. The `Timetable` trait carries a
-"Footpath transitivity" section in its top-level docs and a tightened
-note on `get_footpaths_from`. `GtfsTimetable::new` documents that it
-passes `transfers.txt` through unmodified, leaving closure to the
-caller for feeds that need it.
-
-The medium-term enhancement — an opt-in transitive-closure pass during
-`GtfsTimetable::new`, gated behind a feature flag and a max-walking-
-distance parameter — is left as a future feature, not a soundness
-prerequisite.
+**Status:** retired in v0.8. The trait no longer requires transitive
+closure: `relax_footpaths_round` runs a multi-source Dijkstra and
+chains direct walks `A → B → C` to a fixed point per round.
+`get_footpaths_from`'s docs were updated accordingly. The bundled
+`GtfsTimetable` continues to pass `transfers.txt` through unmodified;
+callers who want coordinate-derived walking edges can chain the new
+`with_walking_footpaths` builder (see roadmap item 3.4).
 
 ### 0.8 Saturating arithmetic on Tau
 
@@ -502,24 +499,15 @@ this is an additive change, not a migration.
 
 ### 3.4 First-class footpath construction from stop coordinates
 
-GTFS feeds vary in transfer.txt completeness. Many feeds have nothing,
-expecting routers to compute walkable transfers from stop coordinates +
-a max distance. Add a helper:
-
-```rust
-impl<'a> GtfsTimetable<'a> {
-    pub fn with_walking_footpaths(
-        self,
-        max_distance_m: f64,
-        walking_speed_m_per_s: f64,
-    ) -> Self { ... }
-}
-```
-
-Use a spatial index (kd-tree or R*-tree — `rstar` is the obvious
-choice given the existing geo ecosystem context) to find nearby stop
-pairs in `O(n log n)` rather than `O(n²)`. Compute great-circle
-distance, divide by walking speed, store as transfer time.
+**Status:** landed in v0.8 as
+`GtfsTimetable::with_walking_footpaths(&gtfs, max_distance_m,
+walking_speed_m_per_s)`. Builds an R-tree (`rstar`) over stops
+projected to local Cartesian metres via an equirectangular projection
+anchored at the feed's mean latitude, then for each stop adds
+bidirectional walking edges to every other stop within
+`max_distance_m`. Walk time = `(distance / speed).ceil()`; existing
+`transfers.txt` entries are preserved (only pairs with no explicit
+transfer get a coordinate-derived edge).
 
 ### 3.5 Multi-source / multi-target queries
 

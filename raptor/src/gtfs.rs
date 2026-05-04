@@ -23,9 +23,38 @@ use std::collections::HashMap;
 use chrono::{Datelike, NaiveDate, Weekday};
 use gtfs_structures::{Exception, Gtfs};
 use jiff::civil::Date;
+use rstar::{AABB, PointDistance, RTree, RTreeObject};
 use smallvec::SmallVec;
 
 use crate::{RouteIdx, StopIdx, Tau, Timetable, TripIdx};
+
+/// Mean Earth radius in metres, used to project stop coordinates to a
+/// local Cartesian frame for the `with_walking_footpaths` spatial query.
+const EARTH_RADIUS_M: f64 = 6_371_000.0;
+
+/// A stop projected to local Cartesian coordinates (metres) via an
+/// equirectangular projection anchored at a reference latitude. Used as
+/// the leaf type of the R-tree built by `with_walking_footpaths`.
+#[derive(Clone, Copy, Debug)]
+struct ProjectedStop {
+    pos: [f64; 2],
+    idx: StopIdx,
+}
+
+impl RTreeObject for ProjectedStop {
+    type Envelope = AABB<[f64; 2]>;
+    fn envelope(&self) -> Self::Envelope {
+        AABB::from_point(self.pos)
+    }
+}
+
+impl PointDistance for ProjectedStop {
+    fn distance_2(&self, point: &[f64; 2]) -> f64 {
+        let dx = self.pos[0] - point[0];
+        let dy = self.pos[1] - point[1];
+        dx * dx + dy * dy
+    }
+}
 
 /// Returns true iff `service_id` is active on `date` per the GTFS feed's
 /// `calendar.txt` and `calendar_dates.txt` rules.
@@ -351,6 +380,85 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             .get(parent_id)
             .map(|v| v.as_slice())
             .unwrap_or(&[])
+    }
+
+    /// Augments the footpath graph with bidirectional walking edges
+    /// between every pair of stops within `max_distance_m` straight-line
+    /// distance, computed via an equirectangular projection anchored at
+    /// the feed's mean latitude (accurate to ~0.5% at city scale).
+    ///
+    /// Walk time per edge = `distance_m / walking_speed_m_per_s`,
+    /// rounded up. Existing transfers from `transfers.txt` are preserved
+    /// — coordinate-derived edges are only added where no explicit
+    /// transfer between the pair already exists.
+    ///
+    /// The algorithm chains walks within a round (footpath relaxation
+    /// runs to a fixed point), so the graph does not need to be
+    /// transitively closed; pairs beyond `max_distance_m` that are
+    /// reachable via a chain of shorter walks are still found.
+    ///
+    /// Typical values: `max_distance_m = 500` (covers same-block
+    /// interchanges), `walking_speed_m_per_s = 1.4` (≈ 5 km/h, the
+    /// standard pedestrian rate). Returns `self` so the call chains
+    /// after [`GtfsTimetable::new`].
+    pub fn with_walking_footpaths(
+        mut self,
+        gtfs: &'gtfs Gtfs,
+        max_distance_m: f64,
+        walking_speed_m_per_s: f64,
+    ) -> Self {
+        // Reference latitude: mean across stops with valid coords.
+        let mut sum_lat = 0.0;
+        let mut n_with_coords = 0usize;
+        for stop in gtfs.stops.values() {
+            if let (Some(lat), Some(_)) = (stop.latitude, stop.longitude) {
+                sum_lat += lat;
+                n_with_coords += 1;
+            }
+        }
+        if n_with_coords == 0 {
+            return self;
+        }
+        let mean_lat_rad = (sum_lat / n_with_coords as f64).to_radians();
+        let lon_scale = mean_lat_rad.cos() * EARTH_RADIUS_M;
+        let lat_scale = EARTH_RADIUS_M;
+
+        // Project every stop into local Cartesian metres.
+        let mut projected: Vec<ProjectedStop> = Vec::with_capacity(n_with_coords);
+        for (stop_id, stop) in &gtfs.stops {
+            if let (Some(lat), Some(lon)) = (stop.latitude, stop.longitude)
+                && let Some(&idx) = self.stop_by_id.get(stop_id.as_str())
+            {
+                let x = lon.to_radians() * lon_scale;
+                let y = lat.to_radians() * lat_scale;
+                projected.push(ProjectedStop { pos: [x, y], idx });
+            }
+        }
+
+        let tree = RTree::bulk_load(projected.clone());
+        let r2 = max_distance_m * max_distance_m;
+
+        for from in &projected {
+            for near in tree.locate_within_distance(from.pos, r2) {
+                if near.idx == from.idx {
+                    continue;
+                }
+                // Skip if an explicit transfers.txt entry already covers
+                // this directed pair — keep the publisher's value.
+                if self.transfer_times.contains_key(&(from.idx, near.idx)) {
+                    continue;
+                }
+                let dx = from.pos[0] - near.pos[0];
+                let dy = from.pos[1] - near.pos[1];
+                let dist_m = (dx * dx + dy * dy).sqrt();
+                let walk_time = (dist_m / walking_speed_m_per_s).ceil() as Tau;
+
+                self.footpaths_for_stops[from.idx.idx()].push(near.idx);
+                self.transfer_times.insert((from.idx, near.idx), walk_time);
+            }
+        }
+
+        self
     }
 
     /// Number of trips active on the timetable's service date (i.e. the
