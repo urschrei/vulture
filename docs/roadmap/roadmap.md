@@ -401,6 +401,48 @@ realtime support") suggests the author has thought about this. Worth
 designing the trait now so the data flow is clear, even if we don't
 implement the GTFS-RT parser until v0.6.
 
+### 0.11 Routes that revisit a stop (loop routes)
+
+**Promoted to Phase 0 (soundness) — discovered during Phase 1.7
+cross-city benchmarking.**
+
+GTFS allows a trip's `stop_sequence` to visit the same `stop_id`
+more than once (bus loops, shuttle turnarounds, terminus loops). Our
+adapter currently uses `Vec::position()` in `get_arrival_time`,
+`get_departure_time`, and `get_stops_after` to find a stop's
+position in a route's sequence — but `position()` returns the
+**first** occurrence. When a trip visits stop X at sequence-index 0
+and again at sequence-index 12, those three accessors all return
+data from the first visit, regardless of which visit the algorithm
+meant.
+
+The result is silently-wrong journeys: the algorithm writes labels
+< tau (arrivals before the query departure time) at stops downstream
+of a "boarded" loop trip. Output journeys can have arrival times
+hours before departure on real feeds.
+
+Affected on the bundled feeds: Delhi 0 trips, Helsinki 0 trips,
+Berlin 6,872 trips (205 GTFS `route_id`s), Paris 12,352 trips (207
+`route_id`s). Bus-network-heavy feeds are most affected.
+
+**Fix options** (pick one; each is real work):
+- (a) **Reject loop trips at construction** with a clear error
+  pointing at the offending trip. Simplest; loses any feed with bus
+  loops.
+- (b) **Split each loop trip at the revisit boundary** into two or
+  more sub-trips with distinct stop sequences. Each sub-trip lives
+  on its own synthetic route. Most correct; requires reasoning
+  about how to model "the rest of the loop" as a separate trip.
+- (c) **Replace `position()` with a visit-aware position lookup**
+  throughout the adapter. Carries a per-call cost; needs a way to
+  pass "which visit" through the algorithm's accessors (the trait
+  signature would change).
+
+Recommendation: start with (a) as a Phase 0.11 immediate fix
+(refuse to build a `GtfsTimetable` from a feed with loop trips, with
+a documented escape hatch). (b) is the proper long-term answer and
+can land later as Phase 0.11b.
+
 ### 3.3 Calendar / service-day handling
 
 Currently, the GTFS adapter ignores `calendar.txt` and `calendar_dates.txt`

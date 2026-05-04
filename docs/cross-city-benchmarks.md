@@ -84,15 +84,19 @@ algorithm against ~42k stops and ~18k synthetic routes.
 | Châtelet → La Défense                |          26 ms | see below |
 | Châtelet → Versailles Rive Droite    |         163 ms | see below |
 
-Paris query results are **currently incorrect**: every Châtelet query
-returns 6+ journeys with arrival times *before* the 09:00 departure
-(e.g. 07:53 for Gare du Nord, 07:21 for Versailles). This is not a
-small bug; it is a soundness issue surfaced by Phase 1.7 work and is
-new. See [Known limitations](#known-limitations) below for diagnosis
-notes. The latency numbers are still informative — 23–163 ms is the
-algorithm's actual run time scanning Paris's ~54k stops and ~14k
-synthetic routes — but the journey output is unreliable on this feed
-until the underlying issue is found.
+Paris query results are **currently incorrect** — many returned
+journeys have arrival times *before* the 09:00 departure. The
+specific journeys affected vary across runs (the GTFS adapter's
+internal `StopIdx`/`RouteIdx` assignments depend on `HashMap`
+iteration order, which is randomised per-process), but the pattern
+is reproducible: any query that touches a route whose trips revisit
+a stop will pull in an "earlier" arrival from the wrong visit.
+See [Known limitations](#known-limitations) below — the cause is
+loop routes, not calendar filtering as we initially suspected. The
+latency numbers are still informative — 23–163 ms is the algorithm's
+actual run time scanning Paris's ~54k stops and ~14k synthetic
+routes — but the journey output is unreliable on this feed until the
+loop-route handling lands.
 
 ## Known limitations
 
@@ -117,24 +121,53 @@ follow-up could either (a) skip parent stations during interning, or
 (b) aggregate trips at child platforms onto the parent for query
 purposes.
 
-### 2. No calendar / service-day filtering
+### 2. Routes whose trips revisit a stop (loops)
 
-Roadmap item 3.3, currently unimplemented: the GTFS adapter ignores
-`calendar.txt` / `calendar_dates.txt` and treats every trip as
-running on every day. For a small single-calendar feed (Delhi) this
-is harmless. For a feed with many service patterns spanning weeks or
-months (Helsinki has 490k trips for ~2,800 routes — far more than fit
-into a single day), it produces a degenerate "best journey across all
-days" answer. This is the most likely cause of the Paris ARR<DEP
-results: trips encoded for service patterns the algorithm has no way
-to filter out are entering the route-scan and yielding nonsensical
-"earlier" journeys.
+This is the actual root cause of the Paris ARR<DEP results. Diagnosed
+during Phase 1.7 by stepping a bad journey through the algorithm.
 
-Mitigation: filter `gtfs.trips` to a single service date before
-constructing the `GtfsTimetable`. Until calendar support lands, this
-is on the caller.
+GTFS allows a trip's `stop_sequence` to revisit the same stop_id (bus
+loops, shuttles that turn around, terminus loops). Our adapter
+collapses each trip's stop sequence into a `Vec<StopIdx>` and then
+uses `Vec::position()` to find a stop's index within that sequence —
+but `position()` returns the **first** occurrence. When a trip
+visits stop X at sequence-index 0 (early morning) and again at
+sequence-index 12 (late morning), `get_arrival_time(trip, X)` returns
+the early-morning value regardless of which visit the algorithm meant.
+The algorithm then writes labels at downstream stops with these
+impossibly-early arrivals.
 
-### 3. Transfer-graph density
+Trip counts with this property in the bundled and fetched feeds:
+
+| Feed         | Trips with duplicate stops |             of total | Distinct GTFS `route_id`s affected |
+|--------------|---------------------------:|---------------------:|-----------------------------------:|
+| Delhi Metro  |                          0 |               5,438  |                                  0 |
+| Helsinki HSL |                          0 |             490,033  |                                  0 |
+| Berlin VBB   |                      6,872 |             275,263  |                                205 |
+| Paris IDFM   |                     12,352 |             459,152  |                                207 |
+
+Helsinki and Delhi are unaffected, which is why their queries returned
+sensible answers. Berlin and Paris are bus-network-heavy, where
+terminus-loop trips are common.
+
+Roadmap item: **Phase 0.11 (soundness)** — at construction, either
+reject loop trips (with a clear error), split each loop trip into
+distinct sub-trips at the revisit boundary, or change all
+stop-position lookups to disambiguate the visit number. Until then,
+correctness on feeds with bus-loop routes (Berlin, Paris, most
+US city feeds) is not guaranteed.
+
+### 3. No calendar / service-day filtering
+
+Roadmap item 3.3, promoted to Phase 0.10 (soundness). The GTFS
+adapter ignores `calendar.txt` / `calendar_dates.txt` and treats
+every trip as running on every day. This is independent of the
+loop-route issue above, but for any feed with many service patterns
+spanning weeks or months, queries currently consider trips from all
+service days simultaneously. Filter `gtfs.trips` to a single service
+date before construction as a workaround.
+
+### 4. Transfer-graph density
 
 The Helsinki Rautatientori → Pasila query returns no journey despite
 10 max transfers. Both stops are well-served, but `transfers.txt` may
@@ -142,8 +175,9 @@ not chain them within the algorithm's per-round footpath relaxation.
 Roadmap item 3.4 (coordinate-derived walking footpaths) would fill in
 the missing edges.
 
-These three items are now the priority follow-ups for Phase 0.7 / 3.x;
-each is independently scoped.
+These four items are the priority follow-ups for Phase 0.x; each is
+independently scoped, with loop routes (Phase 0.11) being the
+soundness item with the largest blast radius.
 
 ## Reproduction
 
