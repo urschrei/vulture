@@ -61,8 +61,6 @@ type GtfsResult<T> = std::result::Result<T, GtfsError>;
 /// `route_id` into one or more [`RouteIdx`]s by stop pattern and
 /// overtaking, and builds the lookup indices the algorithm requires.
 pub struct GtfsTimetable<'gtfs> {
-    gtfs: &'gtfs Gtfs,
-
     // Forward tables: idx -> &'gtfs str (original GTFS IDs).
     stop_ids: Vec<&'gtfs str>,
     route_ids: Vec<&'gtfs str>,
@@ -78,6 +76,12 @@ pub struct GtfsTimetable<'gtfs> {
     routes_for_stop: Vec<SmallVec<[RouteIdx; TYPICAL_ROUTES_PER_STOP]>>,
     stops_for_route: Vec<Vec<StopIdx>>,
     trips_for_route: Vec<Vec<TripIdx>>,
+    /// arrival_times[route.idx()][stop_pos][trip_pos] = Tau
+    arrival_times: Vec<Vec<Vec<Tau>>>,
+    /// departure_times[route.idx()][stop_pos][trip_pos] = Tau
+    departure_times: Vec<Vec<Vec<Tau>>>,
+    /// route_for_trip[trip.idx()] = (route_idx, position-within-route)
+    route_for_trip: Vec<(RouteIdx, usize)>,
 
     footpaths_for_stops: Vec<SmallVec<[StopIdx; TYPICAL_TRANSFERS_PER_STOP]>>,
     transfer_times: HashMap<(StopIdx, StopIdx), Tau>,
@@ -143,6 +147,9 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
         let mut route_ids: Vec<&'gtfs str> = Vec::new();
         let mut stops_for_route: Vec<Vec<StopIdx>> = Vec::new();
         let mut trips_for_route: Vec<Vec<TripIdx>> = Vec::new();
+        let mut arrival_times: Vec<Vec<Vec<Tau>>> = Vec::new();
+        let mut departure_times: Vec<Vec<Vec<Tau>>> = Vec::new();
+        let mut route_for_trip: Vec<(RouteIdx, usize)> = Vec::with_capacity(gtfs.trips.len());
         let mut trip_ids: Vec<&'gtfs str> = Vec::new();
         let mut trip_by_id: HashMap<&'gtfs str, TripIdx> = HashMap::new();
         let mut route_by_id: HashMap<&'gtfs str, RouteIdx> = HashMap::new();
@@ -173,8 +180,30 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
                     trip_ids.push(trip_id);
                     trip_by_id.insert(trip_id, trip_idx);
                     sub_trip_idxs.push(trip_idx);
+                    debug_assert_eq!(route_for_trip.len(), trip_idx.idx());
+                    route_for_trip.push((route_idx, sub_trip_idxs.len() - 1));
                 }
                 trips_for_route.push(sub_trip_idxs);
+
+                // Per-route arrival/departure tables: shape [stop_pos][trip_pos].
+                let n_stops_in_route = stop_seq.len();
+                let n_trips_in_route = sub_group.len();
+                let mut arr_table: Vec<Vec<Tau>> =
+                    vec![vec![Tau::MAX; n_trips_in_route]; n_stops_in_route];
+                let mut dep_table: Vec<Vec<Tau>> =
+                    vec![vec![Tau::MAX; n_trips_in_route]; n_stops_in_route];
+                for (trip_pos, trip_id) in sub_group.iter().enumerate() {
+                    let trip = gtfs.get_trip(trip_id).expect("validated above");
+                    for (stop_pos, st) in trip.stop_times.iter().enumerate() {
+                        if let Some(a) = st.arrival_time {
+                            arr_table[stop_pos][trip_pos] = a as Tau;
+                        }
+                        let d = st.departure_time.expect("validated at construction");
+                        dep_table[stop_pos][trip_pos] = d as Tau;
+                    }
+                }
+                arrival_times.push(arr_table);
+                departure_times.push(dep_table);
 
                 route_by_id.entry(gtfs_route_id).or_insert(route_idx);
                 routes_by_gtfs_id
@@ -209,7 +238,6 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
         }
 
         Ok(Self {
-            gtfs,
             stop_ids,
             route_ids,
             trip_ids,
@@ -220,6 +248,9 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             routes_for_stop,
             stops_for_route,
             trips_for_route,
+            arrival_times,
+            departure_times,
+            route_for_trip,
             footpaths_for_stops,
             transfer_times,
         })
@@ -315,14 +346,6 @@ fn overtakes(earlier: &[gtfs_structures::StopTime], later: &[gtfs_structures::St
     })
 }
 
-fn find_stop_time<'a>(gtfs: &'a Gtfs, trip: &str, stop: &str) -> &'a gtfs_structures::StopTime {
-    let trip = gtfs.get_trip(trip).expect("validated during construction");
-    trip.stop_times
-        .iter()
-        .find(|st| st.stop.id == stop)
-        .expect("valid inputs")
-}
-
 impl<'gtfs> Timetable for GtfsTimetable<'gtfs> {
     fn n_stops(&self) -> usize {
         self.stop_ids.len()
@@ -361,36 +384,27 @@ impl<'gtfs> Timetable for GtfsTimetable<'gtfs> {
         let stop_pos = self.stops_for_route[route.idx()]
             .iter()
             .position(|&s| s == stop)?;
-
-        let departure_at_stop = |trip_idx: TripIdx| -> Tau {
-            let raw = self.trip_ids[trip_idx.idx()];
-            let trip = self
-                .gtfs
-                .get_trip(raw)
-                .expect("validated during construction");
-            trip.stop_times[stop_pos]
-                .departure_time
-                .expect("validated during construction") as Tau
-        };
-
-        let idx = trips.partition_point(|&trip_idx| departure_at_stop(trip_idx) < at);
+        let dep_row = &self.departure_times[route.idx()][stop_pos];
+        let idx = dep_row.partition_point(|&dep| dep < at);
         trips.get(idx).copied()
     }
 
     fn get_arrival_time(&self, trip: TripIdx, stop: StopIdx) -> Tau {
-        let raw_trip = self.trip_ids[trip.idx()];
-        let raw_stop = self.stop_ids[stop.idx()];
-        find_stop_time(self.gtfs, raw_trip, raw_stop)
-            .arrival_time
-            .expect("valid inputs") as Tau
+        let (route_idx, trip_pos) = self.route_for_trip[trip.idx()];
+        let stop_pos = self.stops_for_route[route_idx.idx()]
+            .iter()
+            .position(|&s| s == stop)
+            .expect("stop on route");
+        self.arrival_times[route_idx.idx()][stop_pos][trip_pos]
     }
 
     fn get_departure_time(&self, trip: TripIdx, stop: StopIdx) -> Tau {
-        let raw_trip = self.trip_ids[trip.idx()];
-        let raw_stop = self.stop_ids[stop.idx()];
-        find_stop_time(self.gtfs, raw_trip, raw_stop)
-            .departure_time
-            .expect("valid inputs") as Tau
+        let (route_idx, trip_pos) = self.route_for_trip[trip.idx()];
+        let stop_pos = self.stops_for_route[route_idx.idx()]
+            .iter()
+            .position(|&s| s == stop)
+            .expect("stop on route");
+        self.departure_times[route_idx.idx()][stop_pos][trip_pos]
     }
 
     fn get_footpaths_from(&self, stop: StopIdx) -> &[StopIdx] {
