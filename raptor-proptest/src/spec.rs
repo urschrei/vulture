@@ -63,6 +63,14 @@ pub fn render(spec: &NetworkSpec) -> SimpleTimetable<u8, u8, u16> {
     let mut tt: SimpleTimetable<u8, u8, u16> = SimpleTimetable::new();
     let mut next_trip_id: u16 = 0;
 
+    // Ensure every stop in `0..n_stops` is interned so query stops are
+    // looked up cleanly via `stop_idx_of` even when they aren't named by
+    // any route or footpath (e.g. an isolated `ps`/`pt`, where the
+    // reference solver returns an empty Pareto front).
+    for s in 0..spec.n_stops {
+        tt = tt.register_stop(s);
+    }
+
     for (route_idx, route) in spec.routes.iter().enumerate() {
         let route_id = u8::try_from(route_idx).expect("route count exceeds u8");
         let stops = &route.stop_sequence;
@@ -240,14 +248,18 @@ fn render_single_route_two_stops_one_trip() {
     };
     let tt = render(&spec);
 
-    let routes_at_0 = tt.get_routes_serving_stop(0);
-    assert_eq!(routes_at_0.as_ref(), &[0u8]);
+    let s0 = tt.stop_idx_of(&0u8);
+    let s1 = tt.stop_idx_of(&1u8);
+    let r0 = tt.route_idx_of(&0u8);
 
-    let trip = tt.get_earliest_trip(0u8, 0, 0u8).expect("trip exists");
-    assert_eq!(tt.get_arrival_time(trip, 0u8), 100);
-    assert_eq!(tt.get_departure_time(trip, 0u8), 105);
-    assert_eq!(tt.get_arrival_time(trip, 1u8), 125);
-    assert_eq!(tt.get_departure_time(trip, 1u8), 125);
+    let routes_at_0 = tt.get_routes_serving_stop(s0);
+    assert_eq!(routes_at_0, &[r0]);
+
+    let trip = tt.get_earliest_trip(r0, 0, s0).expect("trip exists");
+    assert_eq!(tt.get_arrival_time(trip, s0), 100);
+    assert_eq!(tt.get_departure_time(trip, s0), 105);
+    assert_eq!(tt.get_arrival_time(trip, s1), 125);
+    assert_eq!(tt.get_departure_time(trip, s1), 125);
 }
 
 #[test]
@@ -277,10 +289,14 @@ fn render_emits_transitively_closed_footpaths() {
     };
     let tt = render(&spec);
 
-    let from_0: Vec<u8> = tt.get_footpaths_from(0u8).into_owned();
-    assert!(from_0.contains(&1u8), "direct A->B");
-    assert!(from_0.contains(&2u8), "transitive A->C must be present");
-    assert_eq!(tt.get_transfer_time(0u8, 2u8), 7);
+    let s0 = tt.stop_idx_of(&0u8);
+    let s1 = tt.stop_idx_of(&1u8);
+    let s2 = tt.stop_idx_of(&2u8);
+
+    let from_0: Vec<raptor::StopIdx> = tt.get_footpaths_from(s0).to_vec();
+    assert!(from_0.contains(&s1), "direct A->B");
+    assert!(from_0.contains(&s2), "transitive A->C must be present");
+    assert_eq!(tt.get_transfer_time(s0, s2), 7);
 }
 
 // -------- Hegel generators ---------------------------------------------

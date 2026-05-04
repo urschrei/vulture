@@ -1,53 +1,59 @@
-use std::borrow::Cow;
-
-use raptor::{Tau, Timetable};
+use raptor::{RouteIdx, StopIdx, Tau, Timetable, TripIdx};
 
 // a single route with stops [0..10]
 struct SingleRoute;
 
 impl Timetable for SingleRoute {
-    type Stop = usize;
-
-    type Route = usize;
-
-    type Trip = usize;
-
-    fn get_routes_serving_stop(&self, _stop: Self::Stop) -> Cow<'static, [Self::Route]> {
-        (&[0]).into()
+    fn n_stops(&self) -> usize {
+        10
+    }
+    fn n_routes(&self) -> usize {
+        1
     }
 
-    fn get_earlier_stop(
-        &self,
-        _route: Self::Route,
-        left: Self::Stop,
-        right: Self::Stop,
-    ) -> Self::Stop {
-        left.min(right)
+    fn get_routes_serving_stop(&self, _stop: StopIdx) -> &[RouteIdx] {
+        const ROUTES: [RouteIdx; 1] = [RouteIdx::new(0)];
+        &ROUTES
     }
 
-    fn get_stops_after(&self, _route: Self::Route, stop: Self::Stop) -> Cow<'static, [Self::Stop]> {
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9][stop..].into()
+    fn get_earlier_stop(&self, _route: RouteIdx, left: StopIdx, right: StopIdx) -> StopIdx {
+        if left.get() <= right.get() {
+            left
+        } else {
+            right
+        }
     }
 
-    fn get_arrival_time(&self, _trip: Self::Trip, stop: Self::Stop) -> Tau {
-        stop * 10
+    fn get_stops_after(&self, _route: RouteIdx, stop: StopIdx) -> &[StopIdx] {
+        const STOPS: [StopIdx; 10] = [
+            StopIdx::new(0),
+            StopIdx::new(1),
+            StopIdx::new(2),
+            StopIdx::new(3),
+            StopIdx::new(4),
+            StopIdx::new(5),
+            StopIdx::new(6),
+            StopIdx::new(7),
+            StopIdx::new(8),
+            StopIdx::new(9),
+        ];
+        &STOPS[stop.get() as usize..]
     }
 
-    fn get_departure_time(&self, _trip: Self::Trip, stop: Self::Stop) -> Tau {
-        (stop * 10) + 5
+    fn get_arrival_time(&self, _trip: TripIdx, stop: StopIdx) -> Tau {
+        (stop.get() as Tau) * 10
     }
 
-    fn get_footpaths_from(&self, _stop: Self::Stop) -> Cow<'static, [Self::Stop]> {
-        (&[]).into()
+    fn get_departure_time(&self, _trip: TripIdx, stop: StopIdx) -> Tau {
+        (stop.get() as Tau) * 10 + 5
     }
 
-    fn get_earliest_trip(
-        &self,
-        _route: Self::Route,
-        at: Tau,
-        stop: Self::Stop,
-    ) -> Option<Self::Trip> {
-        (at < self.get_departure_time(0, stop)).then_some(0)
+    fn get_footpaths_from(&self, _stop: StopIdx) -> &[StopIdx] {
+        &[]
+    }
+
+    fn get_earliest_trip(&self, _route: RouteIdx, at: Tau, stop: StopIdx) -> Option<TripIdx> {
+        (at < self.get_departure_time(TripIdx::new(0), stop)).then_some(TripIdx::new(0))
     }
 }
 
@@ -58,8 +64,7 @@ fn main() {
     .init();
 
     let mock = SingleRoute;
-
-    let journey = mock.raptor(10, 0, 0, 9);
+    let journey = mock.raptor(10, 0, StopIdx::new(0), StopIdx::new(9));
 
     println!("{journey:#?}");
 }

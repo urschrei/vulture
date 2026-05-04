@@ -2,6 +2,12 @@ use crate::RaptorCache;
 use crate::Timetable;
 use crate::simple::SimpleTimetable;
 
+macro_rules! plan {
+    ($tt:expr; $(($route:expr, $stop:expr)),* $(,)?) => {
+        vec![$(($tt.route_idx_of(&$route), $tt.stop_idx_of(&$stop))),*]
+    };
+}
+
 /// When a faster route reaches a mid-route stop, the algorithm must record
 /// that stop as the boarding stop — not the earlier stop where the route
 /// scan began. See examples/reboarding.rs for the full network.
@@ -11,7 +17,7 @@ fn reboarding_picks_correct_boarding_stop() {
     use Stop::*;
     use Trip::*;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         S,
         A,
@@ -20,14 +26,14 @@ fn reboarding_picks_correct_boarding_stop() {
         D,
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
         R2,
         R3,
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         R1T1,
         R2T1,
@@ -47,33 +53,33 @@ fn reboarding_picks_correct_boarding_stop() {
             ],
         );
 
-    let journeys = tt.raptor(3, 0, S, D);
+    let journeys = tt.raptor(3, 0, tt.stop_idx_of(&S), tt.stop_idx_of(&D));
 
     // The optimal journey: S->B via R2, then B->D via R3/Early, arriving at t=50
     assert!(!journeys.is_empty(), "should find at least one journey");
 
     let best = journeys.iter().min_by_key(|j| j.arrival).unwrap();
     assert_eq!(best.arrival, 50);
-    assert_eq!(best.plan, vec![(R2, B), (R3, D)]);
+    assert_eq!(best.plan, plan!(tt; (R2, B), (R3, D)));
 }
 
 // ── Edge case tests ─────────────────────────────────────────────────
 
 #[test]
 fn no_journey_disconnected_graph() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
         C,
         D,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
         R2,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
         T2,
@@ -91,7 +97,7 @@ fn no_journey_disconnected_graph() {
             &[(Trip::T2, &[(0, 0), (10, 10)])],
         );
 
-    let journeys = tt.raptor(3, 0, Stop::A, Stop::D);
+    let journeys = tt.raptor(3, 0, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::D));
     assert!(
         journeys.is_empty(),
         "disconnected graph should yield no journeys"
@@ -100,18 +106,18 @@ fn no_journey_disconnected_graph() {
 
 #[test]
 fn no_journey_missed_connection() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
         C,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
         R2,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
         T2,
@@ -129,7 +135,7 @@ fn no_journey_missed_connection() {
             &[(Trip::T2, &[(0, 30), (40, 40)])],
         );
 
-    let journeys = tt.raptor(3, 0, Stop::A, Stop::C);
+    let journeys = tt.raptor(3, 0, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::C));
     assert!(
         journeys.is_empty(),
         "missed connection should yield no journeys"
@@ -138,16 +144,16 @@ fn no_journey_missed_connection() {
 
 #[test]
 fn no_journey_late_departure() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
     }
@@ -158,7 +164,7 @@ fn no_journey_late_departure() {
         &[(Trip::T1, &[(0, 10), (20, 20)])],
     );
 
-    let journeys = tt.raptor(3, 100, Stop::A, Stop::B);
+    let journeys = tt.raptor(3, 100, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::B));
     assert!(
         journeys.is_empty(),
         "late departure should yield no journeys"
@@ -167,16 +173,16 @@ fn no_journey_late_departure() {
 
 #[test]
 fn no_journey_transfers_zero() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
     }
@@ -187,22 +193,22 @@ fn no_journey_transfers_zero() {
         &[(Trip::T1, &[(0, 0), (10, 10)])],
     );
 
-    let journeys = tt.raptor(0, 0, Stop::A, Stop::B);
+    let journeys = tt.raptor(0, 0, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::B));
     assert!(journeys.is_empty(), "transfers=0 should yield no journeys");
 }
 
 #[test]
 fn source_equals_target() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
     }
@@ -213,7 +219,7 @@ fn source_equals_target() {
         &[(Trip::T1, &[(0, 0), (10, 10)])],
     );
 
-    let journeys = tt.raptor(3, 0, Stop::A, Stop::A);
+    let journeys = tt.raptor(3, 0, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::A));
     assert!(
         journeys.is_empty(),
         "source == target should yield no journeys"
@@ -222,17 +228,17 @@ fn source_equals_target() {
 
 #[test]
 fn direct_journey_single_route() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
         C,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
     }
@@ -243,25 +249,25 @@ fn direct_journey_single_route() {
         &[(Trip::T1, &[(0, 0), (10, 10), (20, 20)])],
     );
 
-    let journeys = tt.raptor(3, 0, Stop::A, Stop::C);
+    let journeys = tt.raptor(3, 0, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::C));
     assert_eq!(journeys.len(), 1);
     assert_eq!(journeys[0].arrival, 20);
-    assert_eq!(journeys[0].plan, vec![(Route::R1, Stop::C)]);
+    assert_eq!(journeys[0].plan, plan!(tt; (Route::R1, Stop::C)));
 }
 
 #[test]
 fn direct_journey_picks_fastest_route() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
         R2,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
         T2,
@@ -279,25 +285,25 @@ fn direct_journey_picks_fastest_route() {
             &[(Trip::T2, &[(0, 0), (50, 50)])],
         );
 
-    let journeys = tt.raptor(3, 0, Stop::A, Stop::B);
+    let journeys = tt.raptor(3, 0, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::B));
     let best = journeys.iter().min_by_key(|j| j.arrival).unwrap();
     assert_eq!(best.arrival, 50);
 }
 
 #[test]
 fn exact_time_connection() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
         C,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
         R2,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
         T2,
@@ -315,25 +321,28 @@ fn exact_time_connection() {
             &[(Trip::T2, &[(0, 20), (30, 30)])],
         );
 
-    let journeys = tt.raptor(3, 0, Stop::A, Stop::C);
+    let journeys = tt.raptor(3, 0, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::C));
     assert!(!journeys.is_empty(), "exact-time connection should work");
     let best = journeys.iter().min_by_key(|j| j.arrival).unwrap();
     assert_eq!(best.arrival, 30);
-    assert_eq!(best.plan, vec![(Route::R1, Stop::B), (Route::R2, Stop::C)]);
+    assert_eq!(
+        best.plan,
+        plan!(tt; (Route::R1, Stop::B), (Route::R2, Stop::C))
+    );
 }
 
 #[test]
 fn multi_trip_picks_earliest_catchable() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
         T2,
@@ -351,27 +360,27 @@ fn multi_trip_picks_earliest_catchable() {
     );
 
     // Query at tau=12: T1 departs A@5 (too early), T2 departs A@15 (catchable)
-    let journeys = tt.raptor(3, 12, Stop::A, Stop::B);
+    let journeys = tt.raptor(3, 12, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::B));
     assert_eq!(journeys.len(), 1);
     assert_eq!(journeys[0].arrival, 25); // T2 arrives B@25
 }
 
 #[test]
 fn two_transfer_journey() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
         C,
         D,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
         R2,
         R3,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
         T2,
@@ -395,35 +404,35 @@ fn two_transfer_journey() {
             &[(Trip::T3, &[(0, 20), (30, 30)])],
         );
 
-    let journeys = tt.raptor(3, 0, Stop::A, Stop::D);
+    let journeys = tt.raptor(3, 0, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::D));
     assert!(!journeys.is_empty());
     let best = journeys.iter().min_by_key(|j| j.arrival).unwrap();
     assert_eq!(best.arrival, 30);
     assert_eq!(
         best.plan,
-        vec![
+        plan!(tt;
             (Route::R1, Stop::B),
             (Route::R2, Stop::C),
             (Route::R3, Stop::D),
-        ]
+        )
     );
 }
 
 #[test]
 fn pareto_optimal_fewer_transfers_vs_faster() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
         D,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
         R2,
         R3,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
         T2,
@@ -449,7 +458,7 @@ fn pareto_optimal_fewer_transfers_vs_faster() {
             &[(Trip::T3, &[(0, 40), (100, 100)])],
         );
 
-    let journeys = tt.raptor(3, 0, Stop::A, Stop::D);
+    let journeys = tt.raptor(3, 0, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::D));
     assert_eq!(journeys.len(), 2, "should have 2 pareto-optimal journeys");
 
     let mut sorted = journeys.clone();
@@ -464,19 +473,19 @@ fn pareto_optimal_fewer_transfers_vs_faster() {
 
 #[test]
 fn footpath_enables_connection() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
         C,
         D,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
         R2,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
         T2,
@@ -499,30 +508,30 @@ fn footpath_enables_connection() {
     // Optimal: board R1 at A, alight at B (arr 10), walk B→C (arr 15),
     // board R2 at C (dep 20), alight at D (arr 30). Two boardings, with a
     // walk leg between them. Reconstruction traces back through the walk.
-    let journeys = tt.raptor(3, 0, Stop::A, Stop::D);
+    let journeys = tt.raptor(3, 0, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::D));
     assert_eq!(journeys.len(), 1, "expected one journey, got {journeys:?}");
     assert_eq!(journeys[0].arrival, 30);
     assert_eq!(
         journeys[0].plan,
-        vec![(Route::R1, Stop::B), (Route::R2, Stop::D)]
+        plan!(tt; (Route::R1, Stop::B), (Route::R2, Stop::D))
     );
 }
 
 #[test]
 fn footpath_transfer_time_causes_miss() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
         C,
         D,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
         R2,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
         T2,
@@ -542,7 +551,7 @@ fn footpath_transfer_time_causes_miss() {
         .footpath(Stop::B, Stop::C)
         .transfer_time(Stop::B, Stop::C, 5); // 50+5=55 > 52
 
-    let journeys = tt.raptor(3, 0, Stop::A, Stop::D);
+    let journeys = tt.raptor(3, 0, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::D));
     assert!(
         journeys.is_empty(),
         "footpath transfer time should cause miss"
@@ -551,16 +560,16 @@ fn footpath_transfer_time_causes_miss() {
 
 #[test]
 fn early_termination_no_improvement() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
     }
@@ -571,8 +580,8 @@ fn early_termination_no_improvement() {
         &[(Trip::T1, &[(0, 0), (10, 10)])],
     );
 
-    let j1 = tt.raptor(1, 0, Stop::A, Stop::B);
-    let j100 = tt.raptor(100, 0, Stop::A, Stop::B);
+    let j1 = tt.raptor(1, 0, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::B));
+    let j100 = tt.raptor(100, 0, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::B));
 
     assert_eq!(j1.len(), j100.len());
     assert_eq!(
@@ -583,17 +592,17 @@ fn early_termination_no_improvement() {
 
 #[test]
 fn dominance_prunes_slower_arrival() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
         R2,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
         T2,
@@ -611,7 +620,7 @@ fn dominance_prunes_slower_arrival() {
             &[(Trip::T2, &[(0, 0), (100, 100)])],
         );
 
-    let journeys = tt.raptor(3, 0, Stop::A, Stop::B);
+    let journeys = tt.raptor(3, 0, tt.stop_idx_of(&Stop::A), tt.stop_idx_of(&Stop::B));
     // Both routes are discovered in round 1, so the slower one is dominated
     assert_eq!(journeys.len(), 1, "dominated journey should be pruned");
     assert_eq!(journeys[0].arrival, 50);
@@ -619,18 +628,18 @@ fn dominance_prunes_slower_arrival() {
 
 #[test]
 fn raptor_with_cache_matches_fresh_run() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Stop {
         A,
         B,
         C,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Route {
         R1,
         R2,
     }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum Trip {
         T1,
         T2,
@@ -657,10 +666,12 @@ fn raptor_with_cache_matches_fresh_run() {
         (2, 0, Stop::B, Stop::C),
     ];
 
-    let mut cache: RaptorCache<Route, Stop> = RaptorCache::new();
+    let mut cache: RaptorCache = RaptorCache::for_timetable(&tt);
     for &(transfers, tau, ps, pt) in &queries {
-        let baseline = tt.raptor(transfers, tau, ps, pt);
-        let cached = tt.raptor_with_cache(&mut cache, transfers, tau, ps, pt);
+        let ps_idx = tt.stop_idx_of(&ps);
+        let pt_idx = tt.stop_idx_of(&pt);
+        let baseline = tt.raptor(transfers, tau, ps_idx, pt_idx);
+        let cached = tt.raptor_with_cache(&mut cache, transfers, tau, ps_idx, pt_idx);
         assert_eq!(
             cached.len(),
             baseline.len(),

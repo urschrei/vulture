@@ -11,7 +11,11 @@ fn bench_linear(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("raptor", format!("{stops}s_{trips}t")),
             &tt,
-            |b, tt| b.iter(|| tt.raptor(3, 0, 0, stops - 1)),
+            |b, tt| {
+                let source = tt.stop_idx_of(&0usize);
+                let target = tt.stop_idx_of(&(stops - 1));
+                b.iter(|| tt.raptor(3, 0, source, target))
+            },
         );
     }
     group.finish();
@@ -24,15 +28,19 @@ fn bench_grid(c: &mut Criterion) {
     let mut group = c.benchmark_group("grid");
     for &(routes, stops_per_route, connectors) in &[(3, 10, 2), (5, 20, 4), (10, 30, 6)] {
         let tt = build_grid(routes, stops_per_route, connectors);
-        let source = 0;
-        let target = (routes - 1) * stops_per_route + stops_per_route - 1;
+        let source_key = 0usize;
+        let target_key = (routes - 1) * stops_per_route + stops_per_route - 1;
         group.bench_with_input(
             BenchmarkId::new(
                 "raptor",
                 format!("{routes}r_{stops_per_route}s_{connectors}c"),
             ),
             &tt,
-            |b, tt| b.iter(|| tt.raptor(5, 0, source, target)),
+            |b, tt| {
+                let source = tt.stop_idx_of(&source_key);
+                let target = tt.stop_idx_of(&target_key);
+                b.iter(|| tt.raptor(5, 0, source, target))
+            },
         );
     }
     group.finish();
@@ -46,15 +54,20 @@ fn bench_hub_spoke(c: &mut Criterion) {
     for &(hubs, routes_per_hub, spokes) in &[(1, 10, 10), (3, 10, 10), (3, 20, 15)] {
         let tt = build_hub_spoke(hubs, routes_per_hub, spokes);
         // Route from first spoke of first hub to last spoke of last hub
-        let source = hubs; // first non-hub stop
+        let source_key = hubs; // first non-hub stop
         let last_hub_first_route_last_spoke =
             hubs + (hubs - 1) * routes_per_hub * spokes + (routes_per_hub - 1) * spokes + spokes
                 - 1;
-        let target = last_hub_first_route_last_spoke.min(hubs + hubs * routes_per_hub * spokes - 1);
+        let target_key =
+            last_hub_first_route_last_spoke.min(hubs + hubs * routes_per_hub * spokes - 1);
         group.bench_with_input(
             BenchmarkId::new("raptor", format!("{hubs}h_{routes_per_hub}r_{spokes}sp")),
             &tt,
-            |b, tt| b.iter(|| tt.raptor(5, 0, source, target)),
+            |b, tt| {
+                let source = tt.stop_idx_of(&source_key);
+                let target = tt.stop_idx_of(&target_key);
+                b.iter(|| tt.raptor(5, 0, source, target))
+            },
         );
     }
     group.finish();
@@ -65,8 +78,8 @@ fn bench_hub_spoke(c: &mut Criterion) {
 fn bench_transfer_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("transfer_scaling");
     let tt = build_grid(5, 20, 4);
-    let source = 0;
-    let target = 4 * 20 + 19;
+    let source = tt.stop_idx_of(&0usize);
+    let target = tt.stop_idx_of(&(4 * 20 + 19usize));
     for k in [1, 3, 5, 10, 20] {
         group.bench_with_input(BenchmarkId::new("raptor", format!("k{k}")), &k, |b, &k| {
             b.iter(|| tt.raptor(k, 0, source, target))
@@ -85,7 +98,11 @@ fn bench_reconstruction_depth(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("raptor", format!("{segments}seg")),
             &tt,
-            |b, tt| b.iter(|| tt.raptor(segments + 1, 0, 0, segments)),
+            |b, tt| {
+                let source = tt.stop_idx_of(&0usize);
+                let target = tt.stop_idx_of(&segments);
+                b.iter(|| tt.raptor(segments + 1, 0, source, target))
+            },
         );
     }
     group.finish();
@@ -101,7 +118,11 @@ fn bench_reconstruction_breadth(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("raptor", format!("{paths}p_{max_legs}l")),
             &tt,
-            |b, tt| b.iter(|| tt.raptor(max_legs + 1, 0, 0, 1)),
+            |b, tt| {
+                let source = tt.stop_idx_of(&0usize);
+                let target = tt.stop_idx_of(&1usize);
+                b.iter(|| tt.raptor(max_legs + 1, 0, source, target))
+            },
         );
     }
     group.finish();

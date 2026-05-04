@@ -27,7 +27,7 @@ use raptor::Journey;
 /// This applies the output-side Pareto filter the algorithm should be doing
 /// itself (soundness issue F). Filtering on the harness side intentionally
 /// masks F so the front-equality property isolates issues A, B, C, D.
-pub fn raptor_front<R, S>(journeys: &[Journey<R, S>]) -> BTreeSet<(u16, u8)> {
+pub fn raptor_front(journeys: &[Journey]) -> BTreeSet<(u16, u8)> {
     let mut points: Vec<(u16, u8)> = journeys
         .iter()
         .map(|j| {
@@ -56,11 +56,13 @@ use raptor::Timetable;
 #[cfg(test)]
 fn run_property(tc: &hegel::TestCase, spec: &spec::NetworkSpec) {
     let timetable = spec::render(spec);
+    let ps_idx = timetable.stop_idx_of(&spec.query.ps);
+    let pt_idx = timetable.stop_idx_of(&spec.query.pt);
     let ours = timetable.raptor(
         spec.query.max_transfers as usize,
         spec.query.tau as usize,
-        spec.query.ps,
-        spec.query.pt,
+        ps_idx,
+        pt_idx,
     );
     let theirs = reference::reference_solve(
         spec,
@@ -100,18 +102,24 @@ fn layer3_matches_reference(tc: hegel::TestCase) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Journey;
+    use raptor::{Journey, RouteIdx, StopIdx};
 
-    fn j(arrival: usize, plan: Vec<(u8, u8)>) -> Journey<u8, u8> {
-        Journey { plan, arrival }
+    fn j(arrival: usize, plan: Vec<(u32, u32)>) -> Journey {
+        Journey {
+            plan: plan
+                .into_iter()
+                .map(|(r, s)| (RouteIdx::new(r), StopIdx::new(s)))
+                .collect(),
+            arrival,
+        }
     }
 
     #[test]
     fn raptor_front_drops_dominated_higher_trip_journeys() {
         let journeys = vec![
-            j(100, vec![(0, 1)]),         // 1 trip, arr=100
-            j(100, vec![(0, 2), (1, 3)]), // 2 trips, arr=100 — dominated
-            j(80, vec![(0, 2), (1, 3)]),  // 2 trips, arr=80 — non-dominated
+            j(100, vec![(0, 1)]),
+            j(100, vec![(0, 2), (1, 3)]),
+            j(80, vec![(0, 2), (1, 3)]),
         ];
         let f = raptor_front(&journeys);
         let expected: BTreeSet<(u16, u8)> = [(100u16, 1u8), (80u16, 2u8)].into_iter().collect();
@@ -120,13 +128,12 @@ mod tests {
 
     #[test]
     fn raptor_front_empty_input_is_empty() {
-        let f = raptor_front::<u8, u8>(&[]);
+        let f = raptor_front(&[]);
         assert!(f.is_empty());
     }
 
     #[test]
     fn raptor_front_strict_monotonicity_drops_ties() {
-        // Same arrival, more trips: drop.
         let journeys = vec![j(50, vec![(0, 1)]), j(50, vec![(0, 1), (1, 2)])];
         let f = raptor_front(&journeys);
         let expected: BTreeSet<(u16, u8)> = [(50u16, 1u8)].into_iter().collect();

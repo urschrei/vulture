@@ -10,42 +10,24 @@
 //! — it routinely groups trips with different stop patterns
 //! (short-turns, branching, deadheads). At construction time, this
 //! adapter splits each `route_id` into one or more synthetic routes,
-//! identified by [`RouteId`]. Trips on a synthetic route are
+//! identified by [`RouteIdx`]. Trips on a synthetic route are
 //! additionally split into non-overtaking sub-groups so that the
-//! algorithm's binary-search-by-departure assumption holds. Use
-//! [`GtfsTimetable::route_name`] to recover the original `route_id` for
-//! display.
+//! algorithm's binary-search-by-departure assumption holds.
+//!
+//! Use [`GtfsTimetable::route_id`] to recover the original GTFS
+//! `route_id` for display, and [`GtfsTimetable::routes_for_gtfs_id`] to
+//! enumerate every synthetic derived from a given GTFS route.
 
-use std::{borrow::Cow, collections::BTreeMap};
+use std::collections::HashMap;
 
 use gtfs_structures::Gtfs;
 use smallvec::SmallVec;
 
-use crate::Timetable;
+use crate::{RouteIdx, StopIdx, Tau, Timetable, TripIdx};
 
 const TYPICAL_ROUTES_PER_STOP: usize = 8;
 const TYPICAL_TRANSFERS_PER_STOP: usize = 4;
 const DEFAULT_TRANSFER_TIME_SECONDS: usize = 300;
-
-/// Synthetic RAPTOR route identifier.
-///
-/// One per equivalence class of trips with identical, non-overtaking
-/// stop sequences. A single GTFS `route_id` may map to multiple
-/// `RouteId`s when its trips have differing stop patterns or contain
-/// overtaking pairs. Use [`GtfsTimetable::route_name`] to recover the
-/// original GTFS `route_id`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RouteId(u32);
-
-impl RouteId {
-    fn idx(self) -> usize {
-        self.0 as usize
-    }
-}
-
-type RoutesForStops<'gtfs> = BTreeMap<&'gtfs str, SmallVec<[RouteId; TYPICAL_ROUTES_PER_STOP]>>;
-type FootpathsForStops<'gtfs> =
-    BTreeMap<&'gtfs str, SmallVec<[&'gtfs str; TYPICAL_TRANSFERS_PER_STOP]>>;
 
 /// Errors that can occur when constructing a [`GtfsTimetable`].
 #[derive(thiserror::Error, Debug)]
@@ -59,8 +41,8 @@ pub enum GtfsError {
     /// A trip has no stop times defined.
     #[error("trip has no stop_times: {0}")]
     MissingStopTimes(String),
-    /// A trip has a stop_time without a departure time, which the
-    /// algorithm needs for binary-search ordering.
+    /// A trip has a stop_time without a departure time, which the algorithm
+    /// needs for binary-search ordering.
     #[error("stop_time has no departure_time: trip {trip}, stop {stop}")]
     MissingDepartureTime {
         /// The trip the stop_time belongs to.
@@ -75,31 +57,39 @@ type GtfsResult<T> = std::result::Result<T, GtfsError>;
 /// A [`Timetable`] implementation that wraps a parsed GTFS feed.
 ///
 /// Constructed via [`GtfsTimetable::new`], which validates the feed,
-/// splits each GTFS `route_id` into one or more [`RouteId`]s by stop
-/// pattern and overtaking, and builds the lookup indices the algorithm
-/// requires.
+/// interns stops/routes/trips to dense `u32` indices, splits each GTFS
+/// `route_id` into one or more [`RouteIdx`]s by stop pattern and
+/// overtaking, and builds the lookup indices the algorithm requires.
 pub struct GtfsTimetable<'gtfs> {
     gtfs: &'gtfs Gtfs,
 
-    routes_for_stops: RoutesForStops<'gtfs>,
-    /// For each synthetic route, the original GTFS `route_id`.
-    gtfs_route_for_route: Vec<&'gtfs str>,
-    /// For each synthetic route, the stop sequence (shared across every
-    /// trip on the route).
-    stops_for_route: Vec<Vec<&'gtfs str>>,
-    /// For each synthetic route, trips sorted by first-stop departure.
-    /// All trips share `stops_for_route[r]` and pairwise do not overtake,
-    /// so departure ordering at every stop matches the first-stop order.
-    trips_for_route: Vec<Vec<&'gtfs str>>,
-    footpaths_for_stops: FootpathsForStops<'gtfs>,
+    // Forward tables: idx -> &'gtfs str (original GTFS IDs).
+    stop_ids: Vec<&'gtfs str>,
+    route_ids: Vec<&'gtfs str>,
+    trip_ids: Vec<&'gtfs str>,
+
+    // Reverse tables.
+    stop_by_id: HashMap<&'gtfs str, StopIdx>,
+    route_by_id: HashMap<&'gtfs str, RouteIdx>,
+    routes_by_gtfs_id: HashMap<&'gtfs str, SmallVec<[RouteIdx; 2]>>,
+    trip_by_id: HashMap<&'gtfs str, TripIdx>,
+
+    // Per-route tables.
+    routes_for_stop: Vec<SmallVec<[RouteIdx; TYPICAL_ROUTES_PER_STOP]>>,
+    stops_for_route: Vec<Vec<StopIdx>>,
+    trips_for_route: Vec<Vec<TripIdx>>,
+
+    footpaths_for_stops: Vec<SmallVec<[StopIdx; TYPICAL_TRANSFERS_PER_STOP]>>,
+    transfer_times: HashMap<(StopIdx, StopIdx), Tau>,
 }
 
-impl<'a> GtfsTimetable<'a> {
+impl<'gtfs> GtfsTimetable<'gtfs> {
     /// Creates a new timetable from a parsed GTFS feed.
     ///
     /// Validates that every trip references existing stops and has
-    /// stop_times with departure times, then splits each GTFS `route_id`
-    /// into synthetic [`RouteId`]s as described in the module docs.
+    /// stop_times with departure times, then interns identifiers to dense
+    /// `u32` indices and splits each GTFS `route_id` into synthetic
+    /// [`RouteIdx`]s as described in the module docs.
     ///
     /// # Footpath assumptions
     ///
@@ -107,135 +97,174 @@ impl<'a> GtfsTimetable<'a> {
     /// [`Timetable::get_footpaths_from`] return as-is, without computing
     /// the transitive closure. The [`Timetable`] trait requires the
     /// footpath relation to be transitively closed (see the trait-level
-    /// docs). For typical feeds whose `transfers.txt` consists of
-    /// explicit station-pair entries this holds; for feeds that derive
-    /// transfers from coordinates with a max-radius rule it may not, in
-    /// which case the caller is responsible for pre-closing the data
-    /// before constructing the [`Gtfs`] passed in here. (A built-in
-    /// closure pass is on the roadmap but is opt-in because it is
-    /// expensive on large feeds.)
-    ///
-    /// [`Timetable`]: crate::Timetable
-    /// [`Timetable::get_footpaths_from`]: crate::Timetable::get_footpaths_from
-    pub fn new(gtfs: &'a Gtfs) -> GtfsResult<Self> {
-        let RouteIndex {
-            routes_for_stops,
-            gtfs_route_for_route,
-            stops_for_route,
-            trips_for_route,
-        } = build_route_index(gtfs)?;
-        let footpaths_for_stops = Self::cache_footpaths_for_stops(gtfs);
+    /// docs).
+    pub fn new(gtfs: &'gtfs Gtfs) -> GtfsResult<Self> {
+        // 1. Intern stops in iteration order.
+        let mut stop_ids: Vec<&'gtfs str> = Vec::with_capacity(gtfs.stops.len());
+        let mut stop_by_id: HashMap<&'gtfs str, StopIdx> = HashMap::with_capacity(gtfs.stops.len());
+        for stop_id in gtfs.stops.keys() {
+            let idx = StopIdx::new(stop_ids.len() as u32);
+            stop_ids.push(stop_id.as_str());
+            stop_by_id.insert(stop_id.as_str(), idx);
+        }
 
-        Ok(Self {
-            gtfs,
-            routes_for_stops,
-            gtfs_route_for_route,
-            stops_for_route,
-            trips_for_route,
-            footpaths_for_stops,
-        })
-    }
+        // 2. Validate trips and group by (route_id, stop_sequence) using
+        //    interned stop indices.
+        let mut groups: std::collections::BTreeMap<(&'gtfs str, Vec<StopIdx>), Vec<&'gtfs str>> =
+            std::collections::BTreeMap::new();
+        for (trip_id, trip) in &gtfs.trips {
+            if trip.stop_times.is_empty() {
+                return Err(GtfsError::MissingStopTimes(trip_id.clone()));
+            }
+            let mut stop_seq: Vec<StopIdx> = Vec::with_capacity(trip.stop_times.len());
+            for st in &trip.stop_times {
+                let raw_id = st.stop.id.as_str();
+                let stop_idx = *stop_by_id
+                    .get(raw_id)
+                    .ok_or_else(|| GtfsError::MissingStop(raw_id.to_owned()))?;
+                if st.departure_time.is_none() {
+                    return Err(GtfsError::MissingDepartureTime {
+                        trip: trip_id.clone(),
+                        stop: raw_id.to_owned(),
+                    });
+                }
+                stop_seq.push(stop_idx);
+            }
+            groups
+                .entry((trip.route_id.as_str(), stop_seq))
+                .or_default()
+                .push(trip_id.as_str());
+        }
 
-    /// Returns the original GTFS `route_id` that this synthetic route
-    /// was derived from. Use this to look up route metadata
-    /// (`short_name`, `long_name`, etc.) on `gtfs.routes` when displaying
-    /// a journey.
-    pub fn route_name(&self, route: RouteId) -> &'a str {
-        self.gtfs_route_for_route[route.idx()]
-    }
+        // 3. For each (route_id, stop_seq) group, sort trips by first-stop
+        //    departure and split into non-overtaking sub-groups. Each
+        //    sub-group becomes a synthetic RouteIdx; trips become TripIdxs
+        //    in synthetic-route order.
+        let mut route_ids: Vec<&'gtfs str> = Vec::new();
+        let mut stops_for_route: Vec<Vec<StopIdx>> = Vec::new();
+        let mut trips_for_route: Vec<Vec<TripIdx>> = Vec::new();
+        let mut trip_ids: Vec<&'gtfs str> = Vec::new();
+        let mut trip_by_id: HashMap<&'gtfs str, TripIdx> = HashMap::new();
+        let mut route_by_id: HashMap<&'gtfs str, RouteIdx> = HashMap::new();
+        let mut routes_by_gtfs_id: HashMap<&'gtfs str, SmallVec<[RouteIdx; 2]>> = HashMap::new();
+        let mut routes_for_stop: Vec<SmallVec<[RouteIdx; TYPICAL_ROUTES_PER_STOP]>> =
+            vec![SmallVec::new(); stop_ids.len()];
 
-    fn cache_footpaths_for_stops(gtfs: &'a Gtfs) -> FootpathsForStops<'a> {
-        let mut footpaths_for_stops = FootpathsForStops::default();
+        for ((gtfs_route_id, stop_seq), trips) in groups {
+            let mut trips_with_schedules: Vec<(&'gtfs str, &'gtfs [gtfs_structures::StopTime])> =
+                trips
+                    .into_iter()
+                    .map(|trip_id| {
+                        let trip = gtfs.get_trip(trip_id).expect("just inserted");
+                        (trip_id, trip.stop_times.as_slice())
+                    })
+                    .collect();
+            trips_with_schedules
+                .sort_by_key(|(_, st)| st[0].departure_time.expect("validated above"));
 
+            for sub_group in split_non_overtaking(&trips_with_schedules) {
+                let route_idx = RouteIdx::new(route_ids.len() as u32);
+                route_ids.push(gtfs_route_id);
+                stops_for_route.push(stop_seq.clone());
+
+                let mut sub_trip_idxs: Vec<TripIdx> = Vec::with_capacity(sub_group.len());
+                for trip_id in &sub_group {
+                    let trip_idx = TripIdx::new(trip_ids.len() as u32);
+                    trip_ids.push(trip_id);
+                    trip_by_id.insert(trip_id, trip_idx);
+                    sub_trip_idxs.push(trip_idx);
+                }
+                trips_for_route.push(sub_trip_idxs);
+
+                route_by_id.entry(gtfs_route_id).or_insert(route_idx);
+                routes_by_gtfs_id
+                    .entry(gtfs_route_id)
+                    .or_default()
+                    .push(route_idx);
+
+                for &stop_idx in &stop_seq {
+                    routes_for_stop[stop_idx.idx()].push(route_idx);
+                }
+            }
+        }
+
+        // 4. Footpaths and transfer times.
+        let mut footpaths_for_stops: Vec<SmallVec<[StopIdx; TYPICAL_TRANSFERS_PER_STOP]>> =
+            vec![SmallVec::new(); stop_ids.len()];
+        let mut transfer_times: HashMap<(StopIdx, StopIdx), Tau> = HashMap::new();
         for (stop_id, stop) in &gtfs.stops {
             if stop.transfers.is_empty() {
                 continue;
             }
-
-            let targets: SmallVec<_> = stop
-                .transfers
-                .iter()
-                .map(|t| t.to_stop_id.as_str())
-                .collect();
-            footpaths_for_stops.insert(stop_id.as_str(), targets);
-        }
-
-        footpaths_for_stops
-    }
-}
-
-struct RouteIndex<'gtfs> {
-    routes_for_stops: RoutesForStops<'gtfs>,
-    gtfs_route_for_route: Vec<&'gtfs str>,
-    stops_for_route: Vec<Vec<&'gtfs str>>,
-    trips_for_route: Vec<Vec<&'gtfs str>>,
-}
-
-fn build_route_index<'gtfs>(gtfs: &'gtfs Gtfs) -> GtfsResult<RouteIndex<'gtfs>> {
-    // 1. Validate trips and group by (route_id, stop_sequence).
-    let mut groups: BTreeMap<(&'gtfs str, Vec<&'gtfs str>), Vec<&'gtfs str>> = BTreeMap::new();
-
-    for (trip_id, trip) in &gtfs.trips {
-        if trip.stop_times.is_empty() {
-            return Err(GtfsError::MissingStopTimes(trip_id.clone()));
-        }
-
-        let mut stop_seq: Vec<&'gtfs str> = Vec::with_capacity(trip.stop_times.len());
-        for st in &trip.stop_times {
-            let stop_id = st.stop.id.as_str();
-            gtfs.get_stop(stop_id)
-                .map_err(|_| GtfsError::MissingStop(stop_id.to_owned()))?;
-            if st.departure_time.is_none() {
-                return Err(GtfsError::MissingDepartureTime {
-                    trip: trip_id.clone(),
-                    stop: stop_id.to_owned(),
-                });
-            }
-            stop_seq.push(stop_id);
-        }
-
-        let route_id = trip.route_id.as_str();
-        groups
-            .entry((route_id, stop_seq))
-            .or_default()
-            .push(trip_id.as_str());
-    }
-
-    // 2. For each (route_id, stop_seq) group, sort trips by first-stop
-    //    departure and split into non-overtaking sub-groups. Each
-    //    sub-group becomes a synthetic RouteId.
-    let mut gtfs_route_for_route: Vec<&'gtfs str> = Vec::new();
-    let mut stops_for_route: Vec<Vec<&'gtfs str>> = Vec::new();
-    let mut trips_for_route: Vec<Vec<&'gtfs str>> = Vec::new();
-    let mut routes_for_stops: RoutesForStops<'gtfs> = BTreeMap::new();
-
-    for ((gtfs_route_id, stop_seq), trips) in groups {
-        let mut trips_with_schedules: Vec<(&'gtfs str, &'gtfs [gtfs_structures::StopTime])> = trips
-            .into_iter()
-            .map(|trip_id| {
-                let trip = gtfs.get_trip(trip_id).expect("just inserted");
-                (trip_id, trip.stop_times.as_slice())
-            })
-            .collect();
-        trips_with_schedules.sort_by_key(|(_, st)| st[0].departure_time.expect("validated above"));
-
-        for sub_group in split_non_overtaking(&trips_with_schedules) {
-            let route = RouteId(gtfs_route_for_route.len() as u32);
-            gtfs_route_for_route.push(gtfs_route_id);
-            stops_for_route.push(stop_seq.clone());
-            trips_for_route.push(sub_group);
-            for &stop in &stop_seq {
-                routes_for_stops.entry(stop).or_default().push(route);
+            let from_idx = *stop_by_id.get(stop_id.as_str()).expect("stop interned");
+            for t in &stop.transfers {
+                let Some(&to_idx) = stop_by_id.get(t.to_stop_id.as_str()) else {
+                    continue;
+                };
+                footpaths_for_stops[from_idx.idx()].push(to_idx);
+                if let Some(min) = t.min_transfer_time {
+                    transfer_times.insert((from_idx, to_idx), min as Tau);
+                }
             }
         }
+
+        Ok(Self {
+            gtfs,
+            stop_ids,
+            route_ids,
+            trip_ids,
+            stop_by_id,
+            route_by_id,
+            routes_by_gtfs_id,
+            trip_by_id,
+            routes_for_stop,
+            stops_for_route,
+            trips_for_route,
+            footpaths_for_stops,
+            transfer_times,
+        })
     }
 
-    Ok(RouteIndex {
-        routes_for_stops,
-        gtfs_route_for_route,
-        stops_for_route,
-        trips_for_route,
-    })
+    /// Returns the original GTFS `stop_id` for the given index.
+    pub fn stop_id(&self, stop: StopIdx) -> &'gtfs str {
+        self.stop_ids[stop.idx()]
+    }
+
+    /// Returns the original GTFS `route_id` for the given synthetic route.
+    /// Several `RouteIdx`s may map to the same GTFS `route_id`.
+    pub fn route_id(&self, route: RouteIdx) -> &'gtfs str {
+        self.route_ids[route.idx()]
+    }
+
+    /// Returns the original GTFS `trip_id` for the given index.
+    pub fn trip_id(&self, trip: TripIdx) -> &'gtfs str {
+        self.trip_ids[trip.idx()]
+    }
+
+    /// Looks up the index of a stop by its GTFS `stop_id`.
+    pub fn stop_idx(&self, id: &str) -> Option<StopIdx> {
+        self.stop_by_id.get(id).copied()
+    }
+
+    /// Looks up the *first* synthetic route derived from a GTFS
+    /// `route_id`. Use [`routes_for_gtfs_id`](Self::routes_for_gtfs_id) to
+    /// enumerate every synthetic.
+    pub fn route_idx(&self, id: &str) -> Option<RouteIdx> {
+        self.route_by_id.get(id).copied()
+    }
+
+    /// Returns every synthetic route derived from a given GTFS `route_id`.
+    pub fn routes_for_gtfs_id(&self, id: &str) -> &[RouteIdx] {
+        self.routes_by_gtfs_id
+            .get(id)
+            .map(|sv| sv.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Looks up the index of a trip by its GTFS `trip_id`.
+    pub fn trip_idx(&self, id: &str) -> Option<TripIdx> {
+        self.trip_by_id.get(id).copied()
+    }
 }
 
 /// Greedily split a departure-sorted list of trips on a shared stop
@@ -295,28 +324,22 @@ fn find_stop_time<'a>(gtfs: &'a Gtfs, trip: &str, stop: &str) -> &'a gtfs_struct
 }
 
 impl<'gtfs> Timetable for GtfsTimetable<'gtfs> {
-    type Stop = &'gtfs str;
-    type Route = RouteId;
-    type Trip = &'gtfs str;
-
-    fn get_routes_serving_stop(&self, stop: Self::Stop) -> Cow<'_, [RouteId]> {
-        self.routes_for_stops
-            .get(&stop)
-            .map(|sv| sv.as_slice())
-            .unwrap_or(&[])
-            .into()
+    fn n_stops(&self) -> usize {
+        self.stop_ids.len()
     }
 
-    fn get_earlier_stop(
-        &self,
-        route: Self::Route,
-        left: Self::Stop,
-        right: Self::Stop,
-    ) -> Self::Stop {
+    fn n_routes(&self) -> usize {
+        self.route_ids.len()
+    }
+
+    fn get_routes_serving_stop(&self, stop: StopIdx) -> &[RouteIdx] {
+        self.routes_for_stop[stop.idx()].as_slice()
+    }
+
+    fn get_earlier_stop(&self, route: RouteIdx, left: StopIdx, right: StopIdx) -> StopIdx {
         let stops = &self.stops_for_route[route.idx()];
         let left_pos = stops.iter().position(|&s| s == left);
         let right_pos = stops.iter().position(|&s| s == right);
-
         match (left_pos, right_pos) {
             (Some(l), Some(r)) if l <= r => left,
             (Some(_), Some(_)) => right,
@@ -324,73 +347,60 @@ impl<'gtfs> Timetable for GtfsTimetable<'gtfs> {
         }
     }
 
-    fn get_stops_after(&self, route: Self::Route, stop: Self::Stop) -> Cow<'_, [&'gtfs str]> {
+    fn get_stops_after(&self, route: RouteIdx, stop: StopIdx) -> &[StopIdx] {
         let stops = &self.stops_for_route[route.idx()];
         let pos = stops
             .iter()
             .position(|&s| s == stop)
             .expect("stop should exist on route");
-        Cow::Borrowed(&stops[pos..])
+        &stops[pos..]
     }
 
-    fn get_earliest_trip(
-        &self,
-        route: Self::Route,
-        at: crate::Tau,
-        stop: Self::Stop,
-    ) -> Option<Self::Trip> {
+    fn get_earliest_trip(&self, route: RouteIdx, at: Tau, stop: StopIdx) -> Option<TripIdx> {
         let trips = &self.trips_for_route[route.idx()];
         let stop_pos = self.stops_for_route[route.idx()]
             .iter()
             .position(|&s| s == stop)?;
 
-        let departure_at_stop = |trip_id: &str| -> crate::Tau {
+        let departure_at_stop = |trip_idx: TripIdx| -> Tau {
+            let raw = self.trip_ids[trip_idx.idx()];
             let trip = self
                 .gtfs
-                .get_trip(trip_id)
+                .get_trip(raw)
                 .expect("validated during construction");
             trip.stop_times[stop_pos]
                 .departure_time
-                .expect("validated during construction") as crate::Tau
+                .expect("validated during construction") as Tau
         };
 
-        // All trips share the stop sequence and are sorted by first-stop
-        // departure. Because no pair overtakes (enforced at construction),
-        // the trip order is also sorted by departure at every other stop.
-        let idx = trips.partition_point(|&trip_id| departure_at_stop(trip_id) < at);
+        let idx = trips.partition_point(|&trip_idx| departure_at_stop(trip_idx) < at);
         trips.get(idx).copied()
     }
 
-    fn get_arrival_time(&self, trip: Self::Trip, stop: Self::Stop) -> crate::Tau {
-        find_stop_time(self.gtfs, trip, stop)
+    fn get_arrival_time(&self, trip: TripIdx, stop: StopIdx) -> Tau {
+        let raw_trip = self.trip_ids[trip.idx()];
+        let raw_stop = self.stop_ids[stop.idx()];
+        find_stop_time(self.gtfs, raw_trip, raw_stop)
             .arrival_time
-            .expect("valid inputs") as crate::Tau
+            .expect("valid inputs") as Tau
     }
 
-    fn get_departure_time(&self, trip: Self::Trip, stop: Self::Stop) -> crate::Tau {
-        find_stop_time(self.gtfs, trip, stop)
+    fn get_departure_time(&self, trip: TripIdx, stop: StopIdx) -> Tau {
+        let raw_trip = self.trip_ids[trip.idx()];
+        let raw_stop = self.stop_ids[stop.idx()];
+        find_stop_time(self.gtfs, raw_trip, raw_stop)
             .departure_time
-            .expect("valid inputs") as crate::Tau
+            .expect("valid inputs") as Tau
     }
 
-    fn get_footpaths_from(&self, stop: Self::Stop) -> Cow<'_, [Self::Stop]> {
-        self.footpaths_for_stops
-            .get(&stop)
-            .map(|sv| sv.as_slice())
-            .unwrap_or(&[])
-            .into()
+    fn get_footpaths_from(&self, stop: StopIdx) -> &[StopIdx] {
+        self.footpaths_for_stops[stop.idx()].as_slice()
     }
 
-    // TODO: handle TransferType to distinguish between timed transfers and walking
-    fn get_transfer_time(&self, from: Self::Stop, to: Self::Stop) -> crate::Tau {
-        self.gtfs
-            .get_stop(from)
-            .expect("validated during construction")
-            .transfers
-            .iter()
-            .find(|t| t.to_stop_id == to)
-            .and_then(|t| t.min_transfer_time)
-            .map(|t| t as crate::Tau)
+    fn get_transfer_time(&self, from: StopIdx, to: StopIdx) -> Tau {
+        self.transfer_times
+            .get(&(from, to))
+            .copied()
             .unwrap_or(DEFAULT_TRANSFER_TIME_SECONDS)
     }
 }

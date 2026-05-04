@@ -2,38 +2,100 @@
 #[cfg(feature = "internal")]
 pub mod builders;
 
-use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt::Debug;
+use std::hash::Hash;
 
-use crate::{Tau, Timetable};
+use crate::{RouteIdx, StopIdx, Tau, Timetable, TripIdx};
 
-/// A generic in-memory timetable backed by `BTreeMap`s.
-pub struct SimpleTimetable<S, R, T> {
-    /// route_id -> ordered stop sequence
-    routes: BTreeMap<R, Vec<S>>,
-    /// trip_id -> (route_id, per-stop (arrival, departure) aligned with route's stop order)
-    trips: BTreeMap<T, (R, Vec<(Tau, Tau)>)>,
-    /// stop -> reachable stops via footpath
-    footpaths: BTreeMap<S, Vec<S>>,
-    /// (from, to) -> transfer time
-    transfer_times: BTreeMap<(S, S), Tau>,
+/// A generic in-memory timetable backed by interning tables and dense `Vec`s.
+///
+/// Generic over key types `S`/`R`/`T` (with `Hash + Eq + Clone` bounds) so
+/// tests and benches can use ergonomic key types (enums, integers) while the
+/// internal storage is dense `u32` indices throughout.
+pub struct SimpleTimetable<S = u32, R = u32, T = u32>
+where
+    S: Hash + Eq + Clone,
+    R: Hash + Eq + Clone,
+    T: Hash + Eq + Clone,
+{
+    stop_keys: Vec<S>,
+    stop_by_key: HashMap<S, StopIdx>,
+    route_keys: Vec<R>,
+    route_by_key: HashMap<R, RouteIdx>,
+    trip_keys: Vec<T>,
+    trip_by_key: HashMap<T, TripIdx>,
+
+    /// RouteIdx -> ordered stop sequence.
+    routes: Vec<Vec<StopIdx>>,
+    /// TripIdx -> (route, per-stop (arrival, departure) aligned with the route's stops).
+    /// `None` slots are reserved-but-unassigned trips: the builder pre-grows
+    /// the vector when a `TripIdx` lands past the current end, but never
+    /// silently fills those holes with a placeholder route.
+    #[allow(clippy::type_complexity)]
+    trips: Vec<Option<(RouteIdx, Vec<(Tau, Tau)>)>>,
+    /// StopIdx -> reachable stops via footpath.
+    footpaths: Vec<Vec<StopIdx>>,
+    /// (from, to) -> transfer time.
+    transfer_times: HashMap<(StopIdx, StopIdx), Tau>,
+    /// StopIdx -> routes serving the stop (computed incrementally).
+    routes_for_stop: Vec<Vec<RouteIdx>>,
 }
 
 impl<S, R, T> SimpleTimetable<S, R, T>
 where
-    S: Ord + Copy,
-    R: Ord + Copy,
-    T: Ord + Copy,
+    S: Hash + Eq + Clone,
+    R: Hash + Eq + Clone,
+    T: Hash + Eq + Clone,
 {
     /// Creates an empty timetable.
     pub fn new() -> Self {
         Self {
-            routes: BTreeMap::new(),
-            trips: BTreeMap::new(),
-            footpaths: BTreeMap::new(),
-            transfer_times: BTreeMap::new(),
+            stop_keys: Vec::new(),
+            stop_by_key: HashMap::new(),
+            route_keys: Vec::new(),
+            route_by_key: HashMap::new(),
+            trip_keys: Vec::new(),
+            trip_by_key: HashMap::new(),
+            routes: Vec::new(),
+            trips: Vec::new(),
+            footpaths: Vec::new(),
+            transfer_times: HashMap::new(),
+            routes_for_stop: Vec::new(),
         }
+    }
+
+    fn intern_stop(&mut self, key: S) -> StopIdx {
+        if let Some(&idx) = self.stop_by_key.get(&key) {
+            return idx;
+        }
+        let idx = StopIdx::new(self.stop_keys.len() as u32);
+        self.stop_keys.push(key.clone());
+        self.stop_by_key.insert(key, idx);
+        self.footpaths.push(Vec::new());
+        self.routes_for_stop.push(Vec::new());
+        idx
+    }
+
+    fn intern_route(&mut self, key: R) -> RouteIdx {
+        if let Some(&idx) = self.route_by_key.get(&key) {
+            return idx;
+        }
+        let idx = RouteIdx::new(self.route_keys.len() as u32);
+        self.route_keys.push(key.clone());
+        self.route_by_key.insert(key, idx);
+        self.routes.push(Vec::new());
+        idx
+    }
+
+    fn intern_trip(&mut self, key: T) -> TripIdx {
+        if let Some(&idx) = self.trip_by_key.get(&key) {
+            return idx;
+        }
+        let idx = TripIdx::new(self.trip_keys.len() as u32);
+        self.trip_keys.push(key.clone());
+        self.trip_by_key.insert(key, idx);
+        idx
     }
 
     /// Adds a route with its stops and trips.
@@ -42,149 +104,163 @@ where
         R: Debug,
         T: Debug,
     {
-        self.routes.insert(id, stops.to_vec());
-        for &(trip_id, times) in trips {
+        let route_idx = self.intern_route(id);
+        let stop_idxs: Vec<StopIdx> = stops.iter().map(|s| self.intern_stop(s.clone())).collect();
+        self.routes[route_idx.idx()] = stop_idxs.clone();
+
+        // Update the routes_for_stop reverse index (idempotent: we dedup within the per-stop list).
+        for &s in &stop_idxs {
+            let entry = &mut self.routes_for_stop[s.idx()];
+            if !entry.contains(&route_idx) {
+                entry.push(route_idx);
+            }
+        }
+
+        for (trip_id, times) in trips {
             assert_eq!(
                 times.len(),
                 stops.len(),
-                "trip {trip_id:?} has {} times but route {id:?} has {} stops",
+                "trip {trip_id:?} has {} times but route has {} stops",
                 times.len(),
                 stops.len()
             );
-            self.trips.insert(trip_id, (id, times.to_vec()));
+            let trip_idx = self.intern_trip(trip_id.clone());
+            // trips Vec must be at least trip_idx.idx() + 1 long
+            while self.trips.len() <= trip_idx.idx() {
+                self.trips.push(None);
+            }
+            self.trips[trip_idx.idx()] = Some((route_idx, times.to_vec()));
         }
+        self
+    }
+
+    /// Ensures `key` has a `StopIdx` assigned without otherwise modifying the
+    /// timetable. Useful when callers need to look up a stop by key (via
+    /// [`stop_idx_of`](Self::stop_idx_of)) for stops that aren't directly
+    /// named by any route or footpath.
+    pub fn register_stop(mut self, key: S) -> Self {
+        let _ = self.intern_stop(key);
         self
     }
 
     /// Adds a footpath from one stop to another.
     pub fn footpath(mut self, from: S, to: S) -> Self {
-        self.footpaths.entry(from).or_default().push(to);
+        let from_idx = self.intern_stop(from);
+        let to_idx = self.intern_stop(to);
+        self.footpaths[from_idx.idx()].push(to_idx);
         self
     }
 
     /// Sets the transfer time for a footpath.
     pub fn transfer_time(mut self, from: S, to: S, time: Tau) -> Self {
-        self.transfer_times.insert((from, to), time);
+        let from_idx = self.intern_stop(from);
+        let to_idx = self.intern_stop(to);
+        self.transfer_times.insert((from_idx, to_idx), time);
         self
+    }
+
+    /// Returns the index assigned to the given stop key. Panics if the
+    /// key was never inserted via [`route`](Self::route),
+    /// [`footpath`](Self::footpath), or [`transfer_time`](Self::transfer_time).
+    pub fn stop_idx_of(&self, key: &S) -> StopIdx {
+        *self
+            .stop_by_key
+            .get(key)
+            .expect("stop key not registered with this SimpleTimetable")
+    }
+
+    /// Returns the index assigned to the given route key.
+    pub fn route_idx_of(&self, key: &R) -> RouteIdx {
+        *self
+            .route_by_key
+            .get(key)
+            .expect("route key not registered with this SimpleTimetable")
+    }
+
+    /// Returns the index assigned to the given trip key.
+    pub fn trip_idx_of(&self, key: &T) -> TripIdx {
+        *self
+            .trip_by_key
+            .get(key)
+            .expect("trip key not registered with this SimpleTimetable")
     }
 }
 
 impl<S, R, T> Default for SimpleTimetable<S, R, T>
 where
-    S: Ord + Copy,
-    R: Ord + Copy,
-    T: Ord + Copy,
+    S: Hash + Eq + Clone,
+    R: Hash + Eq + Clone,
+    T: Hash + Eq + Clone,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<S, R, T> From<(&[(R, &[S], &[(T, &[(Tau, Tau)])])], &[(S, S)])> for SimpleTimetable<S, R, T>
-where
-    S: Ord + Copy,
-    R: Ord + Copy + Debug,
-    T: Ord + Copy + Debug,
-{
-    fn from((route_defs, footpath_defs): (&[(R, &[S], &[(T, &[(Tau, Tau)])])], &[(S, S)])) -> Self {
-        let mut tt = Self::new();
-        for &(route_id, stops, trips) in route_defs {
-            tt.routes.insert(route_id, stops.to_vec());
-            for &(trip_id, times) in trips {
-                assert_eq!(
-                    times.len(),
-                    stops.len(),
-                    "trip {trip_id:?} has {} times but route {route_id:?} has {} stops",
-                    times.len(),
-                    stops.len()
-                );
-                tt.trips.insert(trip_id, (route_id, times.to_vec()));
-            }
-        }
-        for &(from, to) in footpath_defs {
-            tt.footpaths.entry(from).or_default().push(to);
-        }
-        tt
-    }
-}
-
 impl<S, R, T> Timetable for SimpleTimetable<S, R, T>
 where
-    S: Ord + Copy + Debug,
-    R: Ord + Copy + Debug,
-    T: Ord + Copy + Debug,
+    S: Hash + Eq + Clone + Debug,
+    R: Hash + Eq + Clone + Debug,
+    T: Hash + Eq + Clone + Debug,
 {
-    type Stop = S;
-    type Route = R;
-    type Trip = T;
-
-    fn get_routes_serving_stop(&self, stop: Self::Stop) -> Cow<'_, [Self::Route]> {
-        self.routes
-            .iter()
-            .filter(|(_, stops)| stops.contains(&stop))
-            .map(|(&route_id, _)| route_id)
-            .collect::<Vec<_>>()
-            .into()
+    fn n_stops(&self) -> usize {
+        self.stop_keys.len()
     }
 
-    fn get_earlier_stop(
-        &self,
-        route: Self::Route,
-        left: Self::Stop,
-        right: Self::Stop,
-    ) -> Self::Stop {
-        let stops = &self.routes[&route];
+    fn n_routes(&self) -> usize {
+        self.route_keys.len()
+    }
+
+    fn get_routes_serving_stop(&self, stop: StopIdx) -> &[RouteIdx] {
+        self.routes_for_stop[stop.idx()].as_slice()
+    }
+
+    fn get_earlier_stop(&self, route: RouteIdx, left: StopIdx, right: StopIdx) -> StopIdx {
+        let stops = &self.routes[route.idx()];
         let l = stops.iter().position(|&s| s == left).unwrap();
         let r = stops.iter().position(|&s| s == right).unwrap();
         stops[l.min(r)]
     }
 
-    fn get_stops_after(&self, route: Self::Route, stop: Self::Stop) -> Cow<'_, [Self::Stop]> {
-        let stops = &self.routes[&route];
+    fn get_stops_after(&self, route: RouteIdx, stop: StopIdx) -> &[StopIdx] {
+        let stops = &self.routes[route.idx()];
         let pos = stops.iter().position(|&s| s == stop).unwrap();
-        stops[pos..].into()
+        &stops[pos..]
     }
 
-    fn get_earliest_trip(
-        &self,
-        route: Self::Route,
-        at: Tau,
-        stop: Self::Stop,
-    ) -> Option<Self::Trip> {
-        let stops = &self.routes[&route];
-        let stop_idx = stops.iter().position(|&s| s == stop)?;
+    fn get_earliest_trip(&self, route: RouteIdx, at: Tau, stop: StopIdx) -> Option<TripIdx> {
+        let stops = &self.routes[route.idx()];
+        let stop_pos = stops.iter().position(|&s| s == stop)?;
 
         self.trips
             .iter()
+            .enumerate()
+            .filter_map(|(i, slot)| slot.as_ref().map(|entry| (i, entry)))
             .filter(|(_, (r, _))| *r == route)
-            .filter(|(_, (_, times))| times[stop_idx].1 >= at)
-            .min_by_key(|(_, (_, times))| times[stop_idx].1)
-            .map(|(&trip_id, _)| trip_id)
+            .filter(|(_, (_, times))| times[stop_pos].1 >= at)
+            .min_by_key(|(_, (_, times))| times[stop_pos].1)
+            .map(|(trip_idx, _)| TripIdx::new(trip_idx as u32))
     }
 
-    fn get_arrival_time(&self, trip: Self::Trip, stop: Self::Stop) -> Tau {
-        let (route_id, times) = &self.trips[&trip];
-        let stops = &self.routes[route_id];
-        let idx = stops.iter().position(|&s| s == stop).unwrap();
-        times[idx].0
+    fn get_arrival_time(&self, trip: TripIdx, stop: StopIdx) -> Tau {
+        let (route_idx, times) = self.trips[trip.idx()].as_ref().expect("trip slot assigned");
+        let stops = &self.routes[route_idx.idx()];
+        let pos = stops.iter().position(|&s| s == stop).unwrap();
+        times[pos].0
     }
 
-    fn get_departure_time(&self, trip: Self::Trip, stop: Self::Stop) -> Tau {
-        let (route_id, times) = &self.trips[&trip];
-        let stops = &self.routes[route_id];
-        let idx = stops.iter().position(|&s| s == stop).unwrap();
-        times[idx].1
+    fn get_departure_time(&self, trip: TripIdx, stop: StopIdx) -> Tau {
+        let (route_idx, times) = self.trips[trip.idx()].as_ref().expect("trip slot assigned");
+        let stops = &self.routes[route_idx.idx()];
+        let pos = stops.iter().position(|&s| s == stop).unwrap();
+        times[pos].1
     }
 
-    fn get_footpaths_from(&self, stop: Self::Stop) -> Cow<'_, [Self::Stop]> {
-        self.footpaths
-            .get(&stop)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
-            .into()
+    fn get_footpaths_from(&self, stop: StopIdx) -> &[StopIdx] {
+        self.footpaths[stop.idx()].as_slice()
     }
 
-    fn get_transfer_time(&self, from: Self::Stop, to: Self::Stop) -> Tau {
+    fn get_transfer_time(&self, from: StopIdx, to: StopIdx) -> Tau {
         self.transfer_times.get(&(from, to)).copied().unwrap_or(1)
     }
 }
@@ -192,28 +268,21 @@ where
 #[cfg(feature = "dotgraph")]
 impl<S, R, T> SimpleTimetable<S, R, T>
 where
-    S: Ord + Copy + Debug + std::fmt::Display,
-    R: Ord + Copy + Debug,
-    T: Ord + Copy + Debug,
+    S: Hash + Eq + Clone + Debug + std::fmt::Display,
+    R: Hash + Eq + Clone + Debug,
+    T: Hash + Eq + Clone + Debug,
 {
     /// Renders the timetable as a Graphviz DOT string.
     pub fn to_dot(&self, name: &str) -> Result<String, std::io::Error> {
         use dot_graph::{Edge, Graph, Kind, Node, Style};
-        use std::collections::BTreeSet;
 
         let mut graph = Graph::new(name, Kind::Digraph);
 
-        // Collect all unique stops
-        let mut stops = BTreeSet::<S>::new();
-        for s in self.routes.values() {
-            stops.extend(s);
+        for (idx, key) in self.stop_keys.iter().enumerate() {
+            let _ = idx;
+            graph.add_node(Node::new(&format!("s{key}")));
         }
 
-        for &stop in &stops {
-            graph.add_node(Node::new(&format!("s{stop}")));
-        }
-
-        // Deterministic color palette for routes
         const COLORS: &[&str] = &[
             "red",
             "blue",
@@ -227,39 +296,54 @@ where
             "goldenrod",
         ];
 
-        // Route edges, colored per route, with trip timings
-        for (idx, (route_id, route_stops)) in self.routes.iter().enumerate() {
-            let color = COLORS[idx % COLORS.len()];
-            // Collect trips belonging to this route
-            let route_trips: Vec<_> = self
+        for (route_idx, route_stops) in self.routes.iter().enumerate() {
+            let color = COLORS[route_idx % COLORS.len()];
+            let route_idx_typed = RouteIdx::new(route_idx as u32);
+            #[allow(clippy::type_complexity)]
+            let route_trips: Vec<(usize, &(RouteIdx, Vec<(Tau, Tau)>))> = self
                 .trips
                 .iter()
-                .filter(|(_, (r, _))| r == route_id)
+                .enumerate()
+                .filter_map(|(i, slot)| slot.as_ref().map(|entry| (i, entry)))
+                .filter(|(_, (r, _))| *r == route_idx_typed)
                 .collect();
 
             for (i, window) in route_stops.windows(2).enumerate() {
-                let from = window[0];
-                let to = window[1];
-                let mut label = format!("R{route_id:?}");
-                for (trip_id, (_, times)) in &route_trips {
+                let from_key = &self.stop_keys[window[0].idx()];
+                let to_key = &self.stop_keys[window[1].idx()];
+                let route_key = &self.route_keys[route_idx];
+                let mut label = format!("R{route_key:?}");
+                for (trip_idx, (_, times)) in &route_trips {
+                    let trip_key = &self.trip_keys[*trip_idx];
                     let dep = times[i].1;
                     let arr = times[i + 1].0;
-                    label.push_str(&format!("\\nT{trip_id:?}: {dep}\u{2192}{arr}"));
+                    label.push_str(&format!("\\nT{trip_key:?}: {dep}\u{2192}{arr}"));
                 }
                 graph.add_edge(
-                    Edge::new(&format!("s{from}"), &format!("s{to}"), &label).color(Some(color)),
+                    Edge::new(&format!("s{from_key}"), &format!("s{to_key}"), &label)
+                        .color(Some(color)),
                 );
             }
         }
 
-        // Footpath edges (dashed)
-        for (&from, targets) in &self.footpaths {
+        for (from_idx, targets) in self.footpaths.iter().enumerate() {
+            let from_key = &self.stop_keys[from_idx];
+            let from_typed = StopIdx::new(from_idx as u32);
             for &to in targets {
-                let time = self.transfer_times.get(&(from, to)).copied().unwrap_or(1);
+                let to_key = &self.stop_keys[to.idx()];
+                let time = self
+                    .transfer_times
+                    .get(&(from_typed, to))
+                    .copied()
+                    .unwrap_or(1);
                 graph.add_edge(
-                    Edge::new(&format!("s{from}"), &format!("s{to}"), &format!("t={time}"))
-                        .style(Style::Dashed)
-                        .color(Some("gray")),
+                    Edge::new(
+                        &format!("s{from_key}"),
+                        &format!("s{to_key}"),
+                        &format!("t={time}"),
+                    )
+                    .style(Style::Dashed)
+                    .color(Some("gray")),
                 );
             }
         }

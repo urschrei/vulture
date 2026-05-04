@@ -20,9 +20,8 @@
 //! Based on the paper:
 //! *Round-Based Public Transit Routing* by Daniel Delling, Thomas Pajor, and Renato F. Werneck.
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Debug;
+use std::fmt;
 
 pub mod gtfs;
 /// In-memory timetable for testing and simple use cases.
@@ -37,33 +36,140 @@ pub type K = usize;
 /// Time value in seconds since midnight.
 pub type Tau = usize;
 
+/// Dense index of a stop within a [`Timetable`]. Indices are in `0..tt.n_stops()`.
+///
+/// Constructed by adapters at timetable-construction time. Display formats as
+/// the bare `u32`; round-trip via [`StopIdx::get`] / [`From<u32>`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StopIdx(u32);
+
+impl StopIdx {
+    /// Construct from a raw `u32`. The caller is responsible for the value
+    /// being a valid index for the timetable in question.
+    pub const fn new(n: u32) -> Self {
+        Self(n)
+    }
+    /// The underlying `u32`.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+    #[inline]
+    pub(crate) fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl fmt::Display for StopIdx {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<u32> for StopIdx {
+    fn from(n: u32) -> Self {
+        Self(n)
+    }
+}
+impl From<StopIdx> for u32 {
+    fn from(s: StopIdx) -> Self {
+        s.0
+    }
+}
+
+/// Dense index of a route within a [`Timetable`]. Indices are in `0..tt.n_routes()`.
+///
+/// In the GTFS adapter, a single GTFS `route_id` may map to multiple
+/// `RouteIdx`s — one per equivalence class of trips with identical stop
+/// sequences and pairwise non-overtaking schedules. See
+/// [`gtfs::GtfsTimetable`] for the splitting rules and lookup APIs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RouteIdx(u32);
+
+impl RouteIdx {
+    /// Construct from a raw `u32`. The caller is responsible for the value
+    /// being a valid index for the timetable in question.
+    pub const fn new(n: u32) -> Self {
+        Self(n)
+    }
+    /// The underlying `u32`.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+    #[inline]
+    pub(crate) fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl fmt::Display for RouteIdx {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<u32> for RouteIdx {
+    fn from(n: u32) -> Self {
+        Self(n)
+    }
+}
+impl From<RouteIdx> for u32 {
+    fn from(r: RouteIdx) -> Self {
+        r.0
+    }
+}
+
+/// Dense index of a trip within a [`Timetable`]. Indices are in `0..n_trips`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TripIdx(u32);
+
+impl TripIdx {
+    /// Construct from a raw `u32`. The caller is responsible for the value
+    /// being a valid index for the timetable in question.
+    pub const fn new(n: u32) -> Self {
+        Self(n)
+    }
+    /// The underlying `u32`.
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+    #[inline]
+    pub(crate) fn idx(self) -> usize {
+        self.0 as usize
+    }
+}
+
+impl fmt::Display for TripIdx {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<u32> for TripIdx {
+    fn from(n: u32) -> Self {
+        Self(n)
+    }
+}
+impl From<TripIdx> for u32 {
+    fn from(t: TripIdx) -> Self {
+        t.0
+    }
+}
+
 /// A journey found by the RAPTOR algorithm.
 ///
-/// Each journey consists of a sequence of steps (route, arrival stop) and a final arrival time.
-/// Multiple journeys may be returned for a single query, representing pareto-optimal trade-offs
-/// between fewer transfers and earlier arrival.
+/// Each journey consists of a sequence of (route, alight stop) steps and a
+/// final arrival time. Multiple journeys may be returned for a single query,
+/// representing pareto-optimal trade-offs between fewer transfers and earlier
+/// arrival.
 #[derive(Debug, Clone)]
-pub struct Journey<Route, Stop> {
-    /// Sequence of steps, each a (route, stop to get off at) pair.
+pub struct Journey {
+    /// Sequence of steps, each a (route, alight stop) pair.
     ///
-    /// The source stop is implicit — it is not part of the plan. Each entry means
-    /// "take this route until this stop". The first step boards at the source stop
-    /// passed to [`Timetable::raptor`], and each subsequent step boards at the stop
-    /// where the previous step got off.
-    ///
-    /// For example, going from stop `"A"` to stop `"D"` with two transfers, the plan
-    /// would look like:
-    ///
-    /// ```json
-    /// [("R1", "B"), ("R2", "C"), ("R3", "D")]
-    /// ```
-    ///
-    /// Read as: board `R1` at `A`, get off at `B`, board `R2` at `B`, get off at `C`,
-    /// board `R3` at `C`, get off at `D`.
-    ///
-    /// See the [`gtfs-timetable`](https://github.com/keogami/raptor-rs/blob/main/examples/gtfs-timetable.rs)
-    /// example for how to interpret and display a plan.
-    pub plan: Vec<(Route, Stop)>,
+    /// The source stop is implicit — it is not part of the plan. Each entry
+    /// means "take this route until this stop". The first step boards at the
+    /// source stop passed to [`Timetable::raptor`], and each subsequent step
+    /// boards at the stop where the previous step got off.
+    pub plan: Vec<(RouteIdx, StopIdx)>,
     /// Arrival time at the target stop, in seconds since midnight.
     pub arrival: Tau,
 }
@@ -74,12 +180,12 @@ pub struct Journey<Route, Stop> {
 /// reconstruction logic chains through walk entries without decrementing
 /// the round index.
 #[derive(Debug, Clone, Copy)]
-enum Step<Route, Stop> {
-    Boarded { from: Stop, route: Route },
-    Walked { from: Stop },
+enum Step {
+    Boarded { from: StopIdx, route: RouteIdx },
+    Walked { from: StopIdx },
 }
 
-type BoardingTree<Route, Stop> = BTreeMap<(K, Stop), Step<Route, Stop>>;
+type BoardingTree = BTreeMap<(K, StopIdx), Step>;
 
 /// Relax footpaths from every stop in `sources` at round `k`.
 ///
@@ -93,19 +199,19 @@ type BoardingTree<Route, Stop> = BTreeMap<(K, Stop), Step<Route, Stop>>;
 fn relax_footpaths_round<T: Timetable + ?Sized>(
     timetable: &T,
     k: K,
-    labels: &mut [BTreeMap<T::Stop, Tau>],
-    best_arrival: &mut BTreeMap<T::Stop, Tau>,
-    board_detail: &mut BoardingTree<T::Route, T::Stop>,
-    sources: &BTreeSet<T::Stop>,
-    pt: T::Stop,
-    out: &mut Vec<T::Stop>,
+    labels: &mut [BTreeMap<StopIdx, Tau>],
+    best_arrival: &mut BTreeMap<StopIdx, Tau>,
+    board_detail: &mut BoardingTree,
+    sources: &BTreeSet<StopIdx>,
+    pt: StopIdx,
+    out: &mut Vec<StopIdx>,
 ) {
     for &stop in sources {
         let stop_arrival = labels[k].get(&stop).copied().unwrap_or(Tau::MAX);
         if stop_arrival == Tau::MAX {
             continue;
         }
-        for &p_dash in timetable.get_footpaths_from(stop).iter() {
+        for &p_dash in timetable.get_footpaths_from(stop) {
             let via_walk = stop_arrival.saturating_add(timetable.get_transfer_time(stop, p_dash));
             let cur = labels[k].get(&p_dash).copied().unwrap_or(Tau::MAX);
             if via_walk < cur {
@@ -123,16 +229,12 @@ fn relax_footpaths_round<T: Timetable + ?Sized>(
     }
 }
 
-fn reconstruct_journey<R, S>(
-    tree: &BoardingTree<R, S>,
-    ps: S,
-    pt: S,
+fn reconstruct_journey(
+    tree: &BoardingTree,
+    ps: StopIdx,
+    pt: StopIdx,
     transfers: K,
-) -> Vec<Vec<(R, S)>>
-where
-    S: Ord + Copy + Debug,
-    R: Copy + Debug,
-{
+) -> Vec<Vec<(RouteIdx, StopIdx)>> {
     if tree.is_empty() {
         // Either no trips were taken, or we never reached target. The latter is
         // possible if ps and pt are nodes of a disjoint graph
@@ -189,24 +291,23 @@ where
 
 /// Models a route-based transit network for the RAPTOR algorithm.
 ///
-/// Implement this trait to describe your transit network's topology and schedule.
-/// The algorithm itself is provided as a default method ([`Timetable::raptor`]).
+/// Implement this trait to describe your transit network's topology and
+/// schedule. The algorithm itself is provided as a default method
+/// ([`Timetable::raptor`]).
+///
+/// Identifiers are dense `u32` indices ([`StopIdx`], [`RouteIdx`],
+/// [`TripIdx`]). Adapters intern from external IDs (e.g. GTFS string IDs)
+/// at construction time.
 ///
 /// # Footpath transitivity
 ///
 /// The footpath relation returned by [`get_footpaths_from`] must be
 /// **transitively closed**: if you can walk `A → B` and `B → C`, then
-/// `A → C` must also be reported as a footpath from `A` (with a
-/// transfer time at most the sum of the two legs). The algorithm relaxes
-/// footpaths once per round; it does not iterate to a fixed point. A
-/// non-closed relation will cause RAPTOR to miss journeys whose optimal
-/// path involves chained walks within a single round.
-///
-/// Most well-formed GTFS feeds satisfy this because `transfers.txt`
-/// entries are typically explicit pairs. If your data source gives you
-/// transitive walking edges (e.g. coordinate-derived footpaths within a
-/// max radius), close the relation yourself before returning it from
-/// `get_footpaths_from`.
+/// `A → C` must also be reported as a footpath from `A` (with a transfer
+/// time at most the sum of the two legs). The algorithm relaxes footpaths
+/// once per round; it does not iterate to a fixed point. A non-closed
+/// relation will cause RAPTOR to miss journeys whose optimal path involves
+/// chained walks within a single round.
 ///
 /// # No overtaking within a route
 ///
@@ -220,103 +321,75 @@ where
 /// [`get_footpaths_from`]: Timetable::get_footpaths_from
 /// [`get_earliest_trip`]: Timetable::get_earliest_trip
 pub trait Timetable {
-    /// Identifier for a transit stop.
-    type Stop: Ord + Copy + Debug;
-    /// Identifier for a transit route.
-    type Route: Ord + Copy + Debug;
-    /// Identifier for a specific trip (a single run of a route).
-    type Trip: Copy + Debug;
+    /// Number of stops in this timetable. Stop indices are in `0..n_stops()`.
+    fn n_stops(&self) -> usize;
+    /// Number of routes (post-pattern-splitting). Route indices are in
+    /// `0..n_routes()`.
+    fn n_routes(&self) -> usize;
 
     /// Returns all routes that serve the given stop.
-    fn get_routes_serving_stop(&self, stop: Self::Stop) -> Cow<'_, [Self::Route]>;
+    fn get_routes_serving_stop(&self, stop: StopIdx) -> &[RouteIdx];
 
-    /// Given two stops on a route, returns whichever appears earlier in the route's sequence.
-    fn get_earlier_stop(
-        &self,
-        route: Self::Route,
-        left: Self::Stop,
-        right: Self::Stop,
-    ) -> Self::Stop;
+    /// Given two stops on a route, returns whichever appears earlier in the
+    /// route's sequence.
+    fn get_earlier_stop(&self, route: RouteIdx, left: StopIdx, right: StopIdx) -> StopIdx;
 
-    /// Returns all stops on a route from the given stop onwards (inclusive), in sequence order.
-    fn get_stops_after(&self, route: Self::Route, stop: Self::Stop) -> Cow<'_, [Self::Stop]>;
+    /// Returns all stops on a route from the given stop onwards (inclusive),
+    /// in sequence order.
+    fn get_stops_after(&self, route: RouteIdx, stop: StopIdx) -> &[StopIdx];
 
-    /// Finds the earliest trip on a route departing at or after `at` from `stop`.
-    ///
-    /// Returns `None` if no such trip exists.
-    fn get_earliest_trip(
-        &self,
-        route: Self::Route,
-        at: Tau,
-        stop: Self::Stop,
-    ) -> Option<Self::Trip>;
+    /// Finds the earliest trip on a route departing at or after `at` from
+    /// `stop`. Returns `None` if no such trip exists.
+    fn get_earliest_trip(&self, route: RouteIdx, at: Tau, stop: StopIdx) -> Option<TripIdx>;
 
     /// Returns the arrival time of a trip at a stop.
-    fn get_arrival_time(&self, trip: Self::Trip, stop: Self::Stop) -> Tau;
+    fn get_arrival_time(&self, trip: TripIdx, stop: StopIdx) -> Tau;
 
     /// Returns the departure time of a trip at a stop.
-    fn get_departure_time(&self, trip: Self::Trip, stop: Self::Stop) -> Tau;
+    fn get_departure_time(&self, trip: TripIdx, stop: StopIdx) -> Tau;
 
-    /// Returns all stops reachable from the given stop via walking (footpaths).
+    /// Returns all stops reachable from the given stop via walking
+    /// (footpaths).
     ///
     /// **The footpath relation must be transitively closed.** See the
-    /// trait-level docs for details. Without closure, the algorithm will
-    /// miss journeys whose optimal path chains multiple walk legs in a
-    /// single round.
-    fn get_footpaths_from(&self, stop: Self::Stop) -> Cow<'_, [Self::Stop]>;
+    /// trait-level docs for details.
+    fn get_footpaths_from(&self, stop: StopIdx) -> &[StopIdx];
 
     /// Returns the walking transfer time between two stops, in seconds.
-    ///
-    /// The default implementation returns `1`. Override this for realistic transfer times.
-    fn get_transfer_time(&self, from: Self::Stop, to: Self::Stop) -> Tau {
+    /// The default implementation returns `1`.
+    fn get_transfer_time(&self, from: StopIdx, to: StopIdx) -> Tau {
         let (_, _) = (from, to);
         1
     }
 
     /// Runs the RAPTOR algorithm and returns all pareto-optimal journeys.
     ///
-    /// Finds journeys from `ps` (source) to `pt` (target) departing at or after `tau`,
-    /// using at most `transfers` steps. Returns a set of pareto-optimal journeys trading
-    /// off between fewer transfers and earlier arrival.
-    ///
-    /// "Pareto-optimal" here means: for any two returned journeys A and B,
-    /// neither weakly dominates the other in the (trip count, arrival)
-    /// ordering. The output is sorted by trip count ascending; arrival
-    /// strictly decreases as trip count increases.
-    ///
-    /// Returns an empty `Vec` if no journey exists.
-    ///
     /// Allocates fresh scratch buffers on every call. For server use cases
     /// running thousands of queries against the same timetable, prefer
     /// [`Timetable::raptor_with_cache`] and reuse a [`RaptorCache`].
-    fn raptor(
-        &self,
-        transfers: usize,
-        tau: usize,
-        ps: Self::Stop,
-        pt: Self::Stop,
-    ) -> Vec<Journey<Self::Route, Self::Stop>> {
-        let mut cache = RaptorCache::new();
+    fn raptor(&self, transfers: usize, tau: Tau, ps: StopIdx, pt: StopIdx) -> Vec<Journey>
+    where
+        Self: Sized,
+    {
+        let mut cache = RaptorCache::for_timetable(self);
         self.raptor_with_cache(&mut cache, transfers, tau, ps, pt)
     }
 
     /// Same as [`Timetable::raptor`], but reuses scratch buffers from
-    /// `cache`. The cache is reset at the start of the call.
-    ///
-    /// Use this when running many queries against the same timetable —
-    /// the per-query allocation cost (label maps, the boarding tree, the
-    /// Q map, the marked-stops set) becomes the dominant overhead
-    /// otherwise. A single `RaptorCache` is *not* thread-safe; use one
-    /// per worker thread.
+    /// `cache`. The cache is reset at the start of the call. Panics if the
+    /// cache was sized for a different timetable.
     fn raptor_with_cache(
         &self,
-        cache: &mut RaptorCache<Self::Route, Self::Stop>,
+        cache: &mut RaptorCache,
         transfers: usize,
-        tau: usize,
-        ps: Self::Stop,
-        pt: Self::Stop,
-    ) -> Vec<Journey<Self::Route, Self::Stop>> {
-        cache.reset_for_query(transfers);
+        tau: Tau,
+        ps: StopIdx,
+        pt: StopIdx,
+    ) -> Vec<Journey>
+    where
+        Self: Sized,
+    {
+        cache.reset_for_query(transfers, self.n_stops() as u32, self.n_routes() as u32);
         let RaptorCache {
             labels,
             best_arrival,
@@ -324,6 +397,7 @@ pub trait Timetable {
             marked_stops,
             q,
             walked_buf,
+            ..
         } = cache;
 
         labels[0].insert(ps, tau);
@@ -355,9 +429,8 @@ pub trait Timetable {
             q.clear();
             // find all routes that serve the marked stops, for evaluation in this round
             for &marked_stop in marked_stops.iter() {
-                for &route in self.get_routes_serving_stop(marked_stop).iter() {
+                for &route in self.get_routes_serving_stop(marked_stop) {
                     let p_dash = q.entry(route).or_insert(marked_stop);
-
                     *p_dash = self.get_earlier_stop(route, marked_stop, *p_dash);
                 }
             }
@@ -366,10 +439,10 @@ pub trait Timetable {
 
             // scanning each route
             for (&route, &p) in q.iter() {
-                let mut current_trip: Option<Self::Trip> = None;
+                let mut current_trip: Option<TripIdx> = None;
                 let mut boarding_stop = p;
 
-                for &pi in self.get_stops_after(route, p).iter() {
+                for &pi in self.get_stops_after(route, p) {
                     if let Some(arr) = current_trip.map(|trip| self.get_arrival_time(trip, pi)) {
                         let best_arrival_to_target = best_arrival.get(&pt).unwrap_or(&Tau::MAX);
                         let best_arrival_to_pi = best_arrival.get(&pi).unwrap_or(&Tau::MAX);
@@ -420,11 +493,10 @@ pub trait Timetable {
 
         let plans = reconstruct_journey(board_detail, ps, pt, transfers);
 
-        let mut journeys: Vec<Journey<Self::Route, Self::Stop>> = plans
+        let mut journeys: Vec<Journey> = plans
             .into_iter()
             .map(|plan| {
                 let arrival = *labels[plan.len()].get(&pt).unwrap();
-
                 Journey { plan, arrival }
             })
             .collect();
@@ -454,36 +526,38 @@ pub trait Timetable {
 
 /// Reusable scratch buffers for [`Timetable::raptor_with_cache`].
 ///
-/// All internal allocations the algorithm needs — round labels, the τ\*
-/// table, the boarding tree, the marked-stops set, the per-round route
-/// queue, and a small reusable scratch vector for footpath relaxation —
-/// live here. Construct one with [`RaptorCache::new`] and pass it to
-/// every query against the same timetable.
+/// A `RaptorCache` is sized for a specific timetable's stop and route counts.
+/// Construct with [`RaptorCache::for_timetable`]; passing it to a query
+/// against a differently-sized timetable will panic.
 ///
 /// A `RaptorCache` is *not* thread-safe and must not be shared across
-/// queries running concurrently. For parallel query workloads, give
-/// each worker thread its own cache.
-pub struct RaptorCache<R, S>
-where
-    R: Ord + Copy + Debug,
-    S: Ord + Copy + Debug,
-{
-    labels: Vec<BTreeMap<S, Tau>>,
-    best_arrival: BTreeMap<S, Tau>,
-    board_detail: BoardingTree<R, S>,
-    marked_stops: BTreeSet<S>,
-    q: BTreeMap<R, S>,
-    walked_buf: Vec<S>,
+/// queries running concurrently. For parallel query workloads, give each
+/// worker thread its own cache.
+pub struct RaptorCache {
+    n_stops: u32,
+    n_routes: u32,
+
+    labels: Vec<BTreeMap<StopIdx, Tau>>,
+    best_arrival: BTreeMap<StopIdx, Tau>,
+    board_detail: BoardingTree,
+    marked_stops: BTreeSet<StopIdx>,
+    q: BTreeMap<RouteIdx, StopIdx>,
+    walked_buf: Vec<StopIdx>,
 }
 
-impl<R, S> RaptorCache<R, S>
-where
-    R: Ord + Copy + Debug,
-    S: Ord + Copy + Debug,
-{
-    /// Constructs an empty cache.
-    pub fn new() -> Self {
+impl RaptorCache {
+    /// Constructs a cache sized for the given timetable.
+    pub fn for_timetable<T: Timetable + ?Sized>(tt: &T) -> Self {
+        Self::with_capacity(tt.n_stops() as u32, tt.n_routes() as u32)
+    }
+
+    /// Constructs a cache for a timetable with the given counts. Use
+    /// [`for_timetable`](Self::for_timetable) when you have the timetable
+    /// in scope.
+    pub fn with_capacity(n_stops: u32, n_routes: u32) -> Self {
         Self {
+            n_stops,
+            n_routes,
             labels: Vec::new(),
             best_arrival: BTreeMap::new(),
             board_detail: BTreeMap::new(),
@@ -493,9 +567,18 @@ where
         }
     }
 
-    /// Resets every buffer to "empty" while retaining the heap
-    /// allocations. Called at the start of every query.
-    fn reset_for_query(&mut self, transfers: K) {
+    fn reset_for_query(&mut self, transfers: K, tt_n_stops: u32, tt_n_routes: u32) {
+        assert_eq!(
+            self.n_stops, tt_n_stops,
+            "RaptorCache sized for {} stops but timetable has {}",
+            self.n_stops, tt_n_stops
+        );
+        assert_eq!(
+            self.n_routes, tt_n_routes,
+            "RaptorCache sized for {} routes but timetable has {}",
+            self.n_routes, tt_n_routes
+        );
+
         for m in self.labels.iter_mut() {
             m.clear();
         }
@@ -510,15 +593,5 @@ where
         self.marked_stops.clear();
         self.q.clear();
         self.walked_buf.clear();
-    }
-}
-
-impl<R, S> Default for RaptorCache<R, S>
-where
-    R: Ord + Copy + Debug,
-    S: Ord + Copy + Debug,
-{
-    fn default() -> Self {
-        Self::new()
     }
 }
