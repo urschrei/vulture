@@ -12,6 +12,7 @@
 //!     cargo run --release --example cross-city-bench
 
 use gtfs_structures::Gtfs;
+use jiff::civil::date;
 use raptor::gtfs::GtfsTimetable;
 use raptor::{RaptorCache, Tau, Timetable};
 use std::path::Path;
@@ -23,6 +24,10 @@ const QUERY_REPEATS: usize = 50;
 struct FeedSpec {
     name: &'static str,
     path: &'static str,
+    /// Service date used for calendar filtering. The bundled Delhi feed's
+    /// calendar ends 2025-12-31, so it gets an older date; the recently
+    /// fetched feeds use 2026-05-04 (a Monday).
+    service_date: jiff::civil::Date,
     queries: &'static [QuerySpec],
 }
 
@@ -32,91 +37,99 @@ struct QuerySpec {
     target_stop_id: &'static str,
 }
 
-const FEEDS: &[FeedSpec] = &[
-    FeedSpec {
-        name: "Delhi Metro",
-        path: "aux/dmrc_gtfs.zip",
-        queries: &[
-            QuerySpec {
-                label: "Dilshad Garden -> Shahdara (1 trip)",
-                origin_stop_id: "1",
-                target_stop_id: "4",
-            },
-            QuerySpec {
-                label: "Dilshad Garden -> Vishwavidyalaya (2 trips)",
-                origin_stop_id: "1",
-                target_stop_id: "44",
-            },
-            QuerySpec {
-                label: "Paschim Vihar West -> Ghitorni (3 trips)",
-                origin_stop_id: "29",
-                target_stop_id: "65",
-            },
-        ],
-    },
-    FeedSpec {
-        name: "Helsinki HSL",
-        path: "aux/external/helsinki.zip",
-        queries: &[
-            QuerySpec {
-                label: "Kamppi metro -> Itäkeskus metro (direct, M1/M2 line)",
-                origin_stop_id: "1040601",
-                target_stop_id: "1453601",
-            },
-            QuerySpec {
-                label: "Rautatientori -> Pasila (~3 km north, may need transfer)",
-                origin_stop_id: "1020112",
-                target_stop_id: "1174501",
-            },
-        ],
-    },
-    FeedSpec {
-        name: "Berlin VBB",
-        path: "aux/external/berlin.zip",
-        queries: &[QuerySpec {
-            // Eastbound S-Bahn platform pair: trip 277442991 boards Hbf at
-            // 09:15:24 and reaches Alex at 09:21:48 (~6.5 min). Until
-            // parent-station aggregation lands, callers picking Berlin
-            // platform IDs by hand have to match direction explicitly.
-            label: "Berlin Hauptbahnhof -> Alexanderplatz (S-Bahn, eastbound)",
-            origin_stop_id: "de:11000:900003201:1:50",
-            target_stop_id: "de:11000:900100003:1:50",
-        }],
-    },
-    FeedSpec {
-        name: "Paris IDFM",
-        path: "aux/external/paris.zip",
-        queries: &[
-            QuerySpec {
-                label: "Châtelet -> Gare du Nord",
-                origin_stop_id: "IDFM:monomodalStopPlace:45102",
-                target_stop_id: "IDFM:monomodalStopPlace:462394",
-            },
-            QuerySpec {
-                label: "Châtelet -> La Défense",
-                origin_stop_id: "IDFM:monomodalStopPlace:45102",
-                target_stop_id: "IDFM:monomodalStopPlace:470549",
-            },
-            QuerySpec {
-                label: "Châtelet -> Versailles Rive Droite",
-                origin_stop_id: "IDFM:monomodalStopPlace:45102",
-                target_stop_id: "IDFM:monomodalStopPlace:44602",
-            },
-        ],
-    },
-];
+// Service dates for each feed. Built once at startup; can't be in a
+// const because jiff's date constructor isn't const.
+fn feeds() -> Vec<FeedSpec> {
+    vec![
+        FeedSpec {
+            name: "Delhi Metro",
+            path: "aux/dmrc_gtfs.zip",
+            service_date: date(2024, 1, 15), // a Monday in the Delhi calendar window
+            queries: &[
+                QuerySpec {
+                    label: "Dilshad Garden -> Shahdara (1 trip)",
+                    origin_stop_id: "1",
+                    target_stop_id: "4",
+                },
+                QuerySpec {
+                    label: "Dilshad Garden -> Vishwavidyalaya (2 trips)",
+                    origin_stop_id: "1",
+                    target_stop_id: "44",
+                },
+                QuerySpec {
+                    label: "Paschim Vihar West -> Ghitorni (3 trips)",
+                    origin_stop_id: "29",
+                    target_stop_id: "65",
+                },
+            ],
+        },
+        FeedSpec {
+            name: "Helsinki HSL",
+            path: "aux/external/helsinki.zip",
+            service_date: date(2026, 5, 4),
+            queries: &[
+                QuerySpec {
+                    label: "Kamppi metro -> Itäkeskus metro (direct, M1/M2 line)",
+                    origin_stop_id: "1040601",
+                    target_stop_id: "1453601",
+                },
+                QuerySpec {
+                    label: "Rautatientori -> Pasila (~3 km north, may need transfer)",
+                    origin_stop_id: "1020112",
+                    target_stop_id: "1174501",
+                },
+            ],
+        },
+        FeedSpec {
+            name: "Berlin VBB",
+            path: "aux/external/berlin.zip",
+            service_date: date(2026, 5, 4),
+            queries: &[QuerySpec {
+                // Eastbound S-Bahn platform pair: trip 277442991 boards Hbf at
+                // 09:15:24 and reaches Alex at 09:21:48 (~6.5 min). Until
+                // parent-station aggregation lands, callers picking Berlin
+                // platform IDs by hand have to match direction explicitly.
+                label: "Berlin Hauptbahnhof -> Alexanderplatz (S-Bahn, eastbound)",
+                origin_stop_id: "de:11000:900003201:1:50",
+                target_stop_id: "de:11000:900100003:1:50",
+            }],
+        },
+        FeedSpec {
+            name: "Paris IDFM",
+            path: "aux/external/paris.zip",
+            service_date: date(2026, 5, 4),
+            queries: &[
+                QuerySpec {
+                    label: "Châtelet -> Gare du Nord",
+                    origin_stop_id: "IDFM:monomodalStopPlace:45102",
+                    target_stop_id: "IDFM:monomodalStopPlace:462394",
+                },
+                QuerySpec {
+                    label: "Châtelet -> La Défense",
+                    origin_stop_id: "IDFM:monomodalStopPlace:45102",
+                    target_stop_id: "IDFM:monomodalStopPlace:470549",
+                },
+                QuerySpec {
+                    label: "Châtelet -> Versailles Rive Droite",
+                    origin_stop_id: "IDFM:monomodalStopPlace:45102",
+                    target_stop_id: "IDFM:monomodalStopPlace:44602",
+                },
+            ],
+        },
+    ]
+}
 
 fn main() -> anyhow::Result<()> {
     println!("# Cross-city benchmark\n");
     println!(
         "Departure: 09:00 ({DEPARTURE_TIME}s since midnight); query repeats: {QUERY_REPEATS} (warm cache; median reported)\n"
     );
-    println!("| Feed | Stops | Routes | Trips | Load time |");
-    println!("|------|------:|-------:|------:|----------:|");
+    println!("| Feed | Service date | Stops | Routes | Trips (active on date) | Load time |");
+    println!("|------|--------------|------:|-------:|----------------------:|----------:|");
 
     let mut feed_results: Vec<(String, Vec<String>)> = Vec::new();
 
-    for feed in FEEDS {
+    for feed in feeds() {
         if !Path::new(feed.path).exists() {
             eprintln!("skipping {} (file missing: {})", feed.name, feed.path);
             continue;
@@ -124,15 +137,16 @@ fn main() -> anyhow::Result<()> {
 
         let load_start = Instant::now();
         let gtfs = Gtfs::new(feed.path)?;
-        let timetable = GtfsTimetable::new(&gtfs)?;
+        let timetable = GtfsTimetable::new(&gtfs, feed.service_date)?;
         let load_elapsed = load_start.elapsed();
 
         println!(
-            "| {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} |",
             feed.name,
+            feed.service_date,
             timetable.n_stops(),
             timetable.n_routes(),
-            gtfs.trips.len(),
+            timetable.n_trips(),
             format_duration(load_elapsed.as_nanos() as u64),
         );
 

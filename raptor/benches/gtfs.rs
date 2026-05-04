@@ -1,5 +1,6 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use gtfs_structures::Gtfs;
+use jiff::civil::{Date, date};
 use raptor::gtfs::GtfsTimetable;
 use raptor::{RaptorCache, Timetable};
 use std::hint::black_box;
@@ -8,6 +9,12 @@ const GTFS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../aux/dmrc_gtfs.z
 
 // Departure time: 09:00:00 in seconds since midnight.
 const DEPARTURE_TIME: usize = 9 * 3600;
+
+// A Monday inside the bundled Delhi feed's calendar window
+// (which ends 2025-12-31).
+fn service_date() -> Date {
+    date(2024, 1, 15)
+}
 
 // Query pairs picked to exercise different parts of the algorithm.
 // Stop IDs are GTFS string IDs from aux/dmrc_gtfs.zip (Delhi Metro).
@@ -31,7 +38,7 @@ fn bench_gtfs_load(c: &mut Criterion) {
     c.bench_function("gtfs_load", |b| {
         b.iter(|| {
             let gtfs = Gtfs::new(GTFS_PATH).unwrap();
-            let timetable = GtfsTimetable::new(&gtfs).unwrap();
+            let timetable = GtfsTimetable::new(&gtfs, service_date()).unwrap();
             black_box(&timetable);
         });
     });

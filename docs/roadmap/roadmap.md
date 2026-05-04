@@ -467,6 +467,19 @@ entirely — every trip is assumed to run on every day. This is wrong on
 real feeds, where trips have service patterns (weekdays only, Sundays
 only, holidays excluded).
 
+**Status:** landed (v0.6). `GtfsTimetable::new(&gtfs, service_date)`
+filters trips by `calendar.txt` / `calendar_dates.txt` at construction.
+The pre-Phase-0.11 hypothesis that this caused the Paris ARR<DEP
+results turned out to be wrong (loop routes were the actual cause —
+see Phase 0.11), but calendar filtering remains a soundness
+prerequisite for any feed with multi-day service patterns: without it,
+queries effectively run against an aggregated "best of all days" trip
+set rather than a specific day's schedule.
+
+The historical context below is preserved for reference.
+
+---
+
 **Promoted to Phase 0.10 (soundness).** The cross-city benchmarking work
 in v0.4 confirmed this produces silently-wrong journey output on
 multi-day GTFS feeds (Paris IDFM returns "best journey" with arrival

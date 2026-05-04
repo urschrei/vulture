@@ -12,12 +12,15 @@
 //!
 //! ```no_run
 //! use gtfs_structures::Gtfs;
+//! use jiff::civil::date;
 //! use raptor::Timetable;
 //! use raptor::gtfs::GtfsTimetable;
 //!
 //! # fn main() -> anyhow::Result<()> {
 //! let gtfs = Gtfs::new("path/to/gtfs.zip")?;
-//! let timetable = GtfsTimetable::new(&gtfs)?;
+//! // GTFS timetables are pinned to a specific service date — trips whose
+//! // service_id is not active on this day are filtered out at construction.
+//! let timetable = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?;
 //!
 //! // `raptor` takes dense u32 indices, not GTFS string IDs — resolve first.
 //! let start = timetable.stop_idx("dilshad_garden").expect("unknown stop");

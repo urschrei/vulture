@@ -11,21 +11,24 @@ locally with the steps in [Reproduction](#reproduction).
 
 ## Feed scale and load time
 
-`load time` is one-shot construction: parsing the GTFS zip + interning
-identifiers + building the per-route arrival/departure tables.
+`load time` is one-shot construction: parsing the GTFS zip, applying
+calendar filtering for the chosen service date, interning identifiers,
+and building the per-route arrival/departure tables.
 
-| Feed         | Stops  | Routes (synthetic) | Trips   | Load time |
-|--------------|-------:|-------------------:|--------:|----------:|
-| Delhi Metro  |    262 |                 36 |   5,438 |    116 ms |
-| Helsinki HSL |  8,376 |              2,851 | 490,033 |   13.94 s |
-| Berlin VBB   | 41,986 |             18,194 | 275,263 |    7.54 s |
-| Paris IDFM   | 54,018 |             13,848 | 459,152 |   12.27 s |
+| Feed         | Service date | Stops  | Routes (synthetic, post-filter) | Trips (active) | Load time |
+|--------------|--------------|-------:|------------------------------:|---------------:|----------:|
+| Delhi Metro  | 2024-01-15   |    262 |                            35 |          5,379 |    101 ms |
+| Helsinki HSL | 2026-05-04   |  8,376 |                           912 |         24,379 |   11.28 s |
+| Berlin VBB   | 2026-05-04   | 41,986 |                        10,758 |         71,037 |    6.67 s |
+| Paris IDFM   | 2026-05-04   | 54,018 |                         8,621 |        145,551 |   10.61 s |
 
 The "Routes" column counts the *synthetic* routes the adapter creates
-after splitting each GTFS `route_id` by stop pattern and overtaking.
-For large multimodal feeds this can be several times the count of GTFS
-`route_id`s, which is why Berlin's 18k synthetics map to far fewer
-underlying lines.
+after splitting each GTFS `route_id` by stop pattern and overtaking,
+and after dropping any synthetic that has no trips active on the
+service date. The "Trips (active)" column shows how many trips
+survived calendar filtering — Helsinki's feed contains 490k trips
+across many service days, of which only ~5% run on a single Monday;
+Berlin runs ~26% and Paris ~32% on a typical Monday.
 
 Load time is a one-time cost paid at startup; queries against the
 loaded timetable do not re-incur it.
@@ -43,9 +46,9 @@ multi-leg journeys use shared physical interchange stops.
 
 | Query                                              | Median latency |              Result |
 |----------------------------------------------------|---------------:|--------------------:|
-| Dilshad Garden → Shahdara (1 trip, Red Line east)  |         1.9 µs | arr 09:09:32 (9 m)  |
-| Dilshad Garden → Vishwavidyalaya (2 trips)         |          17 µs | arr 09:31:49 (32 m) |
-| Paschim Vihar West → Ghitorni (3 trips, 3 lines)   |          35 µs | arr 10:22:52 (83 m) |
+| Dilshad Garden → Shahdara (1 trip, Red Line east)  |         1.4 µs | arr 09:09:32 (9 m)  |
+| Dilshad Garden → Vishwavidyalaya (2 trips)         |          16 µs | arr 09:31:49 (32 m) |
+| Paschim Vihar West → Ghitorni (3 trips, 3 lines)   |          37 µs | arr 10:22:52 (83 m) |
 
 ### Helsinki HSL
 
@@ -64,7 +67,7 @@ discussed in [Known limitations](#known-limitations) below.
 
 | Query                                                              | Median latency |              Result |
 |--------------------------------------------------------------------|---------------:|--------------------:|
-| Berlin Hauptbahnhof → Alexanderplatz (S-Bahn, eastbound platforms) |          92 µs | arr 09:20:36 (20 m) |
+| Berlin Hauptbahnhof → Alexanderplatz (S-Bahn, eastbound platforms) |          88 µs | arr 09:20:36 (20 m) |
 
 The 20-minute travel time is the actual S-Bahn journey from Hbf to
 Alex *plus the wait* for the next eastbound train: in this snapshot,
@@ -84,9 +87,9 @@ to match direction explicitly.
 
 | Query                              | Median latency |              Result |
 |------------------------------------|---------------:|--------------------:|
-| Châtelet → Gare du Nord            |        0.91 ms | arr 09:05:00 (5 m)  |
-| Châtelet → La Défense              |         1.7 ms | arr 09:10:09 (10 m) |
-| Châtelet → Versailles Rive Droite  |          38 ms | arr 09:43:00 (43 m) |
+| Châtelet → Gare du Nord            |        0.41 ms | arr 09:05:00 (5 m)  |
+| Châtelet → La Défense              |         0.6 ms | arr 09:10:09 (10 m) |
+| Châtelet → Versailles Rive Droite  |         9.8 ms | arr 09:43:00 (43 m) |
 
 All three queries return single sensible journeys — the loop-route
 soundness bug that produced ARR<DEP results in earlier benchmark runs
@@ -156,15 +159,15 @@ loop trips and the algorithm passes against the brute-force reference
 solver. The cross-city Paris queries above now return single sensible
 journeys.
 
-### 3. No calendar / service-day filtering
+### 3. Calendar / service-day filtering — fixed in v0.6 (Phase 0.10)
 
-Roadmap item 3.3, promoted to Phase 0.10 (soundness). The GTFS
-adapter ignores `calendar.txt` / `calendar_dates.txt` and treats
-every trip as running on every day. This is independent of the
-loop-route issue above, but for any feed with many service patterns
-spanning weeks or months, queries currently consider trips from all
-service days simultaneously. Filter `gtfs.trips` to a single service
-date before construction as a workaround.
+`GtfsTimetable::new(&gtfs, service_date)` now takes a
+`jiff::civil::Date` and filters trips by `calendar.txt` /
+`calendar_dates.txt` at construction. The cross-city numbers above
+reflect this — each feed gets a representative weekday in its calendar
+window, and only trips active on that day enter the timetable. Per-feed
+trip counts dropped substantially (Helsinki's 490k → 35k, Paris's 459k
+→ 49k), with corresponding query-latency speedups in the 3–6× range.
 
 ### 4. Transfer-graph density
 

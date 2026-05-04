@@ -1,7 +1,8 @@
-// Usage: cargo run --example gtfs-timetable <path_to_zip> <start_stop> <target_stop>
+// Usage: cargo run --example gtfs-timetable <path_to_zip> <YYYY-MM-DD> <start_stop> <target_stop>
 
 use gtfs_structures::Gtfs;
 use humantime::format_duration;
+use jiff::civil::Date;
 use raptor::{Journey, Timetable, gtfs::GtfsTimetable};
 use std::{env, time::Duration};
 
@@ -12,20 +13,21 @@ fn main() -> anyhow::Result<()> {
     .init();
 
     let args: Vec<String> = env::args().collect();
-    if args.len() != 4 {
+    if args.len() != 5 {
         eprintln!(
-            "Usage: {} <path_to_zip> <start_stop> <target_stop>",
+            "Usage: {} <path_to_zip> <YYYY-MM-DD> <start_stop> <target_stop>",
             args[0]
         );
         std::process::exit(1);
     }
 
     let path = &args[1];
-    let start = args[2].as_str();
-    let target = args[3].as_str();
+    let service_date: Date = args[2].parse()?;
+    let start = args[3].as_str();
+    let target = args[4].as_str();
 
     let gtfs = Gtfs::new(path)?;
-    let timetable = GtfsTimetable::new(&gtfs)?;
+    let timetable = GtfsTimetable::new(&gtfs, service_date)?;
 
     let start_idx = timetable
         .stop_idx(start)

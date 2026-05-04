@@ -20,10 +20,51 @@
 
 use std::collections::HashMap;
 
-use gtfs_structures::Gtfs;
+use chrono::{Datelike, NaiveDate, Weekday};
+use gtfs_structures::{Exception, Gtfs};
+use jiff::civil::Date;
 use smallvec::SmallVec;
 
 use crate::{RouteIdx, StopIdx, Tau, Timetable, TripIdx};
+
+/// Returns true iff `service_id` is active on `date` per the GTFS feed's
+/// `calendar.txt` and `calendar_dates.txt` rules.
+///
+/// Resolution order: an entry in `calendar_dates.txt` for the exact
+/// date trumps `calendar.txt`. If `calendar_dates.txt` has no entry,
+/// `calendar.txt` decides via the day-of-week flags constrained by
+/// the service's `start_date`/`end_date` window. A service that
+/// appears in neither file is considered inactive.
+fn is_service_active(gtfs: &Gtfs, service_id: &str, date: NaiveDate) -> bool {
+    if let Some(cdates) = gtfs.calendar_dates.get(service_id)
+        && let Some(cd) = cdates.iter().find(|cd| cd.date == date)
+    {
+        return matches!(cd.exception_type, Exception::Added);
+    }
+    if let Some(cal) = gtfs.calendar.get(service_id) {
+        if date < cal.start_date || date > cal.end_date {
+            return false;
+        }
+        return match date.weekday() {
+            Weekday::Mon => cal.monday,
+            Weekday::Tue => cal.tuesday,
+            Weekday::Wed => cal.wednesday,
+            Weekday::Thu => cal.thursday,
+            Weekday::Fri => cal.friday,
+            Weekday::Sat => cal.saturday,
+            Weekday::Sun => cal.sunday,
+        };
+    }
+    false
+}
+
+/// Convert a `jiff::civil::Date` to `chrono::NaiveDate` at the GTFS
+/// boundary. `gtfs-structures` exposes calendar dates as `chrono`; the
+/// rest of this crate uses `jiff` so users only see one date type.
+fn jiff_to_chrono(d: Date) -> NaiveDate {
+    NaiveDate::from_ymd_opt(d.year() as i32, d.month() as u32, d.day() as u32)
+        .expect("jiff date is a valid civil date")
+}
 
 const TYPICAL_ROUTES_PER_STOP: usize = 8;
 const TYPICAL_TRANSFERS_PER_STOP: usize = 4;
@@ -91,7 +132,13 @@ pub struct GtfsTimetable<'gtfs> {
 }
 
 impl<'gtfs> GtfsTimetable<'gtfs> {
-    /// Creates a new timetable from a parsed GTFS feed.
+    /// Creates a new timetable from a parsed GTFS feed for a specific
+    /// service date.
+    ///
+    /// Trips whose `service_id` is not active on `service_date` (per
+    /// `calendar.txt` and `calendar_dates.txt`) are filtered out at
+    /// construction. The returned timetable contains only trips that
+    /// run on `service_date`.
     ///
     /// Validates that every trip references existing stops and has
     /// stop_times with departure times, then interns identifiers to dense
@@ -105,7 +152,9 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
     /// the transitive closure. The [`Timetable`] trait requires the
     /// footpath relation to be transitively closed (see the trait-level
     /// docs).
-    pub fn new(gtfs: &'gtfs Gtfs) -> GtfsResult<Self> {
+    pub fn new(gtfs: &'gtfs Gtfs, service_date: Date) -> GtfsResult<Self> {
+        let date_chrono = jiff_to_chrono(service_date);
+
         // 1. Intern stops in iteration order.
         let mut stop_ids: Vec<&'gtfs str> = Vec::with_capacity(gtfs.stops.len());
         let mut stop_by_id: HashMap<&'gtfs str, StopIdx> = HashMap::with_capacity(gtfs.stops.len());
@@ -115,11 +164,15 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             stop_by_id.insert(stop_id.as_str(), idx);
         }
 
-        // 2. Validate trips and group by (route_id, stop_sequence) using
-        //    interned stop indices.
+        // 2. Validate trips active on `service_date` and group by
+        //    (route_id, stop_sequence) using interned stop indices. Trips
+        //    on inactive services are skipped silently.
         let mut groups: std::collections::BTreeMap<(&'gtfs str, Vec<StopIdx>), Vec<&'gtfs str>> =
             std::collections::BTreeMap::new();
         for (trip_id, trip) in &gtfs.trips {
+            if !is_service_active(gtfs, &trip.service_id, date_chrono) {
+                continue;
+            }
             if trip.stop_times.is_empty() {
                 return Err(GtfsError::MissingStopTimes(trip_id.clone()));
             }
@@ -260,6 +313,12 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             footpaths_for_stops,
             transfer_times,
         })
+    }
+
+    /// Number of trips active on the timetable's service date (i.e. the
+    /// trips that survived calendar filtering at construction).
+    pub fn n_trips(&self) -> usize {
+        self.trip_ids.len()
     }
 
     /// Returns the original GTFS `stop_id` for the given index.
@@ -406,7 +465,7 @@ impl<'gtfs> Timetable for GtfsTimetable<'gtfs> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gtfs_structures::StopTime;
+    use gtfs_structures::{Calendar, CalendarDate, StopTime};
 
     fn st(arr: u32, dep: u32) -> StopTime {
         StopTime {
@@ -414,6 +473,95 @@ mod tests {
             departure_time: Some(dep),
             ..Default::default()
         }
+    }
+
+    /// Build a minimal `Gtfs` with one calendar entry running Mon-Fri
+    /// throughout 2026 for service "weekday".
+    fn weekday_only_feed() -> Gtfs {
+        let mut g = Gtfs::default();
+        g.calendar.insert(
+            "weekday".into(),
+            Calendar {
+                id: "weekday".into(),
+                monday: true,
+                tuesday: true,
+                wednesday: true,
+                thursday: true,
+                friday: true,
+                saturday: false,
+                sunday: false,
+                start_date: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(),
+            },
+        );
+        g
+    }
+
+    fn ymd(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn calendar_active_on_weekday_inside_window() {
+        let gtfs = weekday_only_feed();
+        // 2026-05-04 is a Monday inside the window.
+        assert!(is_service_active(&gtfs, "weekday", ymd(2026, 5, 4)));
+    }
+
+    #[test]
+    fn calendar_inactive_on_weekend_inside_window() {
+        let gtfs = weekday_only_feed();
+        // 2026-05-02 is a Saturday — flag is false.
+        assert!(!is_service_active(&gtfs, "weekday", ymd(2026, 5, 2)));
+    }
+
+    #[test]
+    fn calendar_inactive_outside_date_window() {
+        let gtfs = weekday_only_feed();
+        // 2025-12-31 is a Wednesday but before start_date.
+        assert!(!is_service_active(&gtfs, "weekday", ymd(2025, 12, 31)));
+        // 2027-01-04 is a Monday but after end_date.
+        assert!(!is_service_active(&gtfs, "weekday", ymd(2027, 1, 4)));
+    }
+
+    #[test]
+    fn calendar_dates_added_overrides_calendar_inactive() {
+        let mut gtfs = weekday_only_feed();
+        // Add a Saturday exception.
+        gtfs.calendar_dates.insert(
+            "weekday".into(),
+            vec![CalendarDate {
+                service_id: "weekday".into(),
+                date: ymd(2026, 5, 2),
+                exception_type: Exception::Added,
+            }],
+        );
+        assert!(is_service_active(&gtfs, "weekday", ymd(2026, 5, 2)));
+    }
+
+    #[test]
+    fn calendar_dates_deleted_overrides_calendar_active() {
+        let mut gtfs = weekday_only_feed();
+        // Cancel the Monday 2026-05-04 service.
+        gtfs.calendar_dates.insert(
+            "weekday".into(),
+            vec![CalendarDate {
+                service_id: "weekday".into(),
+                date: ymd(2026, 5, 4),
+                exception_type: Exception::Deleted,
+            }],
+        );
+        assert!(!is_service_active(&gtfs, "weekday", ymd(2026, 5, 4)));
+    }
+
+    #[test]
+    fn unknown_service_id_is_inactive() {
+        let gtfs = weekday_only_feed();
+        assert!(!is_service_active(
+            &gtfs,
+            "no-such-service",
+            ymd(2026, 5, 4)
+        ));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "raptor"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 authors = ["keogami <https://github.com/keogami>", "Stephan Hügel <https://github.com/urschrei>"]
 description = "Rust impl of RAPTOR (Round-bAsed Public Transit Routing)"
@@ -33,9 +33,11 @@ harness = false
 required-features = ["gtfs-bench"]
 
 [dependencies]
+chrono = { version = "0.4", default-features = false }
 dot_graph = { version = "0.2", optional = true }
 fixedbitset = "0.5"
 gtfs-structures = "0.46.1"
+jiff = "0.2"
 log = "0.4.29"
 smallvec = "1.15.1"
 thiserror = "2.0.18"

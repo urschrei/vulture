@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.6.0] — 2026-05-04
+
+Phase 0.10 (soundness). The GTFS adapter now filters trips by
+`calendar.txt` / `calendar_dates.txt` at construction. Without this,
+the algorithm previously considered every trip in the feed regardless
+of which day it actually ran, producing technically-not-wrong but
+practically-bizarre answers on multi-day feeds.
+
+### Breaking changes
+
+- `GtfsTimetable::new(&gtfs)` is now
+  `GtfsTimetable::new(&gtfs, service_date: jiff::civil::Date)`. Trips
+  whose `service_id` is not active on `service_date` are filtered out;
+  the constructed timetable contains only the day's trips.
+- `GtfsTimetable` now exposes `n_trips()` returning the count of trips
+  active on the timetable's service date.
+
+### Added
+
+- `jiff` dependency (used for the public service-date type).
+- `chrono` dependency (already present transitively via
+  `gtfs-structures`; now declared directly because the calendar
+  resolution code needs `chrono::NaiveDate` at the
+  `gtfs-structures` boundary).
+- `gtfs::is_service_active` (private) — six new unit tests cover the
+  calendar/calendar_dates resolution rules.
+
+### Performance
+
+- Calendar filtering reduces the synthetic-route count by 38–68% on
+  the cross-city benchmark feeds (Helsinki HSL: 2,851 → 912; Berlin
+  VBB: 18,194 → 10,757; Paris IDFM: 13,848 → 8,622). Query latency
+  drops correspondingly:
+  - Paris Châtelet → Versailles: 35 ms → 9.75 ms
+  - Helsinki Rautatientori → Pasila search: 14.6 ms → 2.4 ms
+
 ## [0.5.0] — 2026-05-04
 
 Phase 0.11 (soundness). Fixes a bug surfaced by cross-city

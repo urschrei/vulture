@@ -15,11 +15,14 @@ implements the `Timetable` trait for it. Most users start here.
 
 ```rust
 use gtfs_structures::Gtfs;
+use jiff::civil::date;
 use raptor::Timetable;
 use raptor::gtfs::GtfsTimetable;
 
 let gtfs = Gtfs::new("path/to/gtfs.zip")?;
-let timetable = GtfsTimetable::new(&gtfs)?;
+// GTFS feeds describe many service days; pin the timetable to one date.
+// Trips whose service_id is not active on this day are filtered out.
+let timetable = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?;
 
 // `raptor` takes dense u32 indices, not GTFS string IDs — resolve first.
 let start = timetable.stop_idx("dilshad_garden").expect("unknown stop");
