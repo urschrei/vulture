@@ -2,23 +2,63 @@
 
 //! Rust implementation of the RAPTOR (Round-bAsed Public Transit Routing) algorithm.
 //!
-//! RAPTOR computes pareto-optimal journeys in a public transit network, trading off
-//! between arrival time and number of transfers. Implement the [`Timetable`] trait
-//! for your transit data, then call [`Timetable::raptor`] to query for journeys.
+//! RAPTOR finds all Pareto-optimal journeys between two stops in a transit
+//! network, trading off between fewer transfers and earlier arrival.
 //!
-//! A ready-made implementation for GTFS feeds is available in the [`gtfs`] module.
+//! # Quick start: query a GTFS feed
 //!
-//! # Example
+//! Most users start with the bundled [`gtfs`] adapter, which wraps a parsed
+//! GTFS feed and implements [`Timetable`] for it.
 //!
 //! ```no_run
+//! use gtfs_structures::Gtfs;
 //! use raptor::Timetable;
+//! use raptor::gtfs::GtfsTimetable;
 //!
-//! // implement Timetable for your transit data, then:
-//! // let journeys = timetable.raptor(max_transfers, departure_time, source, target);
+//! # fn main() -> anyhow::Result<()> {
+//! let gtfs = Gtfs::new("path/to/gtfs.zip")?;
+//! let timetable = GtfsTimetable::new(&gtfs)?;
+//!
+//! // `raptor` takes dense u32 indices, not GTFS string IDs — resolve first.
+//! let start = timetable.stop_idx("dilshad_garden").expect("unknown stop");
+//! let target = timetable.stop_idx("vishwavidyalaya").expect("unknown stop");
+//!
+//! // 10 = max transfers; 32400 = depart at 09:00 (seconds since midnight).
+//! let journeys = timetable.raptor(10, 32400, start, target);
+//!
+//! for journey in &journeys {
+//!     print!("arrives {}s, plan: ", journey.arrival);
+//!     for (route_idx, stop_idx) in &journey.plan {
+//!         let route = timetable.route_id(*route_idx);
+//!         let stop = timetable.stop_id(*stop_idx);
+//!         print!("[{route} -> {stop}] ");
+//!     }
+//!     println!();
+//! }
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! Based on the paper:
-//! *Round-Based Public Transit Routing* by Daniel Delling, Thomas Pajor, and Renato F. Werneck.
+//! A returned [`Journey`]'s `plan` is a `Vec<(RouteIdx, StopIdx)>` — each
+//! entry means "take this route, get off at this stop", with the source stop
+//! implicit. The [`Journey`] type-level docs describe how walk legs at the
+//! end of a journey are represented.
+//!
+//! For server use cases doing many queries against the same timetable, reuse
+//! a [`RaptorCache`] via [`Timetable::raptor_with_cache`] to amortise
+//! scratch-buffer allocation.
+//!
+//! # Implementing [`Timetable`] for a custom backend
+//!
+//! If your data is not in GTFS form, implement the [`Timetable`] trait
+//! directly. Identifiers are dense `u32` newtypes ([`StopIdx`], [`RouteIdx`],
+//! [`TripIdx`]); your adapter is responsible for interning external IDs to
+//! dense indices at construction. The trait's docs spell out two contracts
+//! the algorithm relies on: footpath transitivity and no-overtaking within a
+//! route.
+//!
+//! Based on the paper: *Round-Based Public Transit Routing* by Daniel
+//! Delling, Thomas Pajor, and Renato F. Werneck.
 
 use std::collections::BTreeMap;
 use std::fmt;
