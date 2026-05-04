@@ -19,10 +19,7 @@ fn main() -> anyhow::Result<()> {
                 if dep < p {
                     bad += 1;
                     if shown < 10 {
-                        println!(
-                            "trip {trip_id} stop {i}: dep_time={} (prev was {})",
-                            dep, p
-                        );
+                        println!("trip {trip_id} stop {i}: dep_time={} (prev was {})", dep, p);
                         shown += 1;
                     }
                     break;
@@ -31,6 +28,9 @@ fn main() -> anyhow::Result<()> {
             prev_dep = Some(dep);
         }
     }
-    println!("\nbad (non-monotonic dep across stops) trips: {bad} / {}", gtfs.trips.len());
+    println!(
+        "\nbad (non-monotonic dep across stops) trips: {bad} / {}",
+        gtfs.trips.len()
+    );
     Ok(())
 }

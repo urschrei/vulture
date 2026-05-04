@@ -9,9 +9,6 @@ use raptor::{RouteIdx, StopIdx, Tau, Timetable, TripIdx};
 struct ReBoardingTimetable;
 
 const S: StopIdx = StopIdx::new(0);
-const A: StopIdx = StopIdx::new(1);
-const B: StopIdx = StopIdx::new(2);
-const C: StopIdx = StopIdx::new(3);
 const D: StopIdx = StopIdx::new(4);
 
 const R1: RouteIdx = RouteIdx::new(0);
@@ -31,63 +28,66 @@ impl Timetable for ReBoardingTimetable {
         3
     }
 
-    fn get_routes_serving_stop(&self, stop: StopIdx) -> &[RouteIdx] {
+    fn get_routes_serving_stop(&self, stop: StopIdx) -> &[(RouteIdx, u32)] {
+        // (route, earliest position of stop on that route)
         match stop.get() {
-            0 => &[R1, R2], // S
-            1 => &[R1, R3], // A
-            2 => &[R2, R3], // B
-            3 | 4 => &[R3], // C, D
+            0 => &[(R1, 0), (R2, 0)], // S
+            1 => &[(R1, 1), (R3, 0)], // A
+            2 => &[(R2, 1), (R3, 1)], // B
+            3 => &[(R3, 2)],          // C
+            4 => &[(R3, 3)],          // D
             _ => &[],
         }
     }
 
-    fn get_earlier_stop(&self, route: RouteIdx, left: StopIdx, right: StopIdx) -> StopIdx {
+    fn get_stops_after(&self, route: RouteIdx, pos: u32) -> &[StopIdx] {
+        const R1_STOPS: [StopIdx; 2] = [StopIdx::new(0), StopIdx::new(1)]; // S, A
+        const R2_STOPS: [StopIdx; 2] = [StopIdx::new(0), StopIdx::new(2)]; // S, B
+        const R3_STOPS: [StopIdx; 4] = [
+            StopIdx::new(1),
+            StopIdx::new(2),
+            StopIdx::new(3),
+            StopIdx::new(4),
+        ]; // A, B, C, D
         let order: &[StopIdx] = match route.get() {
-            0 => &[S, A],
-            1 => &[S, B],
-            2 => &[A, B, C, D],
-            _ => return left,
-        };
-        let l = order.iter().position(|&c| c == left).unwrap_or(99);
-        let r = order.iter().position(|&c| c == right).unwrap_or(99);
-        order[l.min(r)]
-    }
-
-    fn get_stops_after(&self, route: RouteIdx, stop: StopIdx) -> &[StopIdx] {
-        let order: &[StopIdx] = match route.get() {
-            0 => &[S, A],
-            1 => &[S, B],
-            2 => &[A, B, C, D],
+            0 => &R1_STOPS,
+            1 => &R2_STOPS,
+            2 => &R3_STOPS,
             _ => return &[],
         };
-        let pos = order.iter().position(|&c| c == stop).unwrap_or(0);
-        &order[pos..]
+        &order[pos as usize..]
     }
 
-    fn get_earliest_trip(&self, route: RouteIdx, at: Tau, stop: StopIdx) -> Option<TripIdx> {
+    fn stop_at(&self, route: RouteIdx, pos: u32) -> StopIdx {
+        let stops = self.get_stops_after(route, 0);
+        stops[pos as usize]
+    }
+
+    fn get_earliest_trip(&self, route: RouteIdx, at: Tau, pos: u32) -> Option<TripIdx> {
         match route.get() {
             0 => {
-                let dep = match stop.get() {
+                // R1: dep at pos 0 (S) = 0; pos 1 (A) is alight, irrelevant
+                let dep = match pos {
                     0 => 0,
-                    1 => 100,
                     _ => return None,
                 };
                 (at <= dep).then_some(R1_T1)
             }
             1 => {
-                let dep = match stop.get() {
+                // R2: dep at pos 0 (S) = 0
+                let dep = match pos {
                     0 => 0,
-                    2 => 30,
                     _ => return None,
                 };
                 (at <= dep).then_some(R2_T1)
             }
             2 => {
-                let (early_dep, late_dep) = match stop.get() {
-                    1 => (25, 105),
-                    2 => (30, 110),
-                    3 => (40, 120),
-                    4 => (50, 130),
+                // R3: pos 0=A dep 25/105, pos 1=B dep 30/110, pos 2=C dep 40/120
+                let (early_dep, late_dep) = match pos {
+                    0 => (25, 105),
+                    1 => (30, 110),
+                    2 => (40, 120),
+                    3 => (50, 130),
                     _ => return None,
                 };
                 if at <= early_dep {
@@ -102,30 +102,30 @@ impl Timetable for ReBoardingTimetable {
         }
     }
 
-    fn get_arrival_time(&self, trip: TripIdx, stop: StopIdx) -> Tau {
-        match (trip.get(), stop.get()) {
+    fn get_arrival_time(&self, trip: TripIdx, pos: u32) -> Tau {
+        match (trip.get(), pos) {
             (0, 1) => 100, // R1_T1 at A
-            (1, 2) => 30,  // R2_T1 at B
-            (3, 2) => 110,
-            (3, 3) => 120,
-            (3, 4) => 130, // R3_LATE
-            (2, 2) => 30,
-            (2, 3) => 40,
-            (2, 4) => 50, // R3_EARLY
+            (1, 1) => 30,  // R2_T1 at B
+            (3, 1) => 110,
+            (3, 2) => 120,
+            (3, 3) => 130, // R3_LATE
+            (2, 1) => 30,
+            (2, 2) => 40,
+            (2, 3) => 50, // R3_EARLY
             _ => Tau::MAX,
         }
     }
 
-    fn get_departure_time(&self, trip: TripIdx, stop: StopIdx) -> Tau {
-        match (trip.get(), stop.get()) {
+    fn get_departure_time(&self, trip: TripIdx, pos: u32) -> Tau {
+        match (trip.get(), pos) {
             (0, 0) => 0, // R1_T1 at S
             (1, 0) => 0, // R2_T1 at S
-            (3, 1) => 105,
-            (3, 2) => 110,
-            (3, 3) => 120, // R3_LATE
-            (2, 1) => 25,
-            (2, 2) => 30,
-            (2, 3) => 40, // R3_EARLY
+            (3, 0) => 105,
+            (3, 1) => 110,
+            (3, 2) => 120, // R3_LATE
+            (2, 0) => 25,
+            (2, 1) => 30,
+            (2, 2) => 40, // R3_EARLY
             _ => Tau::MAX,
         }
     }

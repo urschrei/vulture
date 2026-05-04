@@ -370,26 +370,42 @@ pub trait Timetable {
     /// `0..n_routes()`.
     fn n_routes(&self) -> usize;
 
-    /// Returns all routes that serve the given stop.
-    fn get_routes_serving_stop(&self, stop: StopIdx) -> &[RouteIdx];
+    /// Returns each route serving the given stop, paired with the *earliest*
+    /// position of `stop` within that route's sequence.
+    ///
+    /// For loop routes where `stop` appears more than once on a route, only
+    /// the smallest position is reported. Each route appears at most once
+    /// in the returned slice.
+    fn get_routes_serving_stop(&self, stop: StopIdx) -> &[(RouteIdx, u32)];
 
-    /// Given two stops on a route, returns whichever appears earlier in the
-    /// route's sequence.
-    fn get_earlier_stop(&self, route: RouteIdx, left: StopIdx, right: StopIdx) -> StopIdx;
+    /// Returns the route's stop sequence from `pos` onwards, inclusive.
+    ///
+    /// Iterating the returned slice with positional offsets gives the
+    /// algorithm `(pos + offset, stop_at_position)` pairs without ambiguity,
+    /// even when a route revisits stops.
+    ///
+    /// Panics if `pos` is out of range for the route.
+    fn get_stops_after(&self, route: RouteIdx, pos: u32) -> &[StopIdx];
 
-    /// Returns all stops on a route from the given stop onwards (inclusive),
-    /// in sequence order.
-    fn get_stops_after(&self, route: RouteIdx, stop: StopIdx) -> &[StopIdx];
+    /// Returns the stop at the given position within a route's sequence.
+    ///
+    /// Panics if `pos` is out of range for the route.
+    fn stop_at(&self, route: RouteIdx, pos: u32) -> StopIdx;
 
     /// Finds the earliest trip on a route departing at or after `at` from
-    /// `stop`. Returns `None` if no such trip exists.
-    fn get_earliest_trip(&self, route: RouteIdx, at: Tau, stop: StopIdx) -> Option<TripIdx>;
+    /// the stop at the given position within the route's sequence.
+    ///
+    /// `pos` disambiguates which visit of the stop to consider when the route
+    /// revisits it. Returns `None` if no trip departs at or after `at`.
+    fn get_earliest_trip(&self, route: RouteIdx, at: Tau, pos: u32) -> Option<TripIdx>;
 
-    /// Returns the arrival time of a trip at a stop.
-    fn get_arrival_time(&self, trip: TripIdx, stop: StopIdx) -> Tau;
+    /// Returns the arrival time of a trip at the given position within its
+    /// route's sequence.
+    fn get_arrival_time(&self, trip: TripIdx, pos: u32) -> Tau;
 
-    /// Returns the departure time of a trip at a stop.
-    fn get_departure_time(&self, trip: TripIdx, stop: StopIdx) -> Tau;
+    /// Returns the departure time of a trip at the given position within its
+    /// route's sequence.
+    fn get_departure_time(&self, trip: TripIdx, pos: u32) -> Tau;
 
     /// Returns all stops reachable from the given stop via walking
     /// (footpaths).
@@ -469,18 +485,23 @@ pub trait Timetable {
             let dst = &mut this_labels[0];
             dst.copy_from_slice(src);
 
-            // Build the route queue for this round.
+            // Build the route queue for this round. Each entry pairs a
+            // route with the earliest position on that route from which we
+            // can board this round. Stored positions are folded with `min`
+            // so multiple marked stops on the same route resolve to the
+            // earliest one.
             for stop_bit in marked_stops.ones() {
                 let marked_stop = StopIdx::new(stop_bit as u32);
-                for &route in self.get_routes_serving_stop(marked_stop) {
+                for &(route, pos) in self.get_routes_serving_stop(marked_stop) {
                     match q_entry[route.idx()] {
                         None => {
-                            q_entry[route.idx()] = Some(marked_stop);
+                            q_entry[route.idx()] = Some(pos);
                             q_routes.push(route);
                         }
-                        Some(prev) => {
-                            let earlier = self.get_earlier_stop(route, marked_stop, prev);
-                            q_entry[route.idx()] = Some(earlier);
+                        Some(prev_pos) => {
+                            if pos < prev_pos {
+                                q_entry[route.idx()] = Some(pos);
+                            }
                         }
                     }
                 }
@@ -489,12 +510,14 @@ pub trait Timetable {
             marked_stops.clear();
 
             for &route in q_routes.iter() {
-                let p = q_entry[route.idx()].expect("route in q_routes must have an entry");
+                let p_pos = q_entry[route.idx()].expect("route in q_routes must have an entry");
                 let mut current_trip: Option<TripIdx> = None;
-                let mut boarding_stop = p;
+                let mut boarding_stop = self.stop_at(route, p_pos);
 
-                for &pi in self.get_stops_after(route, p) {
-                    if let Some(arr) = current_trip.map(|trip| self.get_arrival_time(trip, pi)) {
+                for (offset, &pi) in self.get_stops_after(route, p_pos).iter().enumerate() {
+                    let pos = p_pos + offset as u32;
+
+                    if let Some(arr) = current_trip.map(|trip| self.get_arrival_time(trip, pos)) {
                         let best_to_pt = best_arrival[pt.idx()];
                         let best_to_pi = best_arrival[pi.idx()];
                         let time_to_beat = best_to_pi.min(best_to_pt);
@@ -515,10 +538,10 @@ pub trait Timetable {
 
                     let t_prev_pi = labels[k - 1][pi.idx()];
                     let dep_at_pi = current_trip
-                        .map(|trip| self.get_departure_time(trip, pi))
+                        .map(|trip| self.get_departure_time(trip, pos))
                         .unwrap_or(Tau::MAX);
                     if t_prev_pi <= dep_at_pi {
-                        current_trip = self.get_earliest_trip(route, t_prev_pi, pi);
+                        current_trip = self.get_earliest_trip(route, t_prev_pi, pos);
                         boarding_stop = pi;
                     }
                 }
@@ -607,11 +630,11 @@ pub struct RaptorCache {
     /// Bitset of marked stops, sized to n_stops.
     marked_stops: FixedBitSet,
 
-    /// Per-round route queue. `q_entry[r.idx()] = Some(boarding_stop)` when
+    /// Per-round route queue. `q_entry[r.idx()] = Some(boarding_pos)` when
     /// route r has been entered this round; `q_routes` is the dense list
     /// of routes that have entries (for cheap iteration without scanning
     /// `n_routes` empty slots).
-    q_entry: Vec<Option<StopIdx>>,
+    q_entry: Vec<Option<u32>>,
     q_routes: Vec<RouteIdx>,
 
     /// Scratch buffer for footpath relaxation output.

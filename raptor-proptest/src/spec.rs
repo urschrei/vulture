@@ -248,18 +248,19 @@ fn render_single_route_two_stops_one_trip() {
     };
     let tt = render(&spec);
 
-    let s0 = tt.stop_idx_of(&0u8);
-    let s1 = tt.stop_idx_of(&1u8);
+    let _s0 = tt.stop_idx_of(&0u8);
+    let _s1 = tt.stop_idx_of(&1u8);
     let r0 = tt.route_idx_of(&0u8);
 
-    let routes_at_0 = tt.get_routes_serving_stop(s0);
-    assert_eq!(routes_at_0, &[r0]);
+    let routes_at_0 = tt.get_routes_serving_stop(_s0);
+    assert_eq!(routes_at_0, &[(r0, 0)]);
 
-    let trip = tt.get_earliest_trip(r0, 0, s0).expect("trip exists");
-    assert_eq!(tt.get_arrival_time(trip, s0), 100);
-    assert_eq!(tt.get_departure_time(trip, s0), 105);
-    assert_eq!(tt.get_arrival_time(trip, s1), 125);
-    assert_eq!(tt.get_departure_time(trip, s1), 125);
+    // Position 0 of route r0 corresponds to stop 0; position 1 to stop 1.
+    let trip = tt.get_earliest_trip(r0, 0, 0).expect("trip exists");
+    assert_eq!(tt.get_arrival_time(trip, 0), 100);
+    assert_eq!(tt.get_departure_time(trip, 0), 105);
+    assert_eq!(tt.get_arrival_time(trip, 1), 125);
+    assert_eq!(tt.get_departure_time(trip, 1), 125);
 }
 
 #[test]
@@ -314,6 +315,10 @@ pub struct LayerBounds {
     pub footpaths_max: u8,
     pub stop_seq_max: u8,
     pub allow_footpaths: bool,
+    /// When true, a route's stop_sequence may contain duplicate stop ids
+    /// (a "loop route" — the trip revisits the same stop). When false,
+    /// every stop in a route's sequence is distinct.
+    pub allow_loops: bool,
 }
 
 pub fn layer1_bounds() -> LayerBounds {
@@ -325,6 +330,7 @@ pub fn layer1_bounds() -> LayerBounds {
         footpaths_max: 0,
         stop_seq_max: 4,
         allow_footpaths: false,
+        allow_loops: false,
     }
 }
 
@@ -337,6 +343,7 @@ pub fn layer2_bounds() -> LayerBounds {
         footpaths_max: 4,
         stop_seq_max: 4,
         allow_footpaths: true,
+        allow_loops: false,
     }
 }
 
@@ -349,6 +356,7 @@ pub fn layer3_bounds() -> LayerBounds {
         footpaths_max: 6,
         stop_seq_max: 4,
         allow_footpaths: true,
+        allow_loops: true,
     }
 }
 
@@ -361,16 +369,28 @@ fn route_spec(tc: hegel::TestCase, n_stops: u8, bounds: LayerBounds) -> RouteSpe
             .min_value(stop_seq_min)
             .max_value(stop_seq_cap),
     );
-    let stop_sequence: Vec<u8> = tc.draw(
-        generators::vecs(
-            generators::integers::<u8>()
-                .min_value(0)
-                .max_value(n_stops - 1),
+    let stop_sequence: Vec<u8> = if bounds.allow_loops {
+        tc.draw(
+            generators::vecs(
+                generators::integers::<u8>()
+                    .min_value(0)
+                    .max_value(n_stops - 1),
+            )
+            .min_size(stop_count as usize)
+            .max_size(stop_count as usize),
         )
-        .min_size(stop_count as usize)
-        .max_size(stop_count as usize)
-        .unique(true),
-    );
+    } else {
+        tc.draw(
+            generators::vecs(
+                generators::integers::<u8>()
+                    .min_value(0)
+                    .max_value(n_stops - 1),
+            )
+            .min_size(stop_count as usize)
+            .max_size(stop_count as usize)
+            .unique(true),
+        )
+    };
 
     let leg_count = stop_sequence.len() - 1;
     let leg_durations: Vec<u16> = tc.draw(

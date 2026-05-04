@@ -73,13 +73,11 @@ const FEEDS: &[FeedSpec] = &[
     FeedSpec {
         name: "Berlin VBB",
         path: "aux/external/berlin.zip",
-        queries: &[
-            QuerySpec {
-                label: "Berlin Hauptbahnhof -> Alexanderplatz (S-Bahn platforms)",
-                origin_stop_id: "de:11000:900003201:3:54",
-                target_stop_id: "de:11000:900100003:1:50",
-            },
-        ],
+        queries: &[QuerySpec {
+            label: "Berlin Hauptbahnhof -> Alexanderplatz (S-Bahn platforms)",
+            origin_stop_id: "de:11000:900003201:3:54",
+            target_stop_id: "de:11000:900100003:1:50",
+        }],
     },
     FeedSpec {
         name: "Paris IDFM",
@@ -106,7 +104,9 @@ const FEEDS: &[FeedSpec] = &[
 
 fn main() -> anyhow::Result<()> {
     println!("# Cross-city benchmark\n");
-    println!("Departure: 09:00 ({DEPARTURE_TIME}s since midnight); query repeats: {QUERY_REPEATS} (warm cache; median reported)\n");
+    println!(
+        "Departure: 09:00 ({DEPARTURE_TIME}s since midnight); query repeats: {QUERY_REPEATS} (warm cache; median reported)\n"
+    );
     println!("| Feed | Stops | Routes | Trips | Load time |");
     println!("|------|------:|-------:|------:|----------:|");
 
@@ -168,13 +168,8 @@ fn main() -> anyhow::Result<()> {
             let mut last_journey_count: usize = 0;
             for _ in 0..QUERY_REPEATS {
                 let t0 = Instant::now();
-                let journeys = timetable.raptor_with_cache(
-                    &mut cache,
-                    10,
-                    DEPARTURE_TIME,
-                    origin,
-                    target,
-                );
+                let journeys =
+                    timetable.raptor_with_cache(&mut cache, 10, DEPARTURE_TIME, origin, target);
                 samples_ns.push(t0.elapsed().as_nanos());
                 last_journey_count = journeys.len();
                 last_arrival = journeys.iter().map(|j| j.arrival).min();
@@ -184,14 +179,13 @@ fn main() -> anyhow::Result<()> {
             let arrival_str = match last_arrival {
                 Some(t) if t >= DEPARTURE_TIME => {
                     let travel = t - DEPARTURE_TIME;
-                    format!(
-                        "{}m {}s (arr {})",
-                        travel / 60,
-                        travel % 60,
-                        format_hms(t)
-                    )
+                    format!("{}m {}s (arr {})", travel / 60, travel % 60, format_hms(t))
                 }
-                Some(t) => format!("ARR<DEP ({} < {})", format_hms(t), format_hms(DEPARTURE_TIME)),
+                Some(t) => format!(
+                    "ARR<DEP ({} < {})",
+                    format_hms(t),
+                    format_hms(DEPARTURE_TIME)
+                ),
                 None => "no journey".to_string(),
             };
             query_lines.push(format!(

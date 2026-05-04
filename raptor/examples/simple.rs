@@ -11,20 +11,24 @@ impl Timetable for SingleRoute {
         1
     }
 
-    fn get_routes_serving_stop(&self, _stop: StopIdx) -> &[RouteIdx] {
-        const ROUTES: [RouteIdx; 1] = [RouteIdx::new(0)];
-        &ROUTES
+    fn get_routes_serving_stop(&self, stop: StopIdx) -> &[(RouteIdx, u32)] {
+        // Stop n is at position n on the single route.
+        const SLOTS: [[(RouteIdx, u32); 1]; 10] = [
+            [(RouteIdx::new(0), 0)],
+            [(RouteIdx::new(0), 1)],
+            [(RouteIdx::new(0), 2)],
+            [(RouteIdx::new(0), 3)],
+            [(RouteIdx::new(0), 4)],
+            [(RouteIdx::new(0), 5)],
+            [(RouteIdx::new(0), 6)],
+            [(RouteIdx::new(0), 7)],
+            [(RouteIdx::new(0), 8)],
+            [(RouteIdx::new(0), 9)],
+        ];
+        &SLOTS[stop.get() as usize]
     }
 
-    fn get_earlier_stop(&self, _route: RouteIdx, left: StopIdx, right: StopIdx) -> StopIdx {
-        if left.get() <= right.get() {
-            left
-        } else {
-            right
-        }
-    }
-
-    fn get_stops_after(&self, _route: RouteIdx, stop: StopIdx) -> &[StopIdx] {
+    fn get_stops_after(&self, _route: RouteIdx, pos: u32) -> &[StopIdx] {
         const STOPS: [StopIdx; 10] = [
             StopIdx::new(0),
             StopIdx::new(1),
@@ -37,23 +41,27 @@ impl Timetable for SingleRoute {
             StopIdx::new(8),
             StopIdx::new(9),
         ];
-        &STOPS[stop.get() as usize..]
+        &STOPS[pos as usize..]
     }
 
-    fn get_arrival_time(&self, _trip: TripIdx, stop: StopIdx) -> Tau {
-        (stop.get() as Tau) * 10
+    fn stop_at(&self, _route: RouteIdx, pos: u32) -> StopIdx {
+        StopIdx::new(pos)
     }
 
-    fn get_departure_time(&self, _trip: TripIdx, stop: StopIdx) -> Tau {
-        (stop.get() as Tau) * 10 + 5
+    fn get_arrival_time(&self, _trip: TripIdx, pos: u32) -> Tau {
+        (pos as Tau) * 10
+    }
+
+    fn get_departure_time(&self, _trip: TripIdx, pos: u32) -> Tau {
+        (pos as Tau) * 10 + 5
     }
 
     fn get_footpaths_from(&self, _stop: StopIdx) -> &[StopIdx] {
         &[]
     }
 
-    fn get_earliest_trip(&self, _route: RouteIdx, at: Tau, stop: StopIdx) -> Option<TripIdx> {
-        (at < self.get_departure_time(TripIdx::new(0), stop)).then_some(TripIdx::new(0))
+    fn get_earliest_trip(&self, _route: RouteIdx, at: Tau, pos: u32) -> Option<TripIdx> {
+        (at < self.get_departure_time(TripIdx::new(0), pos)).then_some(TripIdx::new(0))
     }
 }
 
