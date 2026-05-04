@@ -74,8 +74,12 @@ const FEEDS: &[FeedSpec] = &[
         name: "Berlin VBB",
         path: "aux/external/berlin.zip",
         queries: &[QuerySpec {
-            label: "Berlin Hauptbahnhof -> Alexanderplatz (S-Bahn platforms)",
-            origin_stop_id: "de:11000:900003201:3:54",
+            // Eastbound S-Bahn platform pair: trip 277442991 boards Hbf at
+            // 09:15:24 and reaches Alex at 09:21:48 (~6.5 min). Until
+            // parent-station aggregation lands, callers picking Berlin
+            // platform IDs by hand have to match direction explicitly.
+            label: "Berlin Hauptbahnhof -> Alexanderplatz (S-Bahn, eastbound)",
+            origin_stop_id: "de:11000:900003201:1:50",
             target_stop_id: "de:11000:900100003:1:50",
         }],
     },

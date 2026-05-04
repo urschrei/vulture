@@ -62,19 +62,23 @@ discussed in [Known limitations](#known-limitations) below.
 
 ### Berlin VBB
 
-| Query                                                              | Median latency |               Result |
-|--------------------------------------------------------------------|---------------:|---------------------:|
-| Berlin Hauptbahnhof platform 15 → Alexanderplatz S-Bahn platform 1 |          17 ms | arr 13:05:00 (245 m) |
+| Query                                                              | Median latency |              Result |
+|--------------------------------------------------------------------|---------------:|--------------------:|
+| Berlin Hauptbahnhof → Alexanderplatz (S-Bahn, eastbound platforms) |          92 µs | arr 09:20:36 (20 m) |
 
-Berlin returns a journey but the 245-minute travel time is an order
-of magnitude longer than reality (Hbf to Alexanderplatz on the
-S-Bahn is ~5 minutes). The platform-level stop IDs picked here are
-served by some trips but not by the high-frequency S5/S7 lines that
-the obvious journey would use, so the algorithm finds a circuitous
-slow route instead. Picking a directly-served platform requires
-inspecting the feed's stop_times more carefully than this benchmark
-does. The latency number remains meaningful: 33 ms to scan the
-algorithm against ~42k stops and ~18k synthetic routes.
+The 20-minute travel time is the actual S-Bahn journey from Hbf to
+Alex *plus the wait* for the next eastbound train: in this snapshot,
+the next train boards at 09:15:24 and arrives Alex at 09:21:48, so a
+09:00 query waits ~15 minutes plus the ~6-minute ride.
+
+This query benefits from the loop-route fix in v0.5 (the previous
+version reported a 245-minute "best journey" — the algorithm couldn't
+find a direct S-Bahn between the platforms originally chosen because
+the IDs were for opposite-direction tracks, and the loop-route bug
+was producing further nonsense in the long alternate routes it
+considered). It also illustrates limitation §1 below: until parent-
+station aggregation lands, callers picking platform IDs by hand have
+to match direction explicitly.
 
 ### Paris IDFM
 
