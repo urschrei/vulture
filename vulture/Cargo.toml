@@ -21,7 +21,7 @@ parallel = ["dep:rayon"]
 
 [dev-dependencies]
 anyhow = "1.0.100"
-criterion = { version = "0.5", features = ["html_reports", "csv_output"] }
+criterion = { version = "0.8", features = ["html_reports", "csv_output"] }
 env_logger = "0.11"
 humantime = "2"
 serde = { version = "1", features = ["derive"] }
@@ -41,7 +41,7 @@ required-features = ["gtfs-bench"]
 chrono = { version = "0.4", default-features = false }
 dot_graph = { version = "0.2", optional = true }
 fixedbitset = "0.5"
-gtfs-structures = "0.46.1"
+gtfs-structures = "0.47.0"
 jiff = "0.2"
 log = "0.4.29"
 rayon = { version = "1.10", optional = true }
