@@ -2366,3 +2366,187 @@ fn newly_active_stops_marks_only_in_window() {
     newly_active_stops_into(&tt, SecondOfDay(500), SecondOfDay(500), &mut marked6);
     assert!(marked6.contains(tt.stop_idx_of(&S::A).idx()));
 }
+
+// ── Pickup / drop-off type flag tests ─────────────────────────────
+
+#[test]
+fn pickup_disallowed_at_boarding_stop_yields_no_journey() {
+    // Single route, single trip, pickup forbidden at the only candidate
+    // boarding stop. The algorithm has no other trip to fall back to, so
+    // get_earliest_trip returns None and no journey is found.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Stop {
+        A,
+        B,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Route {
+        R1,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Trip {
+        T1,
+    }
+    use Route::*;
+    use Stop::*;
+    use Trip::*;
+
+    let tt = SimpleTimetable::new()
+        .route(
+            R1,
+            &[A, B],
+            &[(
+                T1,
+                &[
+                    (SecondOfDay(100), SecondOfDay(100)),
+                    (SecondOfDay(200), SecondOfDay(200)),
+                ],
+            )],
+        )
+        .no_pickup_at(T1, 0);
+
+    let journeys = tt
+        .query()
+        .from(&[(tt.stop_idx_of(&A), Duration::ZERO)])
+        .to(&[(tt.stop_idx_of(&B), Duration::ZERO)])
+        .max_transfers(1)
+        .depart_at(SecondOfDay(0))
+        .run();
+
+    assert!(
+        journeys.iter().all(|j| j.plan.is_empty()),
+        "no transit journey should exist when pickup is forbidden at the only boarding stop, got {journeys:?}"
+    );
+}
+
+#[test]
+fn drop_off_disallowed_at_target_yields_no_journey_to_that_stop() {
+    // Route A -> B -> C, single trip, drop-off forbidden at B. The
+    // algorithm should not record an arrival label at B (the trip
+    // passes through but the rider can't disembark), so a query A -> B
+    // returns no journey. A query A -> C is unaffected.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Stop {
+        A,
+        B,
+        C,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Route {
+        R1,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Trip {
+        T1,
+    }
+    use Route::*;
+    use Stop::*;
+    use Trip::*;
+
+    let tt = SimpleTimetable::new()
+        .route(
+            R1,
+            &[A, B, C],
+            &[(
+                T1,
+                &[
+                    (SecondOfDay(100), SecondOfDay(100)),
+                    (SecondOfDay(200), SecondOfDay(200)),
+                    (SecondOfDay(300), SecondOfDay(300)),
+                ],
+            )],
+        )
+        .no_drop_off_at(T1, 1);
+
+    let journeys_to_b = tt
+        .query()
+        .from(&[(tt.stop_idx_of(&A), Duration::ZERO)])
+        .to(&[(tt.stop_idx_of(&B), Duration::ZERO)])
+        .max_transfers(1)
+        .depart_at(SecondOfDay(0))
+        .run();
+    assert!(
+        journeys_to_b.iter().all(|j| j.plan.is_empty()),
+        "no transit journey should reach B when drop-off there is forbidden, got {journeys_to_b:?}"
+    );
+
+    let journeys_to_c = tt
+        .query()
+        .from(&[(tt.stop_idx_of(&A), Duration::ZERO)])
+        .to(&[(tt.stop_idx_of(&C), Duration::ZERO)])
+        .max_transfers(1)
+        .depart_at(SecondOfDay(0))
+        .run();
+    let best = journeys_to_c
+        .iter()
+        .filter(|j| !j.plan.is_empty())
+        .min_by_key(|j| j.arrival())
+        .expect("A -> C should still find a journey");
+    assert_eq!(best.arrival(), SecondOfDay(300));
+}
+
+#[test]
+fn get_earliest_trip_skips_to_next_pickup_allowed_trip() {
+    // Two trips on the same route. The earlier one (T1) forbids
+    // pickup at A; the later one (T2) allows it. The algorithm must
+    // skip past T1 and board T2 instead.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Stop {
+        A,
+        B,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Route {
+        R1,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Trip {
+        T1Early,
+        T2Late,
+    }
+    use Route::*;
+    use Stop::*;
+    use Trip::*;
+
+    let tt = SimpleTimetable::new()
+        .route(
+            R1,
+            &[A, B],
+            &[
+                (
+                    T1Early,
+                    &[
+                        (SecondOfDay(100), SecondOfDay(100)),
+                        (SecondOfDay(200), SecondOfDay(200)),
+                    ],
+                ),
+                (
+                    T2Late,
+                    &[
+                        (SecondOfDay(300), SecondOfDay(300)),
+                        (SecondOfDay(400), SecondOfDay(400)),
+                    ],
+                ),
+            ],
+        )
+        .no_pickup_at(T1Early, 0);
+
+    let journeys = tt
+        .query()
+        .from(&[(tt.stop_idx_of(&A), Duration::ZERO)])
+        .to(&[(tt.stop_idx_of(&B), Duration::ZERO)])
+        .max_transfers(1)
+        .depart_at(SecondOfDay(0))
+        .run();
+
+    let best = journeys
+        .iter()
+        .filter(|j| !j.plan.is_empty())
+        .min_by_key(|j| j.arrival())
+        .expect("a journey using T2Late should exist");
+    assert_eq!(
+        best.arrival(),
+        SecondOfDay(400),
+        "should board T2Late (arr 400), not T1Early (arr 200)",
+    );
+}

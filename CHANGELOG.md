@@ -1,14 +1,16 @@
 # Changelog
 
-## Unreleased
+## [0.15.0] – 2026-05-05
 
-Three threads: range-query improvements (rRAPTOR for the serial path,
+Four threads: range-query improvements (rRAPTOR for the serial path,
 plus a Rayon-based parallel batch behind a new default-on `parallel`
 feature flag); ergonomic conveniences on the time newtypes (jiff
-conversions, `FromStr`, `HH:MM:SS` Display); and a new
-cross-implementation comparison harness against
+conversions, `FromStr`, `HH:MM:SS` Display); a new cross-implementation
+comparison harness against
 [`raptor-journey-planner`](https://github.com/planarnetwork/raptor)
-documented in [`docs/cross-impl-comparison.md`](docs/cross-impl-comparison.md).
+documented in [`docs/cross-impl-comparison.md`](docs/cross-impl-comparison.md);
+and pickup / drop-off type flag enforcement, closing a long-standing
+correctness gap on long-distance feeds.
 
 ### New API
 
@@ -81,6 +83,41 @@ plus result-frontier match/mismatch. Documented end-to-end in
 includes a verbatim copy of upstream's `test/performance.ts` under
 its GPL-3.0 attribution. All eight comparable queries agree on the
 Pareto frontier; vulture is 4–463× faster on warm-cache queries.
+
+### Pickup / drop-off type flags
+
+Vulture now honours GTFS `stop_times.pickup_type` and `drop_off_type`
+during routing. Previously every scheduled stop was treated as both
+boardable and alightable; now `pickup_type = 1` (NotAvailable) prevents
+boarding and `drop_off_type = 1` prevents alighting, matching the
+behaviour of `raptor-journey-planner` and the published GTFS
+specification.
+
+Two new methods on the `Timetable` trait:
+
+- `fn pickup_allowed(&self, trip: TripIdx, pos: u32) -> bool` (default `true`)
+- `fn drop_off_allowed(&self, trip: TripIdx, pos: u32) -> bool` (default `true`)
+
+Plus a contract refinement on `get_earliest_trip`: it must return the
+earliest trip *whose pickup is allowed at* `pos`. The algorithm relies
+on adapter-side filtering rather than gating in the inner loop. Both
+defaults are `true` so existing adapter implementations outside this
+crate keep working with no change.
+
+`GtfsTimetable` reads the flags from each `stop_time`'s
+`PickupDropOffType` field at construction; only `NotAvailable` maps to
+forbidden, while `Regular`, `ArrangeByPhone`, `CoordinateWithDriver`,
+and `Unknown` all permit board/alight (a routing engine should still
+consider request-by-phone stops as valid pickups).
+
+`SimpleTimetable` (the manual adapter) gains two builder methods —
+`.no_pickup_at(trip, pos)` / `.no_drop_off_at(trip, pos)` — for
+constructing test scenarios with restricted boarding.
+
+No measurable performance impact on metro feeds (Delhi / Berlin /
+Paris benchmarks unchanged within run-to-run noise) because typical
+metro feeds have all-zero flags, and `HashSet::contains()` on the
+empty fast path is essentially free.
 
 ### Removed
 

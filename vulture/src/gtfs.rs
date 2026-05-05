@@ -18,10 +18,10 @@
 //! `route_id` for display, and [`GtfsTimetable::routes_for_gtfs_id`] to
 //! enumerate every synthetic derived from a given GTFS route.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{Datelike, NaiveDate, Weekday};
-use gtfs_structures::{Exception, Gtfs};
+use gtfs_structures::{Exception, Gtfs, PickupDropOffType};
 use jiff::civil::Date;
 use rstar::{AABB, PointDistance, RTree, RTreeObject};
 use smallvec::SmallVec;
@@ -198,6 +198,14 @@ pub struct GtfsTimetable<'gtfs> {
     footpaths_for_stops: Vec<SmallVec<[StopIdx; TYPICAL_TRANSFERS_PER_STOP]>>,
     transfer_times: HashMap<(StopIdx, StopIdx), Duration>,
 
+    /// `(trip, pos)` pairs where boarding is forbidden by GTFS
+    /// `pickup_type = 1` (NotAvailable). Empty for typical metro feeds
+    /// where every stop is regularly boardable.
+    no_pickup: HashSet<(TripIdx, u32)>,
+    /// `(trip, pos)` pairs where alighting is forbidden by GTFS
+    /// `drop_off_type = 1` (NotAvailable). Same shape as `no_pickup`.
+    no_drop_off: HashSet<(TripIdx, u32)>,
+
     /// User-asserted closure flag. Returned from
     /// [`Timetable::footpaths_are_transitively_closed`] so the algorithm
     /// can pick the single-pass relaxation. Set via
@@ -287,6 +295,8 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
         let mut arrival_times: Vec<Vec<Vec<SecondOfDay>>> = Vec::new();
         let mut departure_times: Vec<Vec<Vec<SecondOfDay>>> = Vec::new();
         let mut route_for_trip: Vec<(RouteIdx, usize)> = Vec::with_capacity(gtfs.trips.len());
+        let mut no_pickup: HashSet<(TripIdx, u32)> = HashSet::new();
+        let mut no_drop_off: HashSet<(TripIdx, u32)> = HashSet::new();
         let mut trip_ids: Vec<&'gtfs str> = Vec::new();
         let mut trip_by_id: HashMap<&'gtfs str, TripIdx> = HashMap::new();
         let mut route_by_id: HashMap<&'gtfs str, RouteIdx> = HashMap::new();
@@ -320,7 +330,6 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
                     debug_assert_eq!(route_for_trip.len(), trip_idx.idx());
                     route_for_trip.push((route_idx, sub_trip_idxs.len() - 1));
                 }
-                trips_for_route.push(sub_trip_idxs);
 
                 // Per-route arrival/departure tables: shape [stop_pos][trip_pos].
                 let n_stops_in_route = stop_seq.len();
@@ -331,16 +340,24 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
                     vec![vec![SecondOfDay::MAX; n_trips_in_route]; n_stops_in_route];
                 for (trip_pos, trip_id) in sub_group.iter().enumerate() {
                     let trip = gtfs.get_trip(trip_id).expect("validated above");
+                    let trip_idx = sub_trip_idxs[trip_pos];
                     for (stop_pos, st) in trip.stop_times.iter().enumerate() {
                         if let Some(a) = st.arrival_time {
                             arr_table[stop_pos][trip_pos] = SecondOfDay(a);
                         }
                         let d = st.departure_time.expect("validated at construction");
                         dep_table[stop_pos][trip_pos] = SecondOfDay(d);
+                        if matches!(st.pickup_type, PickupDropOffType::NotAvailable) {
+                            no_pickup.insert((trip_idx, stop_pos as u32));
+                        }
+                        if matches!(st.drop_off_type, PickupDropOffType::NotAvailable) {
+                            no_drop_off.insert((trip_idx, stop_pos as u32));
+                        }
                     }
                 }
                 arrival_times.push(arr_table);
                 departure_times.push(dep_table);
+                trips_for_route.push(sub_trip_idxs);
 
                 route_by_id.entry(gtfs_route_id).or_insert(route_idx);
                 routes_by_gtfs_id
@@ -413,6 +430,8 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             transfer_times,
             transfers_closed: false,
             station_children,
+            no_pickup,
+            no_drop_off,
         })
     }
 
@@ -664,7 +683,18 @@ impl<'gtfs> Timetable for GtfsTimetable<'gtfs> {
         let trips = &self.trips_for_route[route.idx()];
         let dep_row = &self.departure_times[route.idx()][pos as usize];
         let idx = dep_row.partition_point(|&dep| dep < at);
-        trips.get(idx).copied()
+        // Common case (no_pickup empty for metro feeds): a single read.
+        if self.no_pickup.is_empty() {
+            return trips.get(idx).copied();
+        }
+        let mut idx = idx;
+        while let Some(&trip) = trips.get(idx) {
+            if !self.no_pickup.contains(&(trip, pos)) {
+                return Some(trip);
+            }
+            idx += 1;
+        }
+        None
     }
 
     fn get_arrival_time(&self, trip: TripIdx, pos: u32) -> SecondOfDay {
@@ -686,6 +716,16 @@ impl<'gtfs> Timetable for GtfsTimetable<'gtfs> {
             .get(&(from, to))
             .copied()
             .unwrap_or(DEFAULT_TRANSFER_TIME)
+    }
+
+    fn pickup_allowed(&self, trip: TripIdx, pos: u32) -> bool {
+        // is_empty() short-circuit: typical metro feeds have no
+        // pickup_type=1 entries at all, so we skip the hash entirely.
+        self.no_pickup.is_empty() || !self.no_pickup.contains(&(trip, pos))
+    }
+
+    fn drop_off_allowed(&self, trip: TripIdx, pos: u32) -> bool {
+        self.no_drop_off.is_empty() || !self.no_drop_off.contains(&(trip, pos))
     }
 
     fn footpaths_are_transitively_closed(&self) -> bool {
