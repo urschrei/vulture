@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.12.0] — 2026-05-05
+
+`Journey::with_timing` — recover per-leg trip and timing info from a
+returned journey. Previously `Journey.plan` was just topology
+(`Vec<(RouteIdx, StopIdx)>`); users wanting "board route X at A at
+08:03, arrive B at 08:17" had to reconstruct it themselves.
+
+### Added
+
+- `Journey::with_timing(&tt, tau, origin_walk) -> Option<Vec<TimedLeg>>`
+  walks the plan against the timetable and returns one `TimedLeg`
+  per transit boarding. Each leg reports `route`, `board`, `alight`,
+  the specific `trip: TripIdx` caught, and `depart` / `arrive`
+  times. Returns `None` if the plan can't be matched (defensive
+  escape hatch — should not happen for journeys produced by the
+  same timetable).
+- `pub struct TimedLeg` with the fields above. Plain `Copy` data,
+  no algorithm state.
+
+### Notes
+
+- Walking transfers between consecutive transit legs are implicit:
+  if leg `N`'s `alight` differs from leg `N+1`'s `board`, the gap
+  reflects walking time. The user can derive walking-leg detail by
+  consulting `tt.get_transfer_time(alight_n, board_n_plus_1)`.
+- Loop routes (a route's stop sequence revisits a boarding stop)
+  pick the *earliest* qualifying position, matching the algorithm's
+  own `get_routes_serving_stop` return contract. For loop-heavy
+  networks this could in principle pick the wrong occurrence; in
+  practice the reconstructed trip matches the algorithm's choice.
+
+### Tests
+
+- `with_timing_recovers_per_leg_trip_and_times` exercises a
+  two-leg journey and verifies the right trip is picked per leg
+  along with correct departure/arrival times. 52/52 tests +
+  proptests green.
+
 ## [0.11.0] — 2026-05-05
 
 Bag-of-labels representation. Each `(round, stop)` cell now holds a

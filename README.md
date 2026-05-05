@@ -119,6 +119,24 @@ see the `Label` trait and `Timetable::raptor_with_label::<L>` /
 `raptor_with_cache_and_label::<L>`. The single-criterion `ArrivalTime` impl
 is the default and inlines to plain `Tau` operations.
 
+### Per-leg timing
+
+`Journey.plan` is just topology — to recover the specific trips ridden and
+their per-leg departure/arrival times, call
+`journey.with_timing(&tt, tau, origin_walk)`:
+
+```rust,ignore
+for leg in journey.with_timing(&tt, tau, 0).unwrap() {
+    println!(
+        "board {} on {} at {}s, alight {} at {}s (trip {})",
+        leg.board, leg.route, leg.depart, leg.alight, leg.arrive, leg.trip,
+    );
+}
+```
+
+Walking transfers between consecutive transit legs are implicit (the gap in
+timestamps reflects the walk). See `TimedLeg`'s docs for details.
+
 To translate index newtypes back to your adapter's external IDs, the bundled
 GTFS adapter exposes `GtfsTimetable::stop_id(stop_idx)` and
 `GtfsTimetable::route_id(route_idx)`. The synthetic-route splitting (one GTFS

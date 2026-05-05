@@ -1082,3 +1082,70 @@ fn custom_label_tracks_accumulated_walk_time() {
     assert_eq!(cached.len(), 1);
     assert_eq!(cached[0].label.walk_time, 7);
 }
+
+#[test]
+fn with_timing_recovers_per_leg_trip_and_times() {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum S {
+        A,
+        B,
+        C,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum R {
+        R1,
+        R2,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Tr {
+        T1Early,
+        T1Late,
+        T2,
+    }
+
+    // R1 has two trips: T1Early (0->10) and T1Late (50->60). R2 has one
+    // trip from B to C (12->25). A query departing at 0 should ride
+    // T1Early (boarding 0, alighting 10), then T2 (boarding 12, alighting
+    // 25). Departing at 30 should ride T1Late (boarding 50, alighting 60)
+    // — there's no T2 trip available afterwards, so no journey.
+    let tt = SimpleTimetable::new()
+        .route(
+            R::R1,
+            &[S::A, S::B],
+            &[
+                (Tr::T1Early, &[(0, 0), (10, 10)]),
+                (Tr::T1Late, &[(50, 50), (60, 60)]),
+            ],
+        )
+        .route(R::R2, &[S::B, S::C], &[(Tr::T2, &[(12, 12), (25, 25)])]);
+
+    let a = tt.stop_idx_of(&S::A);
+    let b = tt.stop_idx_of(&S::B);
+    let c = tt.stop_idx_of(&S::C);
+
+    let journeys = tt.raptor(3, 0, &[(a, 0)], &[(c, 0)]);
+    assert_eq!(journeys.len(), 1);
+    let j = &journeys[0];
+    assert_eq!(j.arrival(), 25);
+
+    let timed = j.with_timing(&tt, 0, 0).expect("plan must reconstruct");
+    assert_eq!(timed.len(), 2);
+
+    // Leg 1: A -> B on R1 catching T1Early.
+    let l1 = &timed[0];
+    assert_eq!(l1.route, tt.route_idx_of(&R::R1));
+    assert_eq!(l1.board, a);
+    assert_eq!(l1.alight, b);
+    assert_eq!(l1.trip, tt.trip_idx_of(&Tr::T1Early));
+    assert_eq!(l1.depart, 0);
+    assert_eq!(l1.arrive, 10);
+
+    // Leg 2: B -> C on R2 catching T2.
+    let l2 = &timed[1];
+    assert_eq!(l2.route, tt.route_idx_of(&R::R2));
+    assert_eq!(l2.board, b);
+    assert_eq!(l2.alight, c);
+    assert_eq!(l2.trip, tt.trip_idx_of(&Tr::T2));
+    assert_eq!(l2.depart, 12);
+    assert_eq!(l2.arrive, 25);
+}

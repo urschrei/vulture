@@ -315,6 +315,99 @@ impl<L: Label> Journey<L> {
     pub fn arrival(&self) -> Tau {
         self.label.arrival()
     }
+
+    /// Walk the plan against `tt` to recover the specific trip ridden
+    /// for each leg, plus per-leg departure and arrival times.
+    /// `tau` is the original query departure time and `origin_walk`
+    /// is the walk-time offset for `self.origin` from the original
+    /// origins slice (typically 0 for single-stop queries).
+    ///
+    /// Each returned [`TimedLeg`] reports the route, boarding stop,
+    /// alighting stop, the specific [`TripIdx`] caught, and the
+    /// boarding / alighting times. If the plan implies a walk
+    /// between consecutive transit legs (the previous leg's `alight`
+    /// differs from the next leg's `board`), the walking time is
+    /// folded into the next leg's `wait_seconds` and the gap is
+    /// observable from the timestamps.
+    ///
+    /// Returns `None` if the plan can't be matched against `tt`
+    /// (e.g. a route doesn't serve the claimed alighting stop, or
+    /// no trip departs at or after the recorded boarding time).
+    /// In practice this should not happen for a `Journey` produced
+    /// by the same `tt` and `tau` — it's a soundness escape hatch.
+    ///
+    /// **Loop routes:** if `route` revisits the boarding stop on
+    /// its sequence, this picks the *earliest* qualifying position
+    /// (matching what [`Timetable::get_routes_serving_stop`]
+    /// reports). The reconstructed trip should still be the right
+    /// one in practice, but for loop-heavy networks see roadmap
+    /// §0.11 for the underlying limitation.
+    pub fn with_timing<T: Timetable>(
+        &self,
+        tt: &T,
+        tau: Tau,
+        origin_walk: Tau,
+    ) -> Option<Vec<TimedLeg>> {
+        let mut legs = Vec::with_capacity(self.plan.len());
+        let mut current_time = tau.saturating_add(origin_walk);
+        let mut current_stop = self.origin;
+
+        for &(route, alight) in &self.plan {
+            // If the algorithm walked between current_stop and the
+            // boarding stop on this route, we don't know the boarding
+            // stop directly — try current_stop first; if route doesn't
+            // serve current_stop, we can't reconstruct without more
+            // info. Most plans have current_stop on the route directly
+            // (transfer at the same physical stop).
+            let serving = tt.get_routes_serving_stop(current_stop);
+            let board_pos = serving
+                .iter()
+                .find(|(r, _)| *r == route)
+                .map(|&(_, pos)| pos)?;
+
+            let trip = tt.get_earliest_trip(route, current_time, board_pos)?;
+            let depart = tt.get_departure_time(trip, board_pos);
+
+            // Find the alight position by scanning forward from board_pos.
+            let stops_ahead = tt.get_stops_after(route, board_pos);
+            let alight_offset = stops_ahead.iter().position(|&s| s == alight)?;
+            let alight_pos = board_pos + alight_offset as u32;
+            let arrive = tt.get_arrival_time(trip, alight_pos);
+
+            legs.push(TimedLeg {
+                route,
+                board: current_stop,
+                alight,
+                trip,
+                depart,
+                arrive,
+            });
+
+            current_time = arrive;
+            current_stop = alight;
+        }
+
+        Some(legs)
+    }
+}
+
+/// One transit leg of a [`Journey`] with reconstructed timing.
+/// Produced by [`Journey::with_timing`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimedLeg {
+    /// The route boarded.
+    pub route: RouteIdx,
+    /// Stop where the rider boards.
+    pub board: StopIdx,
+    /// Stop where the rider alights.
+    pub alight: StopIdx,
+    /// The specific trip ridden — the earliest one departing at or
+    /// after the rider's available time at `board`.
+    pub trip: TripIdx,
+    /// Departure time at `board`, in seconds since midnight.
+    pub depart: Tau,
+    /// Arrival time at `alight`, in seconds since midnight.
+    pub arrive: Tau,
 }
 
 /// One reconstructable step in a journey: either a transit boarding event

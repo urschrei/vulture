@@ -537,11 +537,13 @@ sugar over this.
 
 ### 3.6 Journey reconstruction with full timing
 
-Currently, `Journey.plan` is `Vec<(Route, Stop)>` — just the topology.
-Users often want timing too: "board R1 at A at 08:03, arrive at B at
-08:17". Add a `with_timing` method on `Journey` that walks the plan
-against the timetable and produces `Vec<JourneyLeg>` with arrival,
-departure, and trip ID per leg.
+**Status (v0.12):** landed as `Journey::with_timing(&tt, tau,
+origin_walk) -> Option<Vec<TimedLeg>>`. `TimedLeg` reports route,
+board/alight stops, the specific `TripIdx` caught, and per-leg
+departure/arrival times. Walking transfers between consecutive
+transit legs are implicit (the gap reflects the walk). Loop routes
+pick the earliest qualifying boarding position — see the method
+docs for the caveat.
 
 ### 3.7 Accessibility flags
 
