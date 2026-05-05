@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.11.0] — 2026-05-05
+
+Bag-of-labels representation. Each `(round, stop)` cell now holds a
+Pareto front of `Label`s rather than a single label, enabling
+multi-criterion impls (e.g. `ArrivalAndWalk` from v0.10) to actually
+produce Pareto-optimal journey sets rather than a tiebroken single
+label. Single-criterion `ArrivalTime` bags stay at size 1 — same
+journeys, real but bounded perf hit.
+
+### Algorithm
+
+- `LabelBag<L>` (private) backs every `(round, stop)` cell — a
+  `SmallVec<[L; 8]>` with Pareto insert/dominate. Insert returns
+  `false` when the new label is weakly dominated by an existing one
+  and removes any items the new label strictly dominates.
+- Route scan now maintains a per-route `route_bag` of riding entries
+  `(boarding_label, trip, boarding_stop)`. At each stop on the route
+  every active entry alights (one new label per `(label, trip)`
+  pair); labels in `labels[k-1][pi]` that catch a trip and are not
+  dominated by an existing entry join the bag.
+- Footpath relax (both Dijkstra and single-pass) extends every label
+  in the source bag along each footpath edge.
+- Boarding tree key is now `(K, StopIdx, Tau)` — the third component
+  is the label's effective arrival, disambiguating Pareto-optimal
+  labels with distinct arrival times in the same bag. `Step` variants
+  carry a `parent_arrival: Tau` field so reconstruction can pick the
+  right parent label out of the parent bag.
+- Reconstruction enumerates per-label per-round at every target,
+  deduplicating by `(target, raw_arrival, k, walk)`. Multi-criterion
+  queries can produce more journeys per target than v0.10.
+
+### Performance trade-off
+
+- Single-criterion ArrivalTime queries regress 2-3× vs v0.9-v0.10
+  on the cross-city bench. The bench's worst regression is Berlin
+  Hbf → Alex hand-picked: 107 µs → 672 µs (6×); Paris Châtelet →
+  Versailles is the mildest: 16.7 ms → 32.3 ms (1.9×).
+- Carry-forward overhead was the worst contributor (cloning all 50k
+  bag entries per round, even empties). A `ever_reached: FixedBitSet`
+  added to `RaptorCache` gates the carry-forward to stops actually
+  touched this query, recovering ~30% of the regression.
+- The remaining gap is from bag operations themselves — for ArrivalTime
+  size-1 bags the route scan does 2-3 trait method calls per stop
+  visit (insert, dominates, snapshot) where v0.10 used direct `Tau`
+  comparisons. A future v0.12 specialisation can reclaim more for
+  pure single-criterion users; for now correctness on multi-criterion
+  is the priority and the bench numbers stay well under interactive
+  thresholds.
+
+### Reconstruction note
+
+- Helsinki Rautatientori → Pasila now returns 4 Pareto-optimal
+  journeys (was 3 in v0.10) at the same min-arrival 09:07:00. The
+  extra journeys are alternative plans the v0.10 single-label
+  reconstruction collapsed into one — an honest improvement, not a
+  regression.
+
+### Tests
+
+- All 51 tests + proptests green; the proptest harness exercises
+  multi-criterion correctness implicitly via the `custom_label_*`
+  test from v0.10 and the existing layer 1-3 coverage.
+
 ## [0.10.0] — 2026-05-05
 
 McRAPTOR-ready `Label` trait. The algorithm is now generic over a

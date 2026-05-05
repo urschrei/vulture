@@ -30,7 +30,7 @@
 //! let journeys = timetable.raptor(10, 32400, &[(start, 0)], &[(target, 0)]);
 //!
 //! for journey in &journeys {
-//!     print!("arrives {}s, plan: ", journey.arrival);
+//!     print!("arrives {}s, plan: ", journey.arrival());
 //!     for (route_idx, stop_idx) in &journey.plan {
 //!         let route = timetable.route_id(*route_idx);
 //!         let stop = timetable.stop_id(*stop_idx);
@@ -68,6 +68,7 @@ use std::collections::{BTreeMap, BinaryHeap};
 use std::fmt;
 
 use fixedbitset::FixedBitSet;
+use smallvec::SmallVec;
 
 pub mod gtfs;
 /// In-memory timetable for testing and simple use cases.
@@ -321,13 +322,88 @@ impl<L: Label> Journey<L> {
 /// they happen *within* round `k` at the stop they alight on — so the
 /// reconstruction logic chains through walk entries without decrementing
 /// the round index.
+///
+/// `parent_arrival` disambiguates which Pareto-optimal label at the
+/// parent stop (in the parent stop's bag) was extended to produce
+/// the label this step belongs to. For single-criterion `ArrivalTime`
+/// the parent bag is size-1, so this field is redundant; for
+/// multi-criterion impls it lets reconstruction follow the right
+/// label through the bag.
 #[derive(Debug, Clone, Copy)]
 enum Step {
-    Boarded { from: StopIdx, route: RouteIdx },
-    Walked { from: StopIdx },
+    Boarded {
+        from: StopIdx,
+        route: RouteIdx,
+        parent_arrival: Tau,
+    },
+    Walked {
+        from: StopIdx,
+        parent_arrival: Tau,
+    },
 }
 
-type BoardingTree = BTreeMap<(K, StopIdx), Step>;
+/// Boarding tree key: `(round, stop, label_arrival)`. The third
+/// component disambiguates Pareto-optimal labels with distinct
+/// arrival times in the same `(round, stop)` bag.
+type BoardingTree = BTreeMap<(K, StopIdx, Tau), Step>;
+
+/// A Pareto front of [`Label`]s at a single `(round, stop)` cell.
+/// Backed by `SmallVec<[L; 8]>` — for single-criterion `ArrivalTime`
+/// the bag is always size 1 and stays inline; for multi-criterion
+/// impls it grows up to 8 inline before spilling.
+#[derive(Debug, Clone)]
+struct LabelBag<L: Label> {
+    items: SmallVec<[L; 8]>,
+}
+
+impl<L: Label> LabelBag<L> {
+    fn new() -> Self {
+        Self {
+            items: SmallVec::new(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &L> {
+        self.items.iter()
+    }
+
+    /// Try to insert `new`. Returns `true` if added (and removes any
+    /// items it strictly dominates); returns `false` if some existing
+    /// item weakly dominates `new` (no change).
+    fn insert(&mut self, new: L) -> bool {
+        for item in &self.items {
+            if item.dominates(&new) {
+                return false;
+            }
+        }
+        self.items.retain(|item| !new.dominates(item));
+        self.items.push(new);
+        true
+    }
+
+    /// Minimum `arrival()` across the bag, or `Tau::MAX` if empty.
+    fn min_arrival(&self) -> Tau {
+        self.items
+            .iter()
+            .map(|l| l.arrival())
+            .min()
+            .unwrap_or(Tau::MAX)
+    }
+
+    fn clear(&mut self) {
+        self.items.clear();
+    }
+}
+
+impl<L: Label> Default for LabelBag<L> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Relax footpaths from every stop in `sources` at round `k`, propagating
 /// to a fixed point.
@@ -353,35 +429,81 @@ type BoardingTree = BTreeMap<(K, StopIdx), Step>;
 /// `O(E)` per round, no heap. Always sound when the closure
 /// precondition holds; produces the same labels and boarding tree as
 /// [`relax_footpaths_round`] in that case.
+/// Try to insert `(label, step)` into `labels[k][stop]` and the
+/// boarding tree. Updates `best_arrival[stop]` and marks the stop
+/// in `out` if the new label improves on `pt_threshold`. Returns
+/// `true` if any insertion happened.
+#[allow(clippy::too_many_arguments)]
+fn insert_into_bag<L: Label>(
+    labels: &mut [Vec<LabelBag<L>>],
+    best_arrival: &mut [LabelBag<L>],
+    board_detail: &mut BoardingTree,
+    out: &mut Vec<StopIdx>,
+    ever_reached: &mut FixedBitSet,
+    pt_threshold: Tau,
+    k: K,
+    stop: StopIdx,
+    label: L,
+    step: Step,
+) -> bool {
+    let added = labels[k][stop.idx()].insert(label);
+    if !added {
+        return false;
+    }
+    board_detail.insert((k, stop, label.arrival()), step);
+    best_arrival[stop.idx()].insert(label);
+    ever_reached.insert(stop.idx());
+    if label.arrival() < pt_threshold {
+        out.push(stop);
+    }
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 fn relax_footpaths_round_closed<T: Timetable + ?Sized, L: Label>(
     timetable: &T,
     k: K,
-    labels: &mut [Vec<L>],
-    best_arrival: &mut [L],
+    labels: &mut [Vec<LabelBag<L>>],
+    best_arrival: &mut [LabelBag<L>],
     board_detail: &mut BoardingTree,
     sources: &FixedBitSet,
     pt_threshold: Tau,
     out: &mut Vec<StopIdx>,
+    ever_reached: &mut FixedBitSet,
 ) {
+    // Walk each source bag's labels once. With closure, chained walks
+    // are unnecessary because every reachable pair is already a direct
+    // edge in the relation.
+    let mut staged: SmallVec<[L; 8]> = SmallVec::new();
     for stop_bit in sources.ones() {
         let stop = StopIdx::new(stop_bit as u32);
-        let stop_label = labels[k][stop.idx()];
-        if stop_label.arrival() == Tau::MAX {
+        if labels[k][stop.idx()].is_empty() {
             continue;
         }
+        // Snapshot the source bag so we don't iterate while mutating
+        // labels[k] (which can include the source itself).
+        staged.clear();
+        staged.extend(labels[k][stop.idx()].iter().copied());
+
         for &p_dash in timetable.get_footpaths_from(stop) {
-            let via_walk = stop_label.extend_by_footpath(timetable.get_transfer_time(stop, p_dash));
-            let cur = labels[k][p_dash.idx()];
-            if via_walk.arrival() < cur.arrival() {
-                labels[k][p_dash.idx()] = via_walk;
-                board_detail.insert((k, p_dash), Step::Walked { from: stop });
-                if via_walk.arrival() < best_arrival[p_dash.idx()].arrival() {
-                    best_arrival[p_dash.idx()] = via_walk;
-                }
-                if via_walk.arrival() < pt_threshold {
-                    out.push(p_dash);
-                }
+            let walk = timetable.get_transfer_time(stop, p_dash);
+            for source_label in &staged {
+                let via_walk = source_label.extend_by_footpath(walk);
+                insert_into_bag(
+                    labels,
+                    best_arrival,
+                    board_detail,
+                    out,
+                    ever_reached,
+                    pt_threshold,
+                    k,
+                    p_dash,
+                    via_walk,
+                    Step::Walked {
+                        from: stop,
+                        parent_arrival: source_label.arrival(),
+                    },
+                );
             }
         }
     }
@@ -391,130 +513,152 @@ fn relax_footpaths_round_closed<T: Timetable + ?Sized, L: Label>(
 fn relax_footpaths_round<T: Timetable + ?Sized, L: Label>(
     timetable: &T,
     k: K,
-    labels: &mut [Vec<L>],
-    best_arrival: &mut [L],
+    labels: &mut [Vec<LabelBag<L>>],
+    best_arrival: &mut [LabelBag<L>],
     board_detail: &mut BoardingTree,
     sources: &FixedBitSet,
     pt_threshold: Tau,
     out: &mut Vec<StopIdx>,
     heap: &mut BinaryHeap<Reverse<(Tau, u32)>>,
+    ever_reached: &mut FixedBitSet,
 ) {
     // Multi-source Dijkstra over the footpath graph at round `k`,
-    // ordered by `Label::arrival()`. Each source's initial priority is
-    // its current `labels[k]` arrival; transfer times are non-negative
-    // so Dijkstra is sound. Uses lazy deletion — stale heap entries
-    // are skipped on pop.
+    // ordered by `LabelBag::min_arrival()`. Each source's initial
+    // priority is its current bag's minimum arrival; transfer times
+    // are non-negative so Dijkstra is sound. Uses lazy deletion —
+    // stale heap entries are skipped on pop.
     //
-    // O(E log V) per round; replaces an earlier LIFO Vec-based queue
-    // that degenerated to O(V·E) on dense walking graphs.
+    // For multi-criterion bags this propagates only the min-arrival
+    // label per stop; non-min labels in a source bag don't drive
+    // further relaxation. This is sound for arrival-time pruning but
+    // may miss Pareto-optimal walk chains where a non-min-arrival
+    // label dominates downstream — a v0.12 concern.
     heap.clear();
     for bit in sources.ones() {
-        let arrival = labels[k][bit].arrival();
-        if arrival != Tau::MAX {
-            heap.push(Reverse((arrival, bit as u32)));
+        let min_arr = labels[k][bit].min_arrival();
+        if min_arr != Tau::MAX {
+            heap.push(Reverse((min_arr, bit as u32)));
         }
     }
 
+    let mut staged: SmallVec<[L; 8]> = SmallVec::new();
     while let Some(Reverse((arrival, stop_bit))) = heap.pop() {
         let stop = StopIdx::new(stop_bit);
-        let stop_label = labels[k][stop.idx()];
+        let stop_min = labels[k][stop.idx()].min_arrival();
         // Skip stale entries — a strictly better label was popped earlier.
-        if arrival > stop_label.arrival() {
+        if arrival > stop_min {
             continue;
         }
+        staged.clear();
+        staged.extend(labels[k][stop.idx()].iter().copied());
+
         for &p_dash in timetable.get_footpaths_from(stop) {
-            let via_walk = stop_label.extend_by_footpath(timetable.get_transfer_time(stop, p_dash));
-            let cur = labels[k][p_dash.idx()];
-            if via_walk.arrival() < cur.arrival() {
-                labels[k][p_dash.idx()] = via_walk;
-                board_detail.insert((k, p_dash), Step::Walked { from: stop });
-                if via_walk.arrival() < best_arrival[p_dash.idx()].arrival() {
-                    best_arrival[p_dash.idx()] = via_walk;
+            let walk = timetable.get_transfer_time(stop, p_dash);
+            let mut any_added = false;
+            for source_label in &staged {
+                let via_walk = source_label.extend_by_footpath(walk);
+                if insert_into_bag(
+                    labels,
+                    best_arrival,
+                    board_detail,
+                    out,
+                    ever_reached,
+                    pt_threshold,
+                    k,
+                    p_dash,
+                    via_walk,
+                    Step::Walked {
+                        from: stop,
+                        parent_arrival: source_label.arrival(),
+                    },
+                ) {
+                    any_added = true;
                 }
-                if via_walk.arrival() < pt_threshold {
-                    out.push(p_dash);
-                }
-                heap.push(Reverse((via_walk.arrival(), p_dash.get())));
+            }
+            if any_added {
+                heap.push(Reverse((
+                    labels[k][p_dash.idx()].min_arrival(),
+                    p_dash.get(),
+                )));
             }
         }
     }
 }
 
-/// Returns the minimum of `best_arrival[t].arrival() + w` across all
-/// `(t, w)` in `targets`, saturating on overflow. Returns `Tau::MAX`
-/// if every target is unreached.
-fn best_to_any_target<L: Label>(best_arrival: &[L], targets: &[(StopIdx, Tau)]) -> Tau {
+/// Returns the minimum of `best_arrival[t].min_arrival() + w` across
+/// all `(t, w)` in `targets`, saturating on overflow. Returns
+/// `Tau::MAX` if every target is unreached.
+fn best_to_any_target<L: Label>(best_arrival: &[LabelBag<L>], targets: &[(StopIdx, Tau)]) -> Tau {
     targets
         .iter()
-        .map(|&(t, w)| best_arrival[t.idx()].arrival().saturating_add(w))
+        .map(|&(t, w)| best_arrival[t.idx()].min_arrival().saturating_add(w))
         .min()
         .unwrap_or(Tau::MAX)
 }
 
-/// Reconstruct candidate plans terminating at `pt`. For each k from 1
-/// to `transfers`, traces back through the boarding tree; if the trace
-/// reaches some stop in `origins`, emits a plan along with that origin.
+/// Reconstruct a single candidate plan terminating at the target
+/// label `(pt, target_arrival)` at round `k`. Traces back through
+/// the boarding tree (which is keyed on `(round, stop, label_arrival)`
+/// to disambiguate Pareto-optimal labels in the same bag). Returns
+/// `Some((origin, plan))` if the trace reaches some stop in `origins`,
+/// `None` otherwise.
 fn reconstruct_journey(
     tree: &BoardingTree,
     origins: &FixedBitSet,
     pt: StopIdx,
-    transfers: K,
-) -> Vec<(StopIdx, Vec<(RouteIdx, StopIdx)>)> {
+    target_arrival: Tau,
+    k: K,
+) -> Option<(StopIdx, Vec<(RouteIdx, StopIdx)>)> {
     if tree.is_empty() {
-        // Either no trips were taken, or we never reached target. The latter is
-        // possible if origin and target are nodes of a disjoint graph
-        return Default::default();
+        return None;
     }
 
-    let mut plans = Vec::new();
+    let mut plan = Vec::with_capacity(k);
+    let mut parent = pt;
+    let mut parent_arrival = target_arrival;
+    let mut inner_k = k;
+    // Defensive bound to avoid pathological loops; 100 walk-hops per
+    // round is well beyond anything realistic.
+    let mut budget = (k + 1) * 100;
 
-    for k in 1..=transfers {
-        let mut plan = Vec::with_capacity(k);
-        let mut parent = pt;
-        let mut inner_k = k;
-        // Bound the trace length to avoid pathological loops on a malformed
-        // tree. With fixed-point footpath relaxation a walk chain within a
-        // round can in principle visit every stop at most once, but the
-        // tree is well-formed by construction (each insertion overwrites
-        // the previous entry at the same (k, stop) key, so no cycles).
-        // The budget is just defensive: 100 walk-hops per round is well
-        // beyond anything realistic.
-        let mut budget = (k + 1) * 100;
+    while !origins.contains(parent.idx()) && budget > 0 {
+        budget -= 1;
 
-        log::debug!("outer_k = {k} | parent = {parent:?} | plans = {plans:?}");
+        let Some(step) = tree.get(&(inner_k, parent, parent_arrival)).copied() else {
+            break;
+        };
 
-        while !origins.contains(parent.idx()) && budget > 0 {
-            budget -= 1;
-            log::debug!("inner_k = {inner_k} | parent = {parent:?} | plan = {plan:?}");
-
-            let Some(step) = tree.get(&(inner_k, parent)).copied() else {
-                log::debug!("stopping because tree has no entry for current (inner_k, parent)");
-                break;
-            };
-
-            match step {
-                Step::Boarded { from, route } => {
-                    plan.push((route, parent));
-                    parent = from;
-                    if inner_k == 0 {
-                        break;
-                    }
-                    inner_k -= 1;
+        match step {
+            Step::Boarded {
+                from,
+                route,
+                parent_arrival: pa,
+            } => {
+                plan.push((route, parent));
+                parent = from;
+                parent_arrival = pa;
+                if inner_k == 0 {
+                    break;
                 }
-                Step::Walked { from } => {
-                    parent = from;
-                    // walks do not consume a round
-                }
+                inner_k -= 1;
+            }
+            Step::Walked {
+                from,
+                parent_arrival: pa,
+            } => {
+                parent = from;
+                parent_arrival = pa;
+                // walks do not consume a round
             }
         }
-
-        if !plan.is_empty() && origins.contains(parent.idx()) {
-            plan.reverse();
-            plans.push((parent, plan));
-        }
     }
 
-    plans
+    if !plan.is_empty() && origins.contains(parent.idx()) {
+        plan.reverse();
+        Some((parent, plan))
+    } else {
+        None
+    }
 }
 
 /// Models a route-based transit network for the RAPTOR algorithm.
@@ -719,6 +863,7 @@ pub trait Timetable {
             walked_buf,
             origin_set,
             relax_heap,
+            ever_reached,
             ..
         } = cache;
 
@@ -729,13 +874,15 @@ pub trait Timetable {
         }
 
         // Seed labels for each origin at tau + its walk-time offset.
+        // Reconstruction breaks the trace loop when it hits an origin
+        // (origin_set bit is set), so origins don't need a Step entry.
         for &(o, walk) in origins {
             let t = tau.saturating_add(walk);
             let seed = L::from_departure(t);
-            if seed.arrival() < labels[0][o.idx()].arrival() {
-                labels[0][o.idx()] = seed;
-                best_arrival[o.idx()] = seed;
+            if labels[0][o.idx()].insert(seed) {
+                best_arrival[o.idx()].insert(seed);
                 marked_stops.insert(o.idx());
+                ever_reached.insert(o.idx());
             }
         }
 
@@ -756,6 +903,7 @@ pub trait Timetable {
                 marked_stops,
                 pt_threshold,
                 walked_buf,
+                ever_reached,
             );
         } else {
             relax_footpaths_round(
@@ -768,6 +916,7 @@ pub trait Timetable {
                 pt_threshold,
                 walked_buf,
                 relax_heap,
+                ever_reached,
             );
         }
         for s in walked_buf.drain(..) {
@@ -776,11 +925,17 @@ pub trait Timetable {
         pt_threshold = best_to_any_target(best_arrival, targets);
 
         for k in 1..=transfers {
-            // Carry forward labels[k-1] into labels[k].
+            // Sparse carry-forward: only clone bags at stops ever
+            // reached so far this query. For real feeds the reached
+            // set is small (<10% of stops in typical city queries),
+            // so this avoids the 50k-stop dense memcpy that would
+            // otherwise dominate per-round overhead.
             let (prev_labels, this_labels) = labels.split_at_mut(k);
             let src = &prev_labels[k - 1];
             let dst = &mut this_labels[0];
-            dst.copy_from_slice(src);
+            for bit in ever_reached.ones() {
+                dst[bit] = src[bit].clone();
+            }
 
             // Build the route queue for this round. Each entry pairs a
             // route with the earliest position on that route from which we
@@ -806,43 +961,79 @@ pub trait Timetable {
 
             marked_stops.clear();
 
+            // Per-route Pareto bag of riding entries. Each entry =
+            // (boarding_label, current_trip, boarding_stop); a single
+            // entry suffices for `ArrivalTime` (size-1 stop bags) but
+            // multi-criterion impls may carry multiple Pareto-optimal
+            // entries that boarded different trips.
+            let mut route_bag: SmallVec<[(L, TripIdx, StopIdx); 8]> = SmallVec::new();
+            let mut staged: SmallVec<[L; 8]> = SmallVec::new();
+
             for &route in q_routes.iter() {
                 let p_pos = q_entry[route.idx()].expect("route in q_routes must have an entry");
-                let mut current_trip: Option<TripIdx> = None;
-                let mut boarding_stop = self.stop_at(route, p_pos);
-
-                let mut boarding_label: L = L::UNREACHED;
+                route_bag.clear();
 
                 for (offset, &pi) in self.get_stops_after(route, p_pos).iter().enumerate() {
                     let pos = p_pos + offset as u32;
 
-                    if let Some(arr) = current_trip.map(|trip| self.get_arrival_time(trip, pos)) {
-                        let best_to_pi = best_arrival[pi.idx()].arrival();
+                    // 1. Alight every active riding entry at pi.
+                    for &(boarding_label, trip, boarding_stop) in route_bag.iter() {
+                        let arr = self.get_arrival_time(trip, pos);
+                        let best_to_pi = best_arrival[pi.idx()].min_arrival();
                         let time_to_beat = best_to_pi.min(pt_threshold);
-
-                        if arr < time_to_beat {
+                        if arr >= time_to_beat {
+                            continue;
+                        }
+                        let new_label = boarding_label.extend_by_trip(arr);
+                        if labels[k][pi.idx()].insert(new_label) {
+                            best_arrival[pi.idx()].insert(new_label);
                             board_detail.insert(
-                                (k, pi),
+                                (k, pi, new_label.arrival()),
                                 Step::Boarded {
                                     from: boarding_stop,
                                     route,
+                                    parent_arrival: boarding_label.arrival(),
                                 },
                             );
-                            let new_label = boarding_label.extend_by_trip(arr);
-                            labels[k][pi.idx()] = new_label;
-                            best_arrival[pi.idx()] = new_label;
                             marked_stops.insert(pi.idx());
+                            ever_reached.insert(pi.idx());
                         }
                     }
 
-                    let t_prev_pi = labels[k - 1][pi.idx()].arrival();
-                    let dep_at_pi = current_trip
-                        .map(|trip| self.get_departure_time(trip, pos))
-                        .unwrap_or(Tau::MAX);
-                    if t_prev_pi <= dep_at_pi {
-                        current_trip = self.get_earliest_trip(route, t_prev_pi, pos);
-                        boarding_stop = pi;
-                        boarding_label = labels[k - 1][pi.idx()];
+                    // 2. Try to extend route_bag with labels from
+                    //    labels[k-1][pi] that can catch a trip on this
+                    //    route at pi. Snapshot first to avoid aliasing.
+                    staged.clear();
+                    staged.extend(labels[k - 1][pi.idx()].iter().copied());
+                    for candidate in &staged {
+                        let cand_arr = candidate.arrival();
+                        let trip = match self.get_earliest_trip(route, cand_arr, pos) {
+                            Some(t) => t,
+                            None => continue,
+                        };
+                        let trip_dep = self.get_departure_time(trip, pos);
+
+                        // Redundancy check: existing route_bag entry
+                        // dominates candidate AND boards an at-or-earlier
+                        // trip at pi → candidate is redundant.
+                        let mut redundant = false;
+                        for &(l_existing, t_existing, _) in route_bag.iter() {
+                            let existing_dep = self.get_departure_time(t_existing, pos);
+                            if l_existing.dominates(candidate) && existing_dep <= trip_dep {
+                                redundant = true;
+                                break;
+                            }
+                        }
+                        if redundant {
+                            continue;
+                        }
+
+                        // Remove entries strictly dominated by candidate.
+                        route_bag.retain(|&mut (l_existing, t_existing, _)| {
+                            let existing_dep = self.get_departure_time(t_existing, pos);
+                            !(candidate.dominates(&l_existing) && trip_dep <= existing_dep)
+                        });
+                        route_bag.push((*candidate, trip, pi));
                     }
                 }
             }
@@ -866,6 +1057,7 @@ pub trait Timetable {
                     marked_stops,
                     pt_threshold,
                     walked_buf,
+                    ever_reached,
                 );
             } else {
                 relax_footpaths_round(
@@ -878,6 +1070,7 @@ pub trait Timetable {
                     pt_threshold,
                     walked_buf,
                     relax_heap,
+                    ever_reached,
                 );
             }
             for s in walked_buf.drain(..) {
@@ -890,25 +1083,43 @@ pub trait Timetable {
             }
         }
 
-        // For each target stop the algorithm reached, reconstruct candidate
-        // plans and pair each with its origin (one of the user's origins,
-        // chosen during the trace). Effective arrival = label at target +
-        // target's walk-time offset.
+        // For each target stop, enumerate every Pareto-optimal label
+        // in the target's bag at every round and reconstruct its plan.
+        // Effective label = bag label extended by the target's walk
+        // time offset.
         let mut journeys: Vec<Journey<L>> = Vec::new();
+        let mut seen: Vec<(StopIdx, Tau, K, Tau)> = Vec::new();
         for &(target, walk) in targets {
-            let plans = reconstruct_journey(board_detail, origin_set, target, transfers);
-            for (origin, plan) in plans {
-                let raw_label = labels[plan.len()][target.idx()];
-                if raw_label.arrival() == Tau::MAX {
-                    continue;
+            #[allow(clippy::needless_range_loop)]
+            for k in 1..=transfers {
+                // Snapshot to avoid borrowing labels through the trace loop.
+                let bag_snapshot: SmallVec<[L; 8]> =
+                    labels[k][target.idx()].iter().copied().collect();
+                for raw_label in &bag_snapshot {
+                    let raw_arr = raw_label.arrival();
+                    if raw_arr == Tau::MAX {
+                        continue;
+                    }
+                    // Dedup: same target + same raw arrival + same k + same walk
+                    // means the same journey would emerge.
+                    let key = (target, raw_arr, k, walk);
+                    if seen.contains(&key) {
+                        continue;
+                    }
+                    let Some((origin, plan)) =
+                        reconstruct_journey(board_detail, origin_set, target, raw_arr, k)
+                    else {
+                        continue;
+                    };
+                    seen.push(key);
+                    let label = raw_label.extend_by_footpath(walk);
+                    journeys.push(Journey {
+                        origin,
+                        target,
+                        plan,
+                        label,
+                    });
                 }
-                let label = raw_label.extend_by_footpath(walk);
-                journeys.push(Journey {
-                    origin,
-                    target,
-                    plan,
-                    label,
-                });
             }
         }
 
@@ -948,12 +1159,12 @@ pub struct RaptorCache<L: Label = ArrivalTime> {
     n_stops: u32,
     n_routes: u32,
 
-    /// labels[k][stop.idx()] = best label at stop with at most k trips.
-    /// `L::UNREACHED` sentinel for "unreached".
-    labels: Vec<Vec<L>>,
+    /// labels[k][stop.idx()] = Pareto bag of labels at stop with at
+    /// most k trips. Empty bag means unreached.
+    labels: Vec<Vec<LabelBag<L>>>,
 
-    /// τ* — best label at each stop across all rounds.
-    best_arrival: Vec<L>,
+    /// τ* — Pareto bag of best labels at each stop across all rounds.
+    best_arrival: Vec<LabelBag<L>>,
 
     /// Boarding tree for journey reconstruction.
     board_detail: BoardingTree,
@@ -978,6 +1189,11 @@ pub struct RaptorCache<L: Label = ArrivalTime> {
     /// Min-heap reused across footpath relaxations. Entries are
     /// `(arrival_time, stop_bit)`; lazy deletion via the time field.
     relax_heap: BinaryHeap<Reverse<(Tau, u32)>>,
+
+    /// Bitset of stops with a non-empty bag in any round seen so
+    /// far this query. Used to make per-round carry-forward sparse:
+    /// only clone bags at set bits, not all `n_stops`.
+    ever_reached: FixedBitSet,
 }
 
 impl<L: Label> RaptorCache<L> {
@@ -994,7 +1210,7 @@ impl<L: Label> RaptorCache<L> {
             n_stops,
             n_routes,
             labels: Vec::new(),
-            best_arrival: vec![L::UNREACHED; n_stops as usize],
+            best_arrival: (0..n_stops).map(|_| LabelBag::new()).collect(),
             board_detail: BTreeMap::new(),
             marked_stops: FixedBitSet::with_capacity(n_stops as usize),
             q_entry: vec![None; n_routes as usize],
@@ -1002,6 +1218,7 @@ impl<L: Label> RaptorCache<L> {
             walked_buf: Vec::new(),
             origin_set: FixedBitSet::with_capacity(n_stops as usize),
             relax_heap: BinaryHeap::new(),
+            ever_reached: FixedBitSet::with_capacity(n_stops as usize),
         }
     }
 
@@ -1017,24 +1234,26 @@ impl<L: Label> RaptorCache<L> {
             self.n_routes, tt_n_routes
         );
 
-        // Resize labels: (transfers + 1) Vecs, each n_stops long, all UNREACHED.
+        // Resize labels: (transfers + 1) Vecs, each n_stops long, all empty bags.
         let needed = transfers + 1;
         for v in self.labels.iter_mut() {
-            v.iter_mut().for_each(|x| *x = L::UNREACHED);
+            v.iter_mut().for_each(|b| b.clear());
         }
         if self.labels.len() < needed {
-            self.labels
-                .resize_with(needed, || vec![L::UNREACHED; self.n_stops as usize]);
+            self.labels.resize_with(needed, || {
+                (0..self.n_stops).map(|_| LabelBag::new()).collect()
+            });
         } else {
             self.labels.truncate(needed);
         }
 
         for v in &mut self.best_arrival {
-            *v = L::UNREACHED;
+            v.clear();
         }
 
         self.board_detail.clear();
         self.marked_stops.clear();
+        self.ever_reached.clear();
 
         // Sparse-set reset: walk q_routes, clear corresponding q_entry slots.
         for r in self.q_routes.drain(..) {
