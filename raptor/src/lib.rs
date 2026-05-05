@@ -261,6 +261,48 @@ type BoardingTree = BTreeMap<(K, StopIdx), Step>;
 /// Stops that should be added to the marked set for the next round are
 /// pushed onto `out`, gated by `pt_threshold` (the current best effective
 /// arrival at any target). Caller drains `out` between calls.
+/// Single-pass relaxation for adapters that report `true` from
+/// [`Timetable::footpaths_are_transitively_closed`]. One walk per
+/// source — chained walks are unnecessary because every reachable
+/// pair is already a direct edge in the relation.
+///
+/// `O(E)` per round, no heap. Always sound when the closure
+/// precondition holds; produces the same labels and boarding tree as
+/// [`relax_footpaths_round`] in that case.
+#[allow(clippy::too_many_arguments)]
+fn relax_footpaths_round_closed<T: Timetable + ?Sized>(
+    timetable: &T,
+    k: K,
+    labels: &mut [Vec<Tau>],
+    best_arrival: &mut [Tau],
+    board_detail: &mut BoardingTree,
+    sources: &FixedBitSet,
+    pt_threshold: Tau,
+    out: &mut Vec<StopIdx>,
+) {
+    for stop_bit in sources.ones() {
+        let stop = StopIdx::new(stop_bit as u32);
+        let stop_arrival = labels[k][stop.idx()];
+        if stop_arrival == Tau::MAX {
+            continue;
+        }
+        for &p_dash in timetable.get_footpaths_from(stop) {
+            let via_walk = stop_arrival.saturating_add(timetable.get_transfer_time(stop, p_dash));
+            let cur = labels[k][p_dash.idx()];
+            if via_walk < cur {
+                labels[k][p_dash.idx()] = via_walk;
+                board_detail.insert((k, p_dash), Step::Walked { from: stop });
+                if via_walk < best_arrival[p_dash.idx()] {
+                    best_arrival[p_dash.idx()] = via_walk;
+                }
+                if via_walk < pt_threshold {
+                    out.push(p_dash);
+                }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn relax_footpaths_round<T: Timetable + ?Sized>(
     timetable: &T,
@@ -481,6 +523,24 @@ pub trait Timetable {
         1
     }
 
+    /// Reports whether the footpath relation is transitively closed —
+    /// that is, whether `A → C` is already a direct edge whenever
+    /// `A → B` and `B → C` are. The default is `false`.
+    ///
+    /// When `true`, the algorithm uses a single-pass `O(E)` footpath
+    /// relaxation per round instead of the multi-source Dijkstra
+    /// fallback (`O(E log V)`). This is a meaningful speedup on
+    /// dense closed graphs (e.g. publisher-curated `transfers.txt`
+    /// files in Berlin / Paris feeds).
+    ///
+    /// **Soundness**: returning `true` when the relation is *not*
+    /// closed will cause the algorithm to miss journeys whose optimal
+    /// path requires chaining direct walks within a round. Only return
+    /// `true` if you know the relation is closed.
+    fn footpaths_are_transitively_closed(&self) -> bool {
+        false
+    }
+
     /// Runs the RAPTOR algorithm and returns all Pareto-optimal journeys
     /// from any of the `origins` to any of the `targets`.
     ///
@@ -559,17 +619,35 @@ pub trait Timetable {
 
         let mut pt_threshold = best_to_any_target(best_arrival, targets);
 
-        relax_footpaths_round(
-            self,
-            0,
-            labels,
-            best_arrival,
-            board_detail,
-            marked_stops,
-            pt_threshold,
-            walked_buf,
-            relax_heap,
-        );
+        // Pick the per-round footpath relaxation strategy once. Closed
+        // graphs use a single-pass O(E) walk; non-closed graphs need
+        // multi-source Dijkstra to chain walks to a fixed point.
+        let footpaths_closed = self.footpaths_are_transitively_closed();
+
+        if footpaths_closed {
+            relax_footpaths_round_closed(
+                self,
+                0,
+                labels,
+                best_arrival,
+                board_detail,
+                marked_stops,
+                pt_threshold,
+                walked_buf,
+            );
+        } else {
+            relax_footpaths_round(
+                self,
+                0,
+                labels,
+                best_arrival,
+                board_detail,
+                marked_stops,
+                pt_threshold,
+                walked_buf,
+                relax_heap,
+            );
+        }
         for s in walked_buf.drain(..) {
             marked_stops.insert(s.idx());
         }
@@ -652,17 +730,30 @@ pub trait Timetable {
             // footpath relax. Refresh again after the footpath round so
             // the next round's boarding decisions use a current threshold.
             pt_threshold = best_to_any_target(best_arrival, targets);
-            relax_footpaths_round(
-                self,
-                k,
-                labels,
-                best_arrival,
-                board_detail,
-                marked_stops,
-                pt_threshold,
-                walked_buf,
-                relax_heap,
-            );
+            if footpaths_closed {
+                relax_footpaths_round_closed(
+                    self,
+                    k,
+                    labels,
+                    best_arrival,
+                    board_detail,
+                    marked_stops,
+                    pt_threshold,
+                    walked_buf,
+                );
+            } else {
+                relax_footpaths_round(
+                    self,
+                    k,
+                    labels,
+                    best_arrival,
+                    board_detail,
+                    marked_stops,
+                    pt_threshold,
+                    walked_buf,
+                    relax_heap,
+                );
+            }
             for s in walked_buf.drain(..) {
                 marked_stops.insert(s.idx());
             }

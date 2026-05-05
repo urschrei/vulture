@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.9.0] — 2026-05-05
+
+Closed-graph fast path for footpath relaxation. Reclaims most of the v0.8
+performance regression on closed-transfer-graph feeds (Berlin, Paris)
+without giving up the v0.8 correctness work for non-closed graphs.
+
+### Added
+
+- New trait method `Timetable::footpaths_are_transitively_closed(&self)
+  -> bool`, defaulting to `false`. When `true`, the algorithm uses a
+  single-pass `O(E)` per-round footpath relaxation; when `false`, it
+  uses the v0.8 multi-source Dijkstra (`O(E log V)`).
+- `GtfsTimetable::assert_footpaths_closed(self) -> Self` — opt-in
+  builder for users who know their `transfers.txt` is the entire
+  intended footpath relation (no chaining required, which is the
+  publisher convention for most curated feeds). Resets to `false`
+  whenever `with_walking_footpaths` is subsequently called.
+
+### Algorithm
+
+- New private helper `relax_footpaths_round_closed` mirrors the v0.7
+  single-pass logic. Algorithm reads
+  `footpaths_are_transitively_closed()` once per query and dispatches
+  to the right relax function for every round.
+
+### Cross-city benchmark
+
+The bench now calls `assert_footpaths_closed()` for every feed without
+walking footpaths, recovering most of the v0.8 regression:
+
+- Paris Châtelet → Gare du Nord: 8.7 ms → 0.77 ms (11× faster)
+- Paris Châtelet → La Défense: 14.0 ms → 0.88 ms (16× faster)
+- Paris Châtelet → Versailles: 34.5 ms → 16.7 ms (2× faster)
+- Berlin queries unchanged within noise (the regression was small
+  there to begin with).
+
+Helsinki stays on the Dijkstra path because `with_walking_footpaths`
+clears the closure flag — coordinate-derived edges within a radius are
+not transitively closed (the algorithm reaches farther-away stops by
+chaining short walks). Helsinki latencies and answers are unchanged
+from v0.8.
+
+### Soundness note
+
+Asserting closure on a non-closed relation is a soundness violation —
+the algorithm will miss journeys whose optimal path requires chaining
+direct walks within a round. Only call `assert_footpaths_closed()`
+when you know the relation is closed (or when you intend the
+publisher's `transfers.txt` to be treated as the entire intended
+relation, which matches v0.7 semantics).
+
 ## [0.8.0] — 2026-05-05
 
 Transfer-graph density. The `Timetable` trait no longer requires the

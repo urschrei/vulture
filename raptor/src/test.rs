@@ -904,3 +904,87 @@ fn multi_target_walk_offset_picks_best_target() {
     assert_eq!(best.arrival, 25);
     assert_eq!(best.target, t2);
 }
+
+#[test]
+fn closed_path_dispatch_matches_dijkstra() {
+    use crate::{RouteIdx, StopIdx, Tau, TripIdx};
+
+    // Newtype wrapper that delegates everything to its inner timetable
+    // but reports the footpath relation as transitively closed. Run the
+    // same scenario through both paths and assert identical journeys.
+    struct ClosedAssert<T: Timetable>(T);
+
+    impl<T: Timetable> Timetable for ClosedAssert<T> {
+        fn n_stops(&self) -> usize {
+            self.0.n_stops()
+        }
+        fn n_routes(&self) -> usize {
+            self.0.n_routes()
+        }
+        fn get_routes_serving_stop(&self, stop: StopIdx) -> &[(RouteIdx, u32)] {
+            self.0.get_routes_serving_stop(stop)
+        }
+        fn get_stops_after(&self, route: RouteIdx, pos: u32) -> &[StopIdx] {
+            self.0.get_stops_after(route, pos)
+        }
+        fn stop_at(&self, route: RouteIdx, pos: u32) -> StopIdx {
+            self.0.stop_at(route, pos)
+        }
+        fn get_earliest_trip(&self, route: RouteIdx, at: Tau, pos: u32) -> Option<TripIdx> {
+            self.0.get_earliest_trip(route, at, pos)
+        }
+        fn get_arrival_time(&self, trip: TripIdx, pos: u32) -> Tau {
+            self.0.get_arrival_time(trip, pos)
+        }
+        fn get_departure_time(&self, trip: TripIdx, pos: u32) -> Tau {
+            self.0.get_departure_time(trip, pos)
+        }
+        fn get_footpaths_from(&self, stop: StopIdx) -> &[StopIdx] {
+            self.0.get_footpaths_from(stop)
+        }
+        fn get_transfer_time(&self, from: StopIdx, to: StopIdx) -> Tau {
+            self.0.get_transfer_time(from, to)
+        }
+        fn footpaths_are_transitively_closed(&self) -> bool {
+            true
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum S {
+        A,
+        B,
+        C,
+        D,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum R {
+        R1,
+        R2,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Tr {
+        T1,
+        T2,
+    }
+
+    // A→B by R1, walk B→C, C→D by R2. The walk is a single direct edge
+    // so closure is trivially satisfied — both paths must agree.
+    let inner = SimpleTimetable::new()
+        .route(R::R1, &[S::A, S::B], &[(Tr::T1, &[(0, 0), (10, 10)])])
+        .route(R::R2, &[S::C, S::D], &[(Tr::T2, &[(0, 15), (25, 25)])])
+        .footpath(S::B, S::C)
+        .transfer_time(S::B, S::C, 3);
+
+    let a = inner.stop_idx_of(&S::A);
+    let d = inner.stop_idx_of(&S::D);
+
+    let dijkstra = inner.raptor(3, 0, &[(a, 0)], &[(d, 0)]);
+    let closed = ClosedAssert(inner).raptor(3, 0, &[(a, 0)], &[(d, 0)]);
+
+    assert_eq!(dijkstra.len(), closed.len(), "journey count must match");
+    for (a, b) in dijkstra.iter().zip(closed.iter()) {
+        assert_eq!(a.arrival, b.arrival, "arrival must match");
+        assert_eq!(a.plan, b.plan, "plan must match");
+    }
+}

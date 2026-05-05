@@ -159,6 +159,14 @@ pub struct GtfsTimetable<'gtfs> {
     footpaths_for_stops: Vec<SmallVec<[StopIdx; TYPICAL_TRANSFERS_PER_STOP]>>,
     transfer_times: HashMap<(StopIdx, StopIdx), Tau>,
 
+    /// User-asserted closure flag. Returned from
+    /// [`Timetable::footpaths_are_transitively_closed`] so the algorithm
+    /// can pick the single-pass relaxation. Set via
+    /// [`GtfsTimetable::assert_footpaths_closed`]; reset to `false` by
+    /// [`GtfsTimetable::with_walking_footpaths`] (which adds direct,
+    /// non-closed edges).
+    transfers_closed: bool,
+
     /// For each parent-station GTFS id, the child platform `StopIdx`es
     /// (each paired with a default zero walk time, ready to pass to
     /// [`Timetable::raptor`] as a multi-source/multi-target query).
@@ -364,8 +372,30 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             route_for_trip,
             footpaths_for_stops,
             transfer_times,
+            transfers_closed: false,
             station_children,
         })
+    }
+
+    /// Asserts that the current footpath relation is transitively
+    /// closed and instructs the algorithm to use the single-pass
+    /// `O(E)` relaxation instead of multi-source Dijkstra. Returns
+    /// `self` for chaining.
+    ///
+    /// Use when you know the underlying `transfers.txt` (or any
+    /// pre-processing you've applied) is closed — typically true for
+    /// publisher-curated feeds like Berlin VBB or Paris IDFM.
+    ///
+    /// **Soundness**: asserting closure on a non-closed relation will
+    /// cause the algorithm to miss journeys whose optimal path
+    /// requires chaining direct walks within a round. If unsure,
+    /// don't call this — the Dijkstra fallback is always sound.
+    ///
+    /// [`GtfsTimetable::with_walking_footpaths`] resets this flag,
+    /// because coordinate-derived edges are not closed by construction.
+    pub fn assert_footpaths_closed(mut self) -> Self {
+        self.transfers_closed = true;
+        self
     }
 
     /// Returns the child platforms of a parent station as a slice ready
@@ -458,6 +488,9 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             }
         }
 
+        // Coordinate-derived edges are direct only — closure is not
+        // preserved. Drop any prior closure assertion.
+        self.transfers_closed = false;
         self
     }
 
@@ -605,6 +638,10 @@ impl<'gtfs> Timetable for GtfsTimetable<'gtfs> {
             .get(&(from, to))
             .copied()
             .unwrap_or(DEFAULT_TRANSFER_TIME_SECONDS)
+    }
+
+    fn footpaths_are_transitively_closed(&self) -> bool {
+        self.transfers_closed
     }
 }
 

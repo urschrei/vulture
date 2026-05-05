@@ -171,6 +171,13 @@ do not need to be transitively closed. The algorithm relaxes footpaths to a
 fixed point per round (multi-source Dijkstra), so chained walks `A → B → C`
 are reached automatically with the combined walk time.
 
+For adapters whose footpath relation *is* transitively closed (typically a
+publisher-curated `transfers.txt` treated as the entire intended relation),
+override `Timetable::footpaths_are_transitively_closed` to return `true`. The
+algorithm then uses a single-pass `O(E)` relaxation instead of Dijkstra's
+`O(E log V)` heap. `GtfsTimetable` ships with this returning `false` by
+default; opt in via `GtfsTimetable::assert_footpaths_closed()`.
+
 Both points are documented on the `Timetable` trait.
 
 ### Walking footpaths from coordinates

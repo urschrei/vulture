@@ -1,6 +1,6 @@
 # Cross-city benchmarks
 
-Real-feed performance numbers for `raptor-rs` v0.8.0 across four GTFS
+Real-feed performance numbers for `raptor-rs` v0.9.0 across four GTFS
 feeds spanning two orders of magnitude in network size. Measured on
 Apple Silicon (arm64 macOS), single laptop, single thread; warm
 `RaptorCache` reused across queries; criterion-style methodology
@@ -99,21 +99,22 @@ considered).
 
 | Query                              | Median latency |              Result |
 |------------------------------------|---------------:|--------------------:|
-| Châtelet → Gare du Nord            |         8.7 ms | arr 09:05:00 (5 m)  |
-| Châtelet → La Défense              |        14.0 ms | arr 09:10:09 (10 m) |
-| Châtelet → Versailles Rive Droite  |        34.5 ms | arr 09:43:00 (43 m) |
+| Châtelet → Gare du Nord            |        0.77 ms | arr 09:05:00 (5 m)  |
+| Châtelet → La Défense              |        0.88 ms | arr 09:10:09 (10 m) |
+| Châtelet → Versailles Rive Droite  |        16.7 ms | arr 09:43:00 (43 m) |
 
 All three queries return single sensible journeys — the loop-route
 soundness bug that produced ARR<DEP results in earlier benchmark runs
 was fixed in Phase 0.11 (see [Known limitations](#known-limitations) §2
 for the diagnosis history).
 
-These latencies are an order of magnitude slower than the v0.7 numbers
-(0.41 ms, 0.6 ms, 9.8 ms respectively). The cause is the v0.8 switch
-from a single-pass footpath relaxation to multi-source Dijkstra: on
-Paris's already-closed `transfers.txt` graph, the heap operations cost
-more than the previous direct iteration. See limitation §4 for the
-trade-off and a possible future optimisation.
+The bench calls `GtfsTimetable::assert_footpaths_closed()` after
+construction, which lets the algorithm use the v0.9 single-pass
+footpath relaxation rather than multi-source Dijkstra — IDFM's
+`transfers.txt` is publisher-curated, and treating it as the entire
+intended footpath relation matches v0.7 semantics. This recovers most
+of the v0.8 regression (8.7 / 14.0 / 34.5 ms) at the cost of an
+explicit user assertion.
 
 ## Known limitations
 
@@ -206,11 +207,15 @@ Rautatientori plaza.
 
 Trade-off: on graphs whose `transfers.txt` is already close to
 transitively closed (Berlin, Paris), Dijkstra's per-edge `O(log V)`
-heap operations cost more than v0.7's single-pass relaxation. Paris's
-Châtelet → Versailles query went from 9.8 ms to 34.5 ms; Berlin's
-hand-picked-platforms query is a ~20% regression. Both still finish
-well under the 100 ms interactive threshold on networks at this
-scale.
+heap operations cost more than v0.7's single-pass relaxation. v0.9
+adds an opt-in fast path for this case:
+`GtfsTimetable::assert_footpaths_closed()` flips a flag the algorithm
+reads once per query, dispatching to a single-pass `O(E)` relaxation
+when set. The cross-city bench above calls this for every feed
+without walking footpaths, recovering most of the v0.8 Paris
+regression (8.7 / 14.0 / 34.5 ms back down to 0.77 / 0.88 / 16.7 ms).
+Asserting closure is a soundness commitment from the caller — see the
+trait method's docstring.
 
 These four items are the priority follow-ups for Phase 0.x; each is
 independently scoped, with loop routes (Phase 0.11) being the

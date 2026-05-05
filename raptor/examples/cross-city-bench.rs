@@ -169,6 +169,14 @@ fn main() -> anyhow::Result<()> {
             let mut tt = GtfsTimetable::new(&gtfs, feed.service_date)?;
             if let Some(d) = feed.walking_footpaths_m {
                 tt = tt.with_walking_footpaths(&gtfs, d, 1.4);
+            } else {
+                // Without coordinate-derived edges, the publisher's
+                // transfers.txt is the entire footpath relation. We
+                // treat it as the publisher intended (single hop, no
+                // chaining), which matches the v0.7 semantics and lets
+                // the algorithm use the single-pass O(E) relaxation
+                // instead of multi-source Dijkstra.
+                tt = tt.assert_footpaths_closed();
             }
             tt
         };
