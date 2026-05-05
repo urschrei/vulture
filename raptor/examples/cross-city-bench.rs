@@ -227,7 +227,7 @@ fn main() -> anyhow::Result<()> {
                     timetable.raptor_with_cache(&mut cache, 10, DEPARTURE_TIME, &origins, &targets);
                 samples_ns.push(t0.elapsed().as_nanos());
                 last_journey_count = journeys.len();
-                last_arrival = journeys.iter().map(|j| j.arrival).min();
+                last_arrival = journeys.iter().map(|j| j.arrival()).min();
             }
             samples_ns.sort_unstable();
             let median = samples_ns[samples_ns.len() / 2];

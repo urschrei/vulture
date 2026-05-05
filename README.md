@@ -34,7 +34,7 @@ let target = timetable.stop_idx("vishwavidyalaya").expect("unknown stop");
 let journeys = timetable.raptor(10, 32400, &[(start, 0)], &[(target, 0)]);
 
 for journey in &journeys {
-    print!("arrives {}s, plan: ", journey.arrival);
+    print!("arrives {}s, plan: ", journey.arrival());
     for (route_idx, stop_idx) in &journey.plan {
         let route = timetable.route_id(*route_idx);   // original GTFS route_id
         let stop = timetable.stop_id(*stop_idx);      // original GTFS stop_id
@@ -101,15 +101,23 @@ density), all of which are queued as follow-up work.
 
 ## Reading a Journey
 
-A `Journey` has a `plan` and an `arrival` time. The plan is a
+A `Journey<L>` has a `plan` and a `label`. The plan is a
 `Vec<(RouteIdx, StopIdx)>` — each entry means "take this route, get off at
-this stop". The source stop is implicit; it is not part of the plan.
+this stop". The source stop is implicit; it is not part of the plan. The
+`label: L` is the algorithm's per-stop label at the target; for the default
+single-criterion `ArrivalTime`, `journey.arrival()` (a method) returns the
+effective arrival time as a `Tau`.
 
 The plan records transit boardings only. If the optimal journey ends with a
 walk leg from the last boarded alight stop to the target, the plan still
-ends at the boarded alight stop and `arrival` reflects the walk-derived
+ends at the boarded alight stop and `arrival()` reflects the walk-derived
 arrival time at the target. Compare `journey.plan.last()`'s stop with your
 target to detect this case.
+
+For custom labels (e.g. tracking accumulated walking time alongside arrival),
+see the `Label` trait and `Timetable::raptor_with_label::<L>` /
+`raptor_with_cache_and_label::<L>`. The single-criterion `ArrivalTime` impl
+is the default and inlines to plain `Tau` operations.
 
 To translate index newtypes back to your adapter's external IDs, the bundled
 GTFS adapter exposes `GtfsTimetable::stop_id(stop_idx)` and

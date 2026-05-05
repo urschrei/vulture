@@ -45,7 +45,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     for (i, journey) in journeys.iter().enumerate() {
-        let travel_time = Duration::from_secs((journey.arrival - departure_time) as u64);
+        let travel_time = Duration::from_secs((journey.arrival() - departure_time) as u64);
         println!("Journey {} ({}):", i + 1, format_duration(travel_time));
         print_journey(&gtfs, &timetable, journey, start);
         println!();

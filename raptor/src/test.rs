@@ -58,8 +58,8 @@ fn reboarding_picks_correct_boarding_stop() {
     // The optimal journey: S->B via R2, then B->D via R3/Early, arriving at t=50
     assert!(!journeys.is_empty(), "should find at least one journey");
 
-    let best = journeys.iter().min_by_key(|j| j.arrival).unwrap();
-    assert_eq!(best.arrival, 50);
+    let best = journeys.iter().min_by_key(|j| j.arrival()).unwrap();
+    assert_eq!(best.arrival(), 50);
     assert_eq!(best.plan, plan!(tt; (R2, B), (R3, D)));
 }
 
@@ -281,7 +281,7 @@ fn direct_journey_single_route() {
         &[(tt.stop_idx_of(&Stop::C), 0)],
     );
     assert_eq!(journeys.len(), 1);
-    assert_eq!(journeys[0].arrival, 20);
+    assert_eq!(journeys[0].arrival(), 20);
     assert_eq!(journeys[0].plan, plan!(tt; (Route::R1, Stop::C)));
 }
 
@@ -321,8 +321,8 @@ fn direct_journey_picks_fastest_route() {
         &[(tt.stop_idx_of(&Stop::A), 0)],
         &[(tt.stop_idx_of(&Stop::B), 0)],
     );
-    let best = journeys.iter().min_by_key(|j| j.arrival).unwrap();
-    assert_eq!(best.arrival, 50);
+    let best = journeys.iter().min_by_key(|j| j.arrival()).unwrap();
+    assert_eq!(best.arrival(), 50);
 }
 
 #[test]
@@ -363,8 +363,8 @@ fn exact_time_connection() {
         &[(tt.stop_idx_of(&Stop::C), 0)],
     );
     assert!(!journeys.is_empty(), "exact-time connection should work");
-    let best = journeys.iter().min_by_key(|j| j.arrival).unwrap();
-    assert_eq!(best.arrival, 30);
+    let best = journeys.iter().min_by_key(|j| j.arrival()).unwrap();
+    assert_eq!(best.arrival(), 30);
     assert_eq!(
         best.plan,
         plan!(tt; (Route::R1, Stop::B), (Route::R2, Stop::C))
@@ -407,7 +407,7 @@ fn multi_trip_picks_earliest_catchable() {
         &[(tt.stop_idx_of(&Stop::B), 0)],
     );
     assert_eq!(journeys.len(), 1);
-    assert_eq!(journeys[0].arrival, 25); // T2 arrives B@25
+    assert_eq!(journeys[0].arrival(), 25); // T2 arrives B@25
 }
 
 #[test]
@@ -456,8 +456,8 @@ fn two_transfer_journey() {
         &[(tt.stop_idx_of(&Stop::D), 0)],
     );
     assert!(!journeys.is_empty());
-    let best = journeys.iter().min_by_key(|j| j.arrival).unwrap();
-    assert_eq!(best.arrival, 30);
+    let best = journeys.iter().min_by_key(|j| j.arrival()).unwrap();
+    assert_eq!(best.arrival(), 30);
     assert_eq!(
         best.plan,
         plan!(tt;
@@ -517,12 +517,12 @@ fn pareto_optimal_fewer_transfers_vs_faster() {
     assert_eq!(journeys.len(), 2, "should have 2 pareto-optimal journeys");
 
     let mut sorted = journeys.clone();
-    sorted.sort_by_key(|j| j.arrival);
+    sorted.sort_by_key(|j| j.arrival());
     // Faster journey (2 legs)
-    assert_eq!(sorted[0].arrival, 100);
+    assert_eq!(sorted[0].arrival(), 100);
     assert_eq!(sorted[0].plan.len(), 2);
     // Slower direct journey (1 leg)
-    assert_eq!(sorted[1].arrival, 200);
+    assert_eq!(sorted[1].arrival(), 200);
     assert_eq!(sorted[1].plan.len(), 1);
 }
 
@@ -570,7 +570,7 @@ fn footpath_enables_connection() {
         &[(tt.stop_idx_of(&Stop::D), 0)],
     );
     assert_eq!(journeys.len(), 1, "expected one journey, got {journeys:?}");
-    assert_eq!(journeys[0].arrival, 30);
+    assert_eq!(journeys[0].arrival(), 30);
     assert_eq!(
         journeys[0].plan,
         plan!(tt; (Route::R1, Stop::B), (Route::R2, Stop::D))
@@ -660,8 +660,8 @@ fn early_termination_no_improvement() {
 
     assert_eq!(j1.len(), j100.len());
     assert_eq!(
-        j1.iter().min_by_key(|j| j.arrival).unwrap().arrival,
-        j100.iter().min_by_key(|j| j.arrival).unwrap().arrival,
+        j1.iter().min_by_key(|j| j.arrival()).unwrap().arrival(),
+        j100.iter().min_by_key(|j| j.arrival()).unwrap().arrival(),
     );
 }
 
@@ -703,7 +703,7 @@ fn dominance_prunes_slower_arrival() {
     );
     // Both routes are discovered in round 1, so the slower one is dominated
     assert_eq!(journeys.len(), 1, "dominated journey should be pruned");
-    assert_eq!(journeys[0].arrival, 50);
+    assert_eq!(journeys[0].arrival(), 50);
 }
 
 #[test]
@@ -759,7 +759,7 @@ fn raptor_with_cache_matches_fresh_run() {
             "journey count differs at query {ps:?}->{pt:?}"
         );
         for (b, c) in baseline.iter().zip(cached.iter()) {
-            assert_eq!(b.arrival, c.arrival);
+            assert_eq!(b.arrival(), c.arrival());
             assert_eq!(b.plan, c.plan);
         }
     }
@@ -801,7 +801,7 @@ fn multi_source_picks_best_origin() {
 
     let journeys = tt.raptor(3, 0, &[(a, 0), (b, 0)], &[(c, 0)]);
     assert_eq!(journeys.len(), 1, "one Pareto-optimal journey expected");
-    assert_eq!(journeys[0].arrival, 10);
+    assert_eq!(journeys[0].arrival(), 10);
     assert_eq!(
         journeys[0].origin, a,
         "should have started at A (the faster route)"
@@ -852,8 +852,8 @@ fn multi_source_walk_offset_changes_best_origin() {
     // Walk 0s to B means the user reaches B at tau=0. TSlow boards at 0,
     // arrives C at 30.
     let journeys = tt.raptor(3, 0, &[(a, 30), (b, 0)], &[(c, 0)]);
-    let best = journeys.iter().min_by_key(|j| j.arrival).unwrap();
-    assert_eq!(best.arrival, 30);
+    let best = journeys.iter().min_by_key(|j| j.arrival()).unwrap();
+    assert_eq!(best.arrival(), 30);
     assert_eq!(
         best.origin, b,
         "should have started at B (closer + slow trip wins)"
@@ -898,10 +898,10 @@ fn multi_target_walk_offset_picks_best_target() {
     let t2 = tt.stop_idx_of(&Stop::T2);
 
     let journeys = tt.raptor(3, 0, &[(a, 0)], &[(t1, 30), (t2, 0)]);
-    let best = journeys.iter().min_by_key(|j| j.arrival).unwrap();
+    let best = journeys.iter().min_by_key(|j| j.arrival()).unwrap();
     // best raw arrival at T1 = 10, +30 walk = 40 effective
     // best raw arrival at T2 = 25, +0 walk = 25 effective → wins
-    assert_eq!(best.arrival, 25);
+    assert_eq!(best.arrival(), 25);
     assert_eq!(best.target, t2);
 }
 
@@ -984,7 +984,101 @@ fn closed_path_dispatch_matches_dijkstra() {
 
     assert_eq!(dijkstra.len(), closed.len(), "journey count must match");
     for (a, b) in dijkstra.iter().zip(closed.iter()) {
-        assert_eq!(a.arrival, b.arrival, "arrival must match");
+        assert_eq!(a.arrival(), b.arrival(), "arrival must match");
         assert_eq!(a.plan, b.plan, "plan must match");
     }
+}
+
+#[test]
+fn custom_label_tracks_accumulated_walk_time() {
+    use crate::{Label, RaptorCache, Tau};
+
+    // Custom Label that piggybacks the accumulated walking time
+    // alongside arrival time. The single-label-per-stop algorithm
+    // still picks by arrival, so walk_time is just carried along —
+    // but it ends up correctly accumulated on the journey output.
+    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    struct ArrivalAndWalk {
+        arrival: Tau,
+        walk_time: Tau,
+    }
+
+    impl Label for ArrivalAndWalk {
+        const UNREACHED: Self = ArrivalAndWalk {
+            arrival: Tau::MAX,
+            walk_time: 0,
+        };
+
+        fn from_departure(tau: Tau) -> Self {
+            ArrivalAndWalk {
+                arrival: tau,
+                walk_time: 0,
+            }
+        }
+
+        fn extend_by_trip(self, arrival_tau: Tau) -> Self {
+            ArrivalAndWalk {
+                arrival: arrival_tau,
+                walk_time: self.walk_time,
+            }
+        }
+
+        fn extend_by_footpath(self, walk: Tau) -> Self {
+            ArrivalAndWalk {
+                arrival: self.arrival.saturating_add(walk),
+                walk_time: self.walk_time.saturating_add(walk),
+            }
+        }
+
+        fn arrival(&self) -> Tau {
+            self.arrival
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum S {
+        A,
+        B,
+        C,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum R {
+        R1,
+        R2,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Tr {
+        T1,
+        T2,
+    }
+
+    // A→B by R1 (arr 10), walk B→C 7s, then C→D... actually just B→C:
+    // we use a R2 from C to test. Walk B→C is 7s; final journey uses
+    // 7s of walking.
+    let tt = SimpleTimetable::new()
+        .route(R::R1, &[S::A, S::B], &[(Tr::T1, &[(0, 0), (10, 10)])])
+        .route(R::R2, &[S::C], &[(Tr::T2, &[(20, 20)])])
+        .footpath(S::B, S::C)
+        .transfer_time(S::B, S::C, 7);
+
+    let a = tt.stop_idx_of(&S::A);
+    let c = tt.stop_idx_of(&S::C);
+
+    // Default ArrivalTime path
+    let default_journeys = tt.raptor(3, 0, &[(a, 0)], &[(c, 0)]);
+    assert!(!default_journeys.is_empty());
+    assert_eq!(default_journeys[0].arrival(), 17); // 10 + 7
+
+    // Custom label path via raptor_with_label.
+    let label_journeys: Vec<crate::Journey<ArrivalAndWalk>> =
+        tt.raptor_with_label::<ArrivalAndWalk>(3, 0, &[(a, 0)], &[(c, 0)]);
+    assert_eq!(label_journeys.len(), default_journeys.len());
+    assert_eq!(label_journeys[0].arrival(), 17);
+    assert_eq!(label_journeys[0].label.walk_time, 7, "walk time tracked");
+
+    // Same via raptor_with_cache_and_label (cache infers L).
+    let mut cache = RaptorCache::<ArrivalAndWalk>::for_timetable(&tt);
+    let cached = tt.raptor_with_cache_and_label(&mut cache, 3, 0, &[(a, 0)], &[(c, 0)]);
+    assert_eq!(cached.len(), 1);
+    assert_eq!(cached[0].label.walk_time, 7);
 }

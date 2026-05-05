@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.10.0] — 2026-05-05
+
+McRAPTOR-ready `Label` trait. The algorithm is now generic over a
+caller-supplied label type — single-criterion users see no behaviour
+change (the default `ArrivalTime` impl inlines to v0.9 code), but
+custom labels can now ride along (e.g. accumulated walking time) and
+be reported on the resulting `Journey`. The bag-of-labels
+representation needed for true multi-criterion (Pareto fronts per
+stop) is planned for v0.11.
+
+### Added
+
+- `pub trait Label: Copy + Debug` with associated `UNREACHED` const
+  and methods `from_departure`, `extend_by_trip`,
+  `extend_by_footpath`, `dominates`, `arrival`. The default
+  `dominates` impl uses `arrival` (correct for single-criterion).
+- `pub struct ArrivalTime(pub Tau)` — the only `Label` impl shipped.
+  Default for both `Journey<L>` and `RaptorCache<L>`.
+- `Timetable::raptor_with_label::<L>` and
+  `Timetable::raptor_with_cache_and_label::<L>` — generic variants
+  that take/return a custom label. The non-generic `raptor` and
+  `raptor_with_cache` are unchanged and call into the generic
+  versions with `L = ArrivalTime`.
+
+### Breaking changes
+
+- `Journey` lost its `pub arrival: Tau` field; replaced by `pub label:
+  L` plus a convenience `Journey::arrival(&self) -> Tau` method.
+  Callers reading `j.arrival` need to use `j.arrival()` instead. For
+  the default `ArrivalTime` label, `j.label.0` is also the bare `Tau`.
+- `Journey` and `RaptorCache` are now generic over `L: Label` with
+  default `ArrivalTime`. Type inference covers most call sites
+  unchanged; explicit annotations like `let j: Vec<Journey> = …`
+  continue to mean `Vec<Journey<ArrivalTime>>`.
+
+### Performance
+
+- Generic refactor adds no measurable overhead — `ArrivalTime`'s
+  trait methods inline to direct `Tau` operations. Cross-city bench
+  numbers are unchanged from v0.9 within measurement noise.
+
+### Tests
+
+- `custom_label_tracks_accumulated_walk_time` exercises the generic
+  path with a custom `ArrivalAndWalk` label, verifies the extra
+  walk-time component is correctly threaded through trip rides
+  (no-op) and footpath relaxations (accumulates).
+- All 51 tests + proptests green.
+
 ## [0.9.0] — 2026-05-05
 
 Closed-graph fast path for footpath relaxation. Reclaims most of the v0.8

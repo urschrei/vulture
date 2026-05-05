@@ -284,6 +284,13 @@ that, we know there's still work to do.
 Even if we don't ship multi-criteria routing in v0.3, we should
 restructure labels *now* so that adding it later isn't a rewrite.
 
+**Status (v0.10):** 2.1 (the `Label` trait) and 2.4 step 1 (algorithm
+refactored to be generic over `L: Label`) have landed. The shipped
+representation is single-label-per-stop, so multi-criterion impls
+collapse to a tiebroken single label rather than a Pareto front.
+2.2/2.3 (multi-criterion labels + bag-of-labels) is queued for v0.11
+under the same Phase 2 banner.
+
 ### 2.1 The `Label` trait
 
 ```rust

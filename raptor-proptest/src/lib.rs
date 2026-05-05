@@ -31,7 +31,7 @@ pub fn raptor_front(journeys: &[Journey]) -> BTreeSet<(u16, u8)> {
     let mut points: Vec<(u16, u8)> = journeys
         .iter()
         .map(|j| {
-            let arr = u16::try_from(j.arrival)
+            let arr = u16::try_from(j.arrival())
                 .expect("arrival exceeds u16::MAX — generator range exceeded?");
             let k = u8::try_from(j.plan.len())
                 .expect("plan length exceeds u8::MAX — should never happen");
@@ -102,7 +102,7 @@ fn layer3_matches_reference(tc: hegel::TestCase) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use raptor::{Journey, RouteIdx, StopIdx};
+    use raptor::{ArrivalTime, Journey, RouteIdx, StopIdx};
 
     fn j(arrival: usize, plan: Vec<(u32, u32)>) -> Journey {
         Journey {
@@ -112,7 +112,7 @@ mod tests {
                 .into_iter()
                 .map(|(r, s)| (RouteIdx::new(r), StopIdx::new(s)))
                 .collect(),
-            arrival,
+            label: ArrivalTime(arrival),
         }
     }
 

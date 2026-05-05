@@ -201,10 +201,82 @@ impl From<TripIdx> for u32 {
     }
 }
 
+/// A label attached to a `(round, stop)` cell during the RAPTOR scan.
+///
+/// In single-criterion routing this is just an arrival time
+/// ([`ArrivalTime`]). The trait is the seam where future multi-criterion
+/// label types (walking time, transfer slack, fare zones) plug in
+/// without touching the core algorithm.
+///
+/// **Status (v0.10):** the algorithm stores one label per `(round, stop)`,
+/// so multi-criterion impls collapse to a single tiebroken label rather
+/// than a Pareto front. The bag-of-labels representation needed for true
+/// McRAPTOR is planned for v0.11 — see roadmap §2.3.
+pub trait Label: Copy + std::fmt::Debug {
+    /// The "unreached" sentinel. The algorithm initialises every
+    /// `(round, stop)` cell to this value before seeding origins.
+    const UNREACHED: Self;
+
+    /// Initial label at an origin stop departing at time `tau`.
+    fn from_departure(tau: Tau) -> Self;
+
+    /// New label produced by alighting from a trip at this stop with
+    /// arrival time `arrival_tau`. `self` is the label at the boarding
+    /// stop. For multi-criterion impls, components like accumulated
+    /// walking time inherit from `self`.
+    fn extend_by_trip(self, arrival_tau: Tau) -> Self;
+
+    /// New label after walking a footpath of duration `walk_time`.
+    fn extend_by_footpath(self, walk_time: Tau) -> Self;
+
+    /// `self` weakly dominates `other` (every criterion of `self` is
+    /// at most the corresponding criterion of `other`). The default
+    /// implementation uses [`Label::arrival`], which is correct for
+    /// single-criterion impls.
+    fn dominates(&self, other: &Self) -> bool {
+        self.arrival() <= other.arrival()
+    }
+
+    /// Effective arrival time at the labelled stop. Used by the
+    /// algorithm for target-threshold comparisons and by [`Journey`]
+    /// output. Always returns [`Tau::MAX`] for [`Label::UNREACHED`].
+    fn arrival(&self) -> Tau;
+}
+
+/// Single-criterion label = arrival time at a stop. Default `L`
+/// throughout the algorithm. Constructing from a `Tau` is direct;
+/// extracting back is `arrival()`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ArrivalTime(pub Tau);
+
+impl Label for ArrivalTime {
+    const UNREACHED: Self = ArrivalTime(Tau::MAX);
+
+    #[inline]
+    fn from_departure(tau: Tau) -> Self {
+        ArrivalTime(tau)
+    }
+
+    #[inline]
+    fn extend_by_trip(self, arrival_tau: Tau) -> Self {
+        ArrivalTime(arrival_tau)
+    }
+
+    #[inline]
+    fn extend_by_footpath(self, walk_time: Tau) -> Self {
+        ArrivalTime(self.0.saturating_add(walk_time))
+    }
+
+    #[inline]
+    fn arrival(&self) -> Tau {
+        self.0
+    }
+}
+
 /// A journey found by the RAPTOR algorithm.
 ///
 /// Each journey consists of a sequence of (route, alight stop) steps and a
-/// final arrival time. Multiple journeys may be returned for a single query,
+/// final label. Multiple journeys may be returned for a single query,
 /// representing pareto-optimal trade-offs between fewer transfers and earlier
 /// arrival.
 ///
@@ -212,8 +284,10 @@ impl From<TripIdx> for u32 {
 /// actually started from — relevant for multi-source queries (e.g. "any
 /// platform of this station") where the algorithm picks the best origin
 /// internally. Similarly `target` is the target stop reached.
+///
+/// `L` defaults to [`ArrivalTime`] for single-criterion routing.
 #[derive(Debug, Clone)]
-pub struct Journey {
+pub struct Journey<L: Label = ArrivalTime> {
     /// The origin stop this journey starts from, picked from the
     /// user-supplied origin set.
     pub origin: StopIdx,
@@ -227,9 +301,19 @@ pub struct Journey {
     /// origin stop, and each subsequent step boards at the stop where the
     /// previous step got off (possibly via an intermediate footpath).
     pub plan: Vec<(RouteIdx, StopIdx)>,
-    /// Effective arrival time, in seconds since midnight. Includes the
-    /// user-supplied walk-time offset for the chosen `target` stop.
-    pub arrival: Tau,
+    /// The label at the target stop, with the target's walk-time offset
+    /// already folded in. For [`ArrivalTime`], `label.arrival()` is the
+    /// effective arrival time in seconds since midnight.
+    pub label: L,
+}
+
+impl<L: Label> Journey<L> {
+    /// Convenience accessor: `self.label.arrival()`. The effective
+    /// arrival time at the chosen target, with the target's
+    /// walk-time offset already applied.
+    pub fn arrival(&self) -> Tau {
+        self.label.arrival()
+    }
 }
 
 /// One reconstructable step in a journey: either a transit boarding event
@@ -270,11 +354,11 @@ type BoardingTree = BTreeMap<(K, StopIdx), Step>;
 /// precondition holds; produces the same labels and boarding tree as
 /// [`relax_footpaths_round`] in that case.
 #[allow(clippy::too_many_arguments)]
-fn relax_footpaths_round_closed<T: Timetable + ?Sized>(
+fn relax_footpaths_round_closed<T: Timetable + ?Sized, L: Label>(
     timetable: &T,
     k: K,
-    labels: &mut [Vec<Tau>],
-    best_arrival: &mut [Tau],
+    labels: &mut [Vec<L>],
+    best_arrival: &mut [L],
     board_detail: &mut BoardingTree,
     sources: &FixedBitSet,
     pt_threshold: Tau,
@@ -282,20 +366,20 @@ fn relax_footpaths_round_closed<T: Timetable + ?Sized>(
 ) {
     for stop_bit in sources.ones() {
         let stop = StopIdx::new(stop_bit as u32);
-        let stop_arrival = labels[k][stop.idx()];
-        if stop_arrival == Tau::MAX {
+        let stop_label = labels[k][stop.idx()];
+        if stop_label.arrival() == Tau::MAX {
             continue;
         }
         for &p_dash in timetable.get_footpaths_from(stop) {
-            let via_walk = stop_arrival.saturating_add(timetable.get_transfer_time(stop, p_dash));
+            let via_walk = stop_label.extend_by_footpath(timetable.get_transfer_time(stop, p_dash));
             let cur = labels[k][p_dash.idx()];
-            if via_walk < cur {
+            if via_walk.arrival() < cur.arrival() {
                 labels[k][p_dash.idx()] = via_walk;
                 board_detail.insert((k, p_dash), Step::Walked { from: stop });
-                if via_walk < best_arrival[p_dash.idx()] {
+                if via_walk.arrival() < best_arrival[p_dash.idx()].arrival() {
                     best_arrival[p_dash.idx()] = via_walk;
                 }
-                if via_walk < pt_threshold {
+                if via_walk.arrival() < pt_threshold {
                     out.push(p_dash);
                 }
             }
@@ -304,27 +388,28 @@ fn relax_footpaths_round_closed<T: Timetable + ?Sized>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn relax_footpaths_round<T: Timetable + ?Sized>(
+fn relax_footpaths_round<T: Timetable + ?Sized, L: Label>(
     timetable: &T,
     k: K,
-    labels: &mut [Vec<Tau>],
-    best_arrival: &mut [Tau],
+    labels: &mut [Vec<L>],
+    best_arrival: &mut [L],
     board_detail: &mut BoardingTree,
     sources: &FixedBitSet,
     pt_threshold: Tau,
     out: &mut Vec<StopIdx>,
     heap: &mut BinaryHeap<Reverse<(Tau, u32)>>,
 ) {
-    // Multi-source Dijkstra over the footpath graph at round `k`. Each
-    // source's initial label is its current `labels[k]` value; transfer
-    // times are non-negative so Dijkstra is sound. Uses lazy deletion —
-    // stale heap entries are skipped on pop.
+    // Multi-source Dijkstra over the footpath graph at round `k`,
+    // ordered by `Label::arrival()`. Each source's initial priority is
+    // its current `labels[k]` arrival; transfer times are non-negative
+    // so Dijkstra is sound. Uses lazy deletion — stale heap entries
+    // are skipped on pop.
     //
     // O(E log V) per round; replaces an earlier LIFO Vec-based queue
     // that degenerated to O(V·E) on dense walking graphs.
     heap.clear();
     for bit in sources.ones() {
-        let arrival = labels[k][bit];
+        let arrival = labels[k][bit].arrival();
         if arrival != Tau::MAX {
             heap.push(Reverse((arrival, bit as u32)));
         }
@@ -332,36 +417,36 @@ fn relax_footpaths_round<T: Timetable + ?Sized>(
 
     while let Some(Reverse((arrival, stop_bit))) = heap.pop() {
         let stop = StopIdx::new(stop_bit);
+        let stop_label = labels[k][stop.idx()];
         // Skip stale entries — a strictly better label was popped earlier.
-        if arrival > labels[k][stop.idx()] {
+        if arrival > stop_label.arrival() {
             continue;
         }
         for &p_dash in timetable.get_footpaths_from(stop) {
-            let via_walk = arrival.saturating_add(timetable.get_transfer_time(stop, p_dash));
+            let via_walk = stop_label.extend_by_footpath(timetable.get_transfer_time(stop, p_dash));
             let cur = labels[k][p_dash.idx()];
-            if via_walk < cur {
+            if via_walk.arrival() < cur.arrival() {
                 labels[k][p_dash.idx()] = via_walk;
                 board_detail.insert((k, p_dash), Step::Walked { from: stop });
-                let cur_best = best_arrival[p_dash.idx()];
-                if via_walk < cur_best {
+                if via_walk.arrival() < best_arrival[p_dash.idx()].arrival() {
                     best_arrival[p_dash.idx()] = via_walk;
                 }
-                if via_walk < pt_threshold {
+                if via_walk.arrival() < pt_threshold {
                     out.push(p_dash);
                 }
-                heap.push(Reverse((via_walk, p_dash.get())));
+                heap.push(Reverse((via_walk.arrival(), p_dash.get())));
             }
         }
     }
 }
 
-/// Returns the minimum of `best_arrival[t] + w` across all `(t, w)`
-/// in `targets`, saturating on overflow. Returns `Tau::MAX` if every
-/// target is unreached.
-fn best_to_any_target(best_arrival: &[Tau], targets: &[(StopIdx, Tau)]) -> Tau {
+/// Returns the minimum of `best_arrival[t].arrival() + w` across all
+/// `(t, w)` in `targets`, saturating on overflow. Returns `Tau::MAX`
+/// if every target is unreached.
+fn best_to_any_target<L: Label>(best_arrival: &[L], targets: &[(StopIdx, Tau)]) -> Tau {
     targets
         .iter()
-        .map(|&(t, w)| best_arrival[t.idx()].saturating_add(w))
+        .map(|&(t, w)| best_arrival[t.idx()].arrival().saturating_add(w))
         .min()
         .unwrap_or(Tau::MAX)
 }
@@ -569,8 +654,26 @@ pub trait Timetable {
     where
         Self: Sized,
     {
-        let mut cache = RaptorCache::for_timetable(self);
-        self.raptor_with_cache(&mut cache, transfers, tau, origins, targets)
+        self.raptor_with_label::<ArrivalTime>(transfers, tau, origins, targets)
+    }
+
+    /// Generic variant of [`Timetable::raptor`] over a custom
+    /// [`Label`] type. Use this when you've implemented your own
+    /// label (e.g. for accumulated walking time) and want to drive
+    /// the algorithm with it. Single-criterion users want
+    /// [`Timetable::raptor`].
+    fn raptor_with_label<L: Label>(
+        &self,
+        transfers: usize,
+        tau: Tau,
+        origins: &[(StopIdx, Tau)],
+        targets: &[(StopIdx, Tau)],
+    ) -> Vec<Journey<L>>
+    where
+        Self: Sized,
+    {
+        let mut cache = RaptorCache::<L>::for_timetable(self);
+        self.raptor_with_cache_and_label(&mut cache, transfers, tau, origins, targets)
     }
 
     /// Same as [`Timetable::raptor`], but reuses scratch buffers from
@@ -584,6 +687,24 @@ pub trait Timetable {
         origins: &[(StopIdx, Tau)],
         targets: &[(StopIdx, Tau)],
     ) -> Vec<Journey>
+    where
+        Self: Sized,
+    {
+        self.raptor_with_cache_and_label::<ArrivalTime>(cache, transfers, tau, origins, targets)
+    }
+
+    /// Generic variant of [`Timetable::raptor_with_cache`] over a
+    /// custom [`Label`] type. The label parameter `L` is inferred
+    /// from `cache: &mut RaptorCache<L>`, so callers don't need to
+    /// turbofish.
+    fn raptor_with_cache_and_label<L: Label>(
+        &self,
+        cache: &mut RaptorCache<L>,
+        transfers: usize,
+        tau: Tau,
+        origins: &[(StopIdx, Tau)],
+        targets: &[(StopIdx, Tau)],
+    ) -> Vec<Journey<L>>
     where
         Self: Sized,
     {
@@ -610,9 +731,10 @@ pub trait Timetable {
         // Seed labels for each origin at tau + its walk-time offset.
         for &(o, walk) in origins {
             let t = tau.saturating_add(walk);
-            if t < labels[0][o.idx()] {
-                labels[0][o.idx()] = t;
-                best_arrival[o.idx()] = t;
+            let seed = L::from_departure(t);
+            if seed.arrival() < labels[0][o.idx()].arrival() {
+                labels[0][o.idx()] = seed;
+                best_arrival[o.idx()] = seed;
                 marked_stops.insert(o.idx());
             }
         }
@@ -689,11 +811,13 @@ pub trait Timetable {
                 let mut current_trip: Option<TripIdx> = None;
                 let mut boarding_stop = self.stop_at(route, p_pos);
 
+                let mut boarding_label: L = L::UNREACHED;
+
                 for (offset, &pi) in self.get_stops_after(route, p_pos).iter().enumerate() {
                     let pos = p_pos + offset as u32;
 
                     if let Some(arr) = current_trip.map(|trip| self.get_arrival_time(trip, pos)) {
-                        let best_to_pi = best_arrival[pi.idx()];
+                        let best_to_pi = best_arrival[pi.idx()].arrival();
                         let time_to_beat = best_to_pi.min(pt_threshold);
 
                         if arr < time_to_beat {
@@ -704,19 +828,21 @@ pub trait Timetable {
                                     route,
                                 },
                             );
-                            labels[k][pi.idx()] = arr;
-                            best_arrival[pi.idx()] = arr;
+                            let new_label = boarding_label.extend_by_trip(arr);
+                            labels[k][pi.idx()] = new_label;
+                            best_arrival[pi.idx()] = new_label;
                             marked_stops.insert(pi.idx());
                         }
                     }
 
-                    let t_prev_pi = labels[k - 1][pi.idx()];
+                    let t_prev_pi = labels[k - 1][pi.idx()].arrival();
                     let dep_at_pi = current_trip
                         .map(|trip| self.get_departure_time(trip, pos))
                         .unwrap_or(Tau::MAX);
                     if t_prev_pi <= dep_at_pi {
                         current_trip = self.get_earliest_trip(route, t_prev_pi, pos);
                         boarding_stop = pi;
+                        boarding_label = labels[k - 1][pi.idx()];
                     }
                 }
             }
@@ -768,20 +894,20 @@ pub trait Timetable {
         // plans and pair each with its origin (one of the user's origins,
         // chosen during the trace). Effective arrival = label at target +
         // target's walk-time offset.
-        let mut journeys: Vec<Journey> = Vec::new();
+        let mut journeys: Vec<Journey<L>> = Vec::new();
         for &(target, walk) in targets {
             let plans = reconstruct_journey(board_detail, origin_set, target, transfers);
             for (origin, plan) in plans {
-                let raw_arrival = labels[plan.len()][target.idx()];
-                if raw_arrival == Tau::MAX {
+                let raw_label = labels[plan.len()][target.idx()];
+                if raw_label.arrival() == Tau::MAX {
                     continue;
                 }
-                let arrival = raw_arrival.saturating_add(walk);
+                let label = raw_label.extend_by_footpath(walk);
                 journeys.push(Journey {
                     origin,
                     target,
                     plan,
-                    arrival,
+                    label,
                 });
             }
         }
@@ -798,8 +924,8 @@ pub trait Timetable {
         journeys.sort_by_key(|j| j.plan.len());
         let mut best = Tau::MAX;
         journeys.retain(|j| {
-            if j.arrival < best {
-                best = j.arrival;
+            if j.arrival() < best {
+                best = j.arrival();
                 true
             } else {
                 false
@@ -818,16 +944,16 @@ pub trait Timetable {
 /// A `RaptorCache` is *not* thread-safe and must not be shared across
 /// queries running concurrently. For parallel query workloads, give each
 /// worker thread its own cache.
-pub struct RaptorCache {
+pub struct RaptorCache<L: Label = ArrivalTime> {
     n_stops: u32,
     n_routes: u32,
 
-    /// labels[k][stop.idx()] = earliest arrival at stop with at most k trips.
-    /// Tau::MAX sentinel for "unreached".
-    labels: Vec<Vec<Tau>>,
+    /// labels[k][stop.idx()] = best label at stop with at most k trips.
+    /// `L::UNREACHED` sentinel for "unreached".
+    labels: Vec<Vec<L>>,
 
-    /// τ* — best arrival at each stop across all rounds.
-    best_arrival: Vec<Tau>,
+    /// τ* — best label at each stop across all rounds.
+    best_arrival: Vec<L>,
 
     /// Boarding tree for journey reconstruction.
     board_detail: BoardingTree,
@@ -854,7 +980,7 @@ pub struct RaptorCache {
     relax_heap: BinaryHeap<Reverse<(Tau, u32)>>,
 }
 
-impl RaptorCache {
+impl<L: Label> RaptorCache<L> {
     /// Constructs a cache sized for the given timetable.
     pub fn for_timetable<T: Timetable + ?Sized>(tt: &T) -> Self {
         Self::with_capacity(tt.n_stops() as u32, tt.n_routes() as u32)
@@ -868,7 +994,7 @@ impl RaptorCache {
             n_stops,
             n_routes,
             labels: Vec::new(),
-            best_arrival: vec![Tau::MAX; n_stops as usize],
+            best_arrival: vec![L::UNREACHED; n_stops as usize],
             board_detail: BTreeMap::new(),
             marked_stops: FixedBitSet::with_capacity(n_stops as usize),
             q_entry: vec![None; n_routes as usize],
@@ -891,20 +1017,20 @@ impl RaptorCache {
             self.n_routes, tt_n_routes
         );
 
-        // Resize labels: (transfers + 1) Vecs, each n_stops long, all Tau::MAX.
+        // Resize labels: (transfers + 1) Vecs, each n_stops long, all UNREACHED.
         let needed = transfers + 1;
         for v in self.labels.iter_mut() {
-            v.iter_mut().for_each(|x| *x = Tau::MAX);
+            v.iter_mut().for_each(|x| *x = L::UNREACHED);
         }
         if self.labels.len() < needed {
             self.labels
-                .resize_with(needed, || vec![Tau::MAX; self.n_stops as usize]);
+                .resize_with(needed, || vec![L::UNREACHED; self.n_stops as usize]);
         } else {
             self.labels.truncate(needed);
         }
 
         for v in &mut self.best_arrival {
-            *v = Tau::MAX;
+            *v = L::UNREACHED;
         }
 
         self.board_detail.clear();
