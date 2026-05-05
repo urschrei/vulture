@@ -1149,3 +1149,55 @@ fn with_timing_recovers_per_leg_trip_and_times() {
     assert_eq!(l2.depart, 12);
     assert_eq!(l2.arrive, 25);
 }
+
+#[test]
+fn with_timing_handles_one_hop_walking_transfer() {
+    // Journey: ride R1 from A to B (arrive 10), walk B->C (5s), ride R2
+    // from C to D (depart 20, arrive 30). The plan is [(R1, B), (R2, D)];
+    // with_timing should detect that C is a one-hop walk neighbour of B
+    // serving R2 and use C as leg 2's `board`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum S {
+        A,
+        B,
+        C,
+        D,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum R {
+        R1,
+        R2,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Tr {
+        T1,
+        T2,
+    }
+
+    let tt = SimpleTimetable::new()
+        .route(R::R1, &[S::A, S::B], &[(Tr::T1, &[(0, 0), (10, 10)])])
+        .route(R::R2, &[S::C, S::D], &[(Tr::T2, &[(20, 20), (30, 30)])])
+        .footpath(S::B, S::C)
+        .transfer_time(S::B, S::C, 5);
+
+    let a = tt.stop_idx_of(&S::A);
+    let b = tt.stop_idx_of(&S::B);
+    let c = tt.stop_idx_of(&S::C);
+    let d = tt.stop_idx_of(&S::D);
+
+    let journeys = tt.raptor(3, 0, &[(a, 0)], &[(d, 0)]);
+    assert_eq!(journeys.len(), 1);
+    let j = &journeys[0];
+
+    let timed = j.with_timing(&tt, 0, 0).expect("plan must reconstruct");
+    assert_eq!(timed.len(), 2);
+
+    let l1 = &timed[0];
+    assert_eq!(l1.alight, b, "leg 1 alights at B");
+
+    let l2 = &timed[1];
+    assert_eq!(l2.board, c, "leg 2 boards at C, not B (walking transfer)");
+    assert_eq!(l2.alight, d);
+    assert_eq!(l2.depart, 20);
+    assert_eq!(l2.arrive, 30);
+}

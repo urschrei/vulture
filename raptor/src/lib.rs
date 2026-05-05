@@ -56,9 +56,13 @@
 //! If your data is not in GTFS form, implement the [`Timetable`] trait
 //! directly. Identifiers are dense `u32` newtypes ([`StopIdx`], [`RouteIdx`],
 //! [`TripIdx`]); your adapter is responsible for interning external IDs to
-//! dense indices at construction. The trait's docs spell out two contracts
-//! the algorithm relies on: footpath transitivity and no-overtaking within a
-//! route.
+//! dense indices at construction. The trait's only required soundness
+//! contract is no-overtaking within a route. Footpaths returned by
+//! [`Timetable::get_footpaths_from`] describe direct walks only — the
+//! algorithm chains them within a round so transitive closure is not
+//! required (adapters whose relation *is* closed can opt into a faster
+//! single-pass relaxation via
+//! [`Timetable::footpaths_are_transitively_closed`]).
 //!
 //! Based on the paper: *Round-Based Public Transit Routing* by Daniel
 //! Delling, Thomas Pajor, and Renato F. Werneck.
@@ -205,14 +209,14 @@ impl From<TripIdx> for u32 {
 /// A label attached to a `(round, stop)` cell during the RAPTOR scan.
 ///
 /// In single-criterion routing this is just an arrival time
-/// ([`ArrivalTime`]). The trait is the seam where future multi-criterion
+/// ([`ArrivalTime`]). The trait is the seam where multi-criterion
 /// label types (walking time, transfer slack, fare zones) plug in
-/// without touching the core algorithm.
-///
-/// **Status (v0.10):** the algorithm stores one label per `(round, stop)`,
-/// so multi-criterion impls collapse to a single tiebroken label rather
-/// than a Pareto front. The bag-of-labels representation needed for true
-/// McRAPTOR is planned for v0.11 — see roadmap §2.3.
+/// without touching the core algorithm. The algorithm maintains a
+/// Pareto front (a *bag* of mutually non-dominated labels) per
+/// `(round, stop)`, so multi-criterion impls produce real Pareto
+/// fronts at the targets rather than a single tiebroken label.
+/// Single-criterion `ArrivalTime` bags stay size 1, with no
+/// behaviour change versus a non-bag implementation.
 pub trait Label: Copy + std::fmt::Debug {
     /// The "unreached" sentinel. The algorithm initialises every
     /// `(round, stop)` cell to this value before seeding origins.
@@ -324,24 +328,34 @@ impl<L: Label> Journey<L> {
     ///
     /// Each returned [`TimedLeg`] reports the route, boarding stop,
     /// alighting stop, the specific [`TripIdx`] caught, and the
-    /// boarding / alighting times. If the plan implies a walk
-    /// between consecutive transit legs (the previous leg's `alight`
-    /// differs from the next leg's `board`), the walking time is
-    /// folded into the next leg's `wait_seconds` and the gap is
-    /// observable from the timestamps.
+    /// boarding / alighting times. If the previous leg's alight
+    /// stop is not directly served by the next leg's route, this
+    /// scans the previous alight stop's direct footpath neighbours
+    /// for one that *is* served, walks there, and uses that as the
+    /// next leg's `board`. The walking time advances `depart`
+    /// without producing a separate leg — callers detect a walking
+    /// transfer by comparing `legs[n].alight` with `legs[n+1].board`.
     ///
-    /// Returns `None` if the plan can't be matched against `tt`
-    /// (e.g. a route doesn't serve the claimed alighting stop, or
-    /// no trip departs at or after the recorded boarding time).
-    /// In practice this should not happen for a `Journey` produced
-    /// by the same `tt` and `tau` — it's a soundness escape hatch.
+    /// Returns `None` if the plan can't be matched against `tt`,
+    /// for example:
+    ///
+    /// - A route doesn't serve the claimed alighting stop.
+    /// - No trip departs at or after the rider's available time.
+    /// - The transfer between two legs needs a walk chain longer
+    ///   than one direct footpath hop. Multi-hop walk reconstruction
+    ///   would require either a stored boarding stop per leg or a
+    ///   per-call walk-graph relaxation; neither is shipped today.
+    ///
+    /// In practice the first two should not happen for a `Journey`
+    /// produced by the same `tt` and `tau` — they're soundness
+    /// escape hatches.
     ///
     /// **Loop routes:** if `route` revisits the boarding stop on
     /// its sequence, this picks the *earliest* qualifying position
     /// (matching what [`Timetable::get_routes_serving_stop`]
-    /// reports). The reconstructed trip should still be the right
-    /// one in practice, but for loop-heavy networks see roadmap
-    /// §0.11 for the underlying limitation.
+    /// reports). For non-loop routes (the common case) this is
+    /// unambiguous; for loop-heavy networks the reconstructed trip
+    /// matches the algorithm's choice in practice.
     pub fn with_timing<T: Timetable>(
         &self,
         tt: &T,
@@ -353,17 +367,33 @@ impl<L: Label> Journey<L> {
         let mut current_stop = self.origin;
 
         for &(route, alight) in &self.plan {
-            // If the algorithm walked between current_stop and the
-            // boarding stop on this route, we don't know the boarding
-            // stop directly — try current_stop first; if route doesn't
-            // serve current_stop, we can't reconstruct without more
-            // info. Most plans have current_stop on the route directly
-            // (transfer at the same physical stop).
-            let serving = tt.get_routes_serving_stop(current_stop);
-            let board_pos = serving
-                .iter()
-                .find(|(r, _)| *r == route)
-                .map(|&(_, pos)| pos)?;
+            // Find a stop on `route` reachable from current_stop —
+            // either current_stop itself or, failing that, a one-hop
+            // footpath neighbour that the route serves. Pick the
+            // first matching neighbour in iteration order; for the
+            // typical case of one neighbour on the route this is
+            // unambiguous.
+            let serving_here = tt.get_routes_serving_stop(current_stop);
+            let (board, board_pos, walk_time) =
+                if let Some(&(_, pos)) = serving_here.iter().find(|(r, _)| *r == route) {
+                    (current_stop, pos, 0)
+                } else {
+                    let mut found = None;
+                    for &neighbour in tt.get_footpaths_from(current_stop) {
+                        if let Some(&(_, pos)) = tt
+                            .get_routes_serving_stop(neighbour)
+                            .iter()
+                            .find(|(r, _)| *r == route)
+                        {
+                            let walk = tt.get_transfer_time(current_stop, neighbour);
+                            found = Some((neighbour, pos, walk));
+                            break;
+                        }
+                    }
+                    found?
+                };
+
+            current_time = current_time.saturating_add(walk_time);
 
             let trip = tt.get_earliest_trip(route, current_time, board_pos)?;
             let depart = tt.get_departure_time(trip, board_pos);
@@ -376,7 +406,7 @@ impl<L: Label> Journey<L> {
 
             legs.push(TimedLeg {
                 route,
-                board: current_stop,
+                board,
                 alight,
                 trip,
                 depart,

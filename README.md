@@ -46,10 +46,12 @@ for journey in &journeys {
 
 A returned `Journey` has `plan: Vec<(RouteIdx, StopIdx)>` (each entry is
 "take this route, get off at this stop"), plus `origin` and `target` fields
-recording which user-supplied stops the algorithm picked, and `arrival`
-in seconds since midnight (including the chosen target's walk-time offset).
-Each returned journey is Pareto-optimal: arrival strictly decreases as trip
-count increases, and no two returned journeys weakly dominate each other.
+recording which user-supplied stops the algorithm picked, and a `label: L`
+that for the default single-criterion `ArrivalTime` carries the effective
+arrival time. Use `journey.arrival()` to read it as a `Tau` (seconds since
+midnight, including the chosen target's walk-time offset). Each returned
+journey is Pareto-optimal: arrival strictly decreases as trip count
+increases, and no two returned journeys weakly dominate each other.
 
 For station-level queries (where any platform of a parent station is an
 acceptable origin or target), `GtfsTimetable::station_stops(parent_id)`
@@ -76,9 +78,9 @@ warm cache reused across iterations:
 
 | Query                                   | Median latency |
 |-----------------------------------------|----------------|
-| Direct, 1 trip (Dilshad Garden→Shahdara)| 3.5 µs         |
-| 2-trip with one interchange             | 43 µs          |
-| 3-trip across three lines               | 94 µs          |
+| Direct, 1 trip (Dilshad Garden→Shahdara)| 9 µs           |
+| 2-trip with one interchange             | 38 µs          |
+| 3-trip across three lines               | 73 µs          |
 
 Construction (parsing the GTFS zip + building the indexed timetable)
 dominates at ~98 ms — pay it once at startup, then queries are essentially
@@ -95,9 +97,9 @@ cargo bench -p raptor --features gtfs-bench --bench gtfs
 For numbers on larger feeds — Helsinki HSL (~8k stops), Berlin VBB
 (~42k stops), Paris IDFM (~54k stops) — see
 [`docs/cross-city-benchmarks.md`](docs/cross-city-benchmarks.md). That
-page also documents three real-feed limitations the cross-city run
-surfaced (parent-station handling, calendar filtering, transfer-graph
-density), all of which are queued as follow-up work.
+page also documents the real-feed correctness work that the cross-city
+run drove (parent-station aggregation, calendar filtering,
+transfer-graph density), all of which now have shipped fixes.
 
 ## Reading a Journey
 
@@ -157,11 +159,14 @@ use raptor::{RaptorCache, Timetable};
 let mut cache = RaptorCache::for_timetable(&timetable);
 for query in queries {
     let journeys = timetable.raptor_with_cache(
-        &mut cache, query.transfers, query.tau, query.ps, query.pt,
+        &mut cache, query.transfers, query.tau, &query.origins, &query.targets,
     );
     // ...
 }
 ```
+
+Where `query.origins` and `query.targets` are `Vec<(StopIdx, Tau)>` — the same
+shape `Timetable::raptor` takes.
 
 A `RaptorCache` is sized for a specific timetable's `n_stops()`/`n_routes()`.
 Calling `raptor_with_cache` with a cache whose dimensions differ from the
