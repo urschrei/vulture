@@ -75,6 +75,7 @@ use fixedbitset::FixedBitSet;
 use smallvec::SmallVec;
 
 pub mod gtfs;
+pub mod labels;
 /// In-memory timetable for testing and simple use cases.
 pub mod simple;
 
@@ -1211,7 +1212,6 @@ pub trait Timetable {
         // Effective label = bag label extended by the target's walk
         // time offset.
         let mut journeys: Vec<Journey<L>> = Vec::new();
-        let mut seen: Vec<(StopIdx, Tau, K, Tau)> = Vec::new();
         for &(target, walk) in targets {
             #[allow(clippy::needless_range_loop)]
             for k in 1..=transfers {
@@ -1223,18 +1223,11 @@ pub trait Timetable {
                     if raw_arr == Tau::MAX {
                         continue;
                     }
-                    // Dedup: same target + same raw arrival + same k + same walk
-                    // means the same journey would emerge.
-                    let key = (target, raw_arr, k, walk);
-                    if seen.contains(&key) {
-                        continue;
-                    }
                     let Some((origin, plan)) =
                         reconstruct_journey(board_detail, origin_set, target, raw_arr, k)
                     else {
                         continue;
                     };
-                    seen.push(key);
                     let label = raw_label.extend_by_footpath(walk);
                     journeys.push(Journey {
                         origin,
@@ -1246,26 +1239,28 @@ pub trait Timetable {
             }
         }
 
-        // Output-side Pareto filter. Sort by trip count ascending, then keep
-        // only journeys whose arrival is strictly less than the best seen so
-        // far. After this, no returned journey is dominated by another in
-        // the (trip count, arrival) ordering — i.e. for any two journeys
-        // (k_a, t_a) and (k_b, t_b) with k_a < k_b, we have t_a > t_b.
+        // Output-side Pareto filter on (trip count, label). For any two
+        // returned journeys neither weakly dominates the other on the
+        // pair (plan.len, label). For single-criterion `ArrivalTime`
+        // this collapses to "strictly decreasing arrival as trip count
+        // increases" (the v0.10 contract); for multi-criterion impls
+        // it preserves Pareto-incomparable journeys (e.g. faster but
+        // more walking vs. slower but less walking).
         //
-        // Local and target pruning during the rounds *should* already
-        // prevent dominated journeys from being recorded, but this filter
-        // makes the output contract independent of pruning correctness.
-        journeys.sort_by_key(|j| j.plan.len());
-        let mut best = Tau::MAX;
-        journeys.retain(|j| {
-            if j.arrival() < best {
-                best = j.arrival();
-                true
-            } else {
-                false
+        // Sorted by plan.len ascending, then by `arrival()` ascending
+        // as a tiebreaker so the iteration order is deterministic.
+        journeys.sort_by_key(|j| (j.plan.len(), j.arrival()));
+        let mut front: Vec<Journey<L>> = Vec::with_capacity(journeys.len());
+        'outer: for j in journeys {
+            for f in &front {
+                if f.plan.len() <= j.plan.len() && f.label.dominates(&j.label) {
+                    continue 'outer;
+                }
             }
-        });
-        journeys
+            front.retain(|f| !(j.plan.len() <= f.plan.len() && j.label.dominates(&f.label)));
+            front.push(j);
+        }
+        front
     }
 }
 

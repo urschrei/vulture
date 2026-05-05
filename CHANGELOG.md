@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.13.0] — 2026-05-05
+
+Canned multi-criterion `Label` impl + label-aware journey output.
+Closes Phase 2.4 step 3 in minimum-viable form: ships one vetted
+multi-criterion label so the v0.11 bag-of-labels machinery actually
+delivers Pareto fronts to users, plus the output filter fix that
+makes that visible.
+
+### Added
+
+- `pub mod raptor::labels` — canned `Label` impls.
+- `pub struct labels::ArrivalAndWalk { arrival, walk_time }` — two-
+  criterion label that tracks accumulated walking time alongside
+  arrival time. Trip rides preserve the boarding label's walking
+  time; footpaths add to both arrival and walking time. Pareto
+  dominance is component-wise.
+
+### Changed
+
+- The journey output Pareto filter is now label-aware. Previously
+  it dropped any journey whose `arrival()` was not strictly less
+  than the best seen so far for an equal-or-greater trip count;
+  this collapsed multi-criterion fronts to single-criterion. The
+  new filter keeps any journey not weakly dominated on
+  `(plan.len, label)` by another. For single-criterion
+  `ArrivalTime` this collapses to the v0.10 contract — same
+  behaviour, same journeys; for multi-criterion impls like
+  `ArrivalAndWalk` it returns the actual Pareto front.
+
+### Caveats
+
+- The algorithm's per-stop pruning during the route scan is still
+  arrival-only (`if arr >= time_to_beat { continue; }`). For most
+  multi-criterion queries this is fine — Pareto-incomparable labels
+  reach the bag via independent paths (different routes, footpath
+  chains) and the bag's `dominates` check preserves them. But a
+  candidate label with worse arrival than the current best at the
+  same stop, even if its other components are Pareto-better, is
+  dropped before the bag sees it. Fully multi-criterion-correct
+  pruning is queued for v0.14+ — see `Label` trait docs.
+
+### Tests
+
+- `arrival_and_walk_label_tracks_accumulated_walk_time` (renamed
+  from `custom_label_tracks_accumulated_walk_time`) now uses the
+  public `labels::ArrivalAndWalk`.
+- `arrival_and_walk_returns_pareto_front` constructs a network
+  where two paths to the target have Pareto-incomparable
+  (arrival, walk_time) pairs (15s/5walk vs 21s/1walk); verifies
+  `ArrivalTime` returns 1 journey and `ArrivalAndWalk` returns 2.
+  53/53 tests + proptests + doctests green.
+
 ## [0.12.0] — 2026-05-05
 
 `Journey::with_timing` — recover per-leg trip and timing info from a

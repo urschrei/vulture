@@ -284,15 +284,18 @@ that, we know there's still work to do.
 Even if we don't ship multi-criteria routing in v0.3, we should
 restructure labels *now* so that adding it later isn't a rewrite.
 
-**Status (v0.11):** 2.1 (Label trait, v0.10), 2.2/2.3
-(bag-of-labels representation, v0.11), and 2.4 steps 1 + 2 (algorithm
-generic over `L: Label`, bags everywhere) have all landed.
-Single-criterion `ArrivalTime` bags stay size-1 — same journeys with
-a 2-3× perf regression vs v0.10 on the cross-city bench. Multi-criterion
-impls (e.g. `ArrivalAndWalk`) now produce real Pareto fronts. 2.4 step
-3 (multi-criterion `McRaptor` API + the criteria listed in 2.2) is
-deferred — the bag substrate is in place, but a McRaptor-specific
-public API + canned criteria impls have not shipped.
+**Status (v0.13):** 2.1 (Label trait, v0.10), 2.2/2.3 (bag-of-labels
+representation, v0.11), 2.4 steps 1 + 2 (algorithm generic over
+`L: Label`, bags everywhere), and 2.4 step 3 minimum form
+(canned `labels::ArrivalAndWalk` impl + label-aware journey output
+filter, v0.13) have all landed. Single-criterion `ArrivalTime` bags
+stay size-1 — same journeys with a 2-3× perf regression vs v0.10 on
+the cross-city bench. Multi-criterion impls now produce visible
+Pareto fronts at the journey output. The remaining gap is the
+algorithm's per-stop pruning during the route scan, which is still
+arrival-only and can drop Pareto-better-on-other-criteria labels
+when their arrival is worse than the current best at that stop —
+fully multi-criterion-correct pruning is queued for v0.14+.
 
 ### 2.1 The `Label` trait
 

@@ -121,6 +121,11 @@ see the `Label` trait and `Timetable::raptor_with_label::<L>` /
 `raptor_with_cache_and_label::<L>`. The single-criterion `ArrivalTime` impl
 is the default and inlines to plain `Tau` operations.
 
+The `raptor::labels` module ships canned multi-criterion impls — currently
+`ArrivalAndWalk`, which returns a Pareto front of journeys trading off
+arrival time against accumulated walking time. Useful for accessibility-aware
+queries ("show me a slower route with less walking").
+
 ### Per-leg timing
 
 `Journey.plan` is just topology — to recover the specific trips ridden and

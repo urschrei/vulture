@@ -990,50 +990,9 @@ fn closed_path_dispatch_matches_dijkstra() {
 }
 
 #[test]
-fn custom_label_tracks_accumulated_walk_time() {
-    use crate::{Label, RaptorCache, Tau};
-
-    // Custom Label that piggybacks the accumulated walking time
-    // alongside arrival time. The single-label-per-stop algorithm
-    // still picks by arrival, so walk_time is just carried along —
-    // but it ends up correctly accumulated on the journey output.
-    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-    struct ArrivalAndWalk {
-        arrival: Tau,
-        walk_time: Tau,
-    }
-
-    impl Label for ArrivalAndWalk {
-        const UNREACHED: Self = ArrivalAndWalk {
-            arrival: Tau::MAX,
-            walk_time: 0,
-        };
-
-        fn from_departure(tau: Tau) -> Self {
-            ArrivalAndWalk {
-                arrival: tau,
-                walk_time: 0,
-            }
-        }
-
-        fn extend_by_trip(self, arrival_tau: Tau) -> Self {
-            ArrivalAndWalk {
-                arrival: arrival_tau,
-                walk_time: self.walk_time,
-            }
-        }
-
-        fn extend_by_footpath(self, walk: Tau) -> Self {
-            ArrivalAndWalk {
-                arrival: self.arrival.saturating_add(walk),
-                walk_time: self.walk_time.saturating_add(walk),
-            }
-        }
-
-        fn arrival(&self) -> Tau {
-            self.arrival
-        }
-    }
+fn arrival_and_walk_label_tracks_accumulated_walk_time() {
+    use crate::RaptorCache;
+    use crate::labels::ArrivalAndWalk;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum S {
@@ -1069,7 +1028,7 @@ fn custom_label_tracks_accumulated_walk_time() {
     assert!(!default_journeys.is_empty());
     assert_eq!(default_journeys[0].arrival(), 17); // 10 + 7
 
-    // Custom label path via raptor_with_label.
+    // Public ArrivalAndWalk via raptor_with_label.
     let label_journeys: Vec<crate::Journey<ArrivalAndWalk>> =
         tt.raptor_with_label::<ArrivalAndWalk>(3, 0, &[(a, 0)], &[(c, 0)]);
     assert_eq!(label_journeys.len(), default_journeys.len());
@@ -1081,6 +1040,70 @@ fn custom_label_tracks_accumulated_walk_time() {
     let cached = tt.raptor_with_cache_and_label(&mut cache, 3, 0, &[(a, 0)], &[(c, 0)]);
     assert_eq!(cached.len(), 1);
     assert_eq!(cached[0].label.walk_time, 7);
+}
+
+#[test]
+fn arrival_and_walk_returns_pareto_front() {
+    // Two routes reach two intermediate stops; both stops walk to the
+    // target with different walk times. Path via X is faster but with
+    // more walking; path via Y is slower but with less walking. Neither
+    // dominates the other on (arrival, walk_time), so an
+    // `ArrivalAndWalk` query should return both. An `ArrivalTime`
+    // query returns only the arrival-min path.
+    use crate::labels::ArrivalAndWalk;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum S {
+        A,
+        X,
+        Y,
+        T,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum R {
+        R1,
+        R2,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Tr {
+        T1,
+        T2,
+    }
+
+    // R1 arrives X at t=10; walk X->T is 5s   → (arr 15, walk 5).
+    // R2 arrives Y at t=20; walk Y->T is 1s   → (arr 21, walk 1).
+    let tt = SimpleTimetable::new()
+        .route(R::R1, &[S::A, S::X], &[(Tr::T1, &[(0, 0), (10, 10)])])
+        .route(R::R2, &[S::A, S::Y], &[(Tr::T2, &[(0, 0), (20, 20)])])
+        .footpath(S::X, S::T)
+        .transfer_time(S::X, S::T, 5)
+        .footpath(S::Y, S::T)
+        .transfer_time(S::Y, S::T, 1);
+
+    let a = tt.stop_idx_of(&S::A);
+    let t = tt.stop_idx_of(&S::T);
+
+    // ArrivalTime: only the arrival-min path survives.
+    let arrival_only = tt.raptor(3, 0, &[(a, 0)], &[(t, 0)]);
+    assert_eq!(arrival_only.len(), 1);
+    assert_eq!(arrival_only[0].arrival(), 15);
+
+    // ArrivalAndWalk: both Pareto-incomparable journeys are returned.
+    let pareto: Vec<crate::Journey<ArrivalAndWalk>> =
+        tt.raptor_with_label::<ArrivalAndWalk>(3, 0, &[(a, 0)], &[(t, 0)]);
+    assert_eq!(
+        pareto.len(),
+        2,
+        "expected Pareto front of two journeys, got {}: {:?}",
+        pareto.len(),
+        pareto.iter().map(|j| j.label).collect::<Vec<_>>(),
+    );
+    let mut labels: Vec<_> = pareto.iter().map(|j| j.label).collect();
+    labels.sort_by_key(|l| l.arrival);
+    assert_eq!(labels[0].arrival, 15);
+    assert_eq!(labels[0].walk_time, 5);
+    assert_eq!(labels[1].arrival, 21);
+    assert_eq!(labels[1].walk_time, 1);
 }
 
 #[test]
