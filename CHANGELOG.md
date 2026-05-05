@@ -8,17 +8,17 @@ parallel batch behind a new default-on `parallel` feature flag.
 
 ### New API
 
-- `pub struct RaptorCachePool<L>` — a `Sync` freelist of `RaptorCache`s
+- `pub struct RaptorCachePool<L>` – a `Sync` freelist of `RaptorCache`s
   sized for one timetable. `for_timetable(&tt)` / `with_capacity(n_stops,
   n_routes)` constructors; `checkout()` returns a `PooledCache<'_, L>`
   RAII guard that derefs to `&mut RaptorCache<L>` and returns the cache
-  on drop. Available unconditionally — works with std threads, async
+  on drop. Available unconditionally – works with std threads, async
   tasks, or Rayon.
-- `Query<RangeDeparture>::run_par() -> Vec<RangeJourney<L>>` — fans the
+- `Query<RangeDeparture>::run_par() -> Vec<RangeJourney<L>>` – fans the
   per-departure work across Rayon's global thread pool. Allocates an
   internal pool. Available with the `parallel` feature.
 - `Query<RangeDeparture>::run_with_pool(&pool) -> Vec<RangeJourney<L>>`
-  — same parallelism, caller-supplied pool. Available with the
+  – same parallelism, caller-supplied pool. Available with the
   `parallel` feature.
 
 ### Performance
@@ -29,7 +29,7 @@ parallel batch behind a new default-on `parallel` feature flag.
 
 ### Cargo features
 
-- `parallel` (new, default-on) — pulls in `rayon`, gates `.run_par()` /
+- `parallel` (new, default-on) – pulls in `rayon`, gates `.run_par()` /
   `.run_with_pool(...)`. Opt out with `default-features = false` for
   wasm or minimal builds; `RaptorCachePool` itself stays available.
 
@@ -37,7 +37,7 @@ parallel batch behind a new default-on `parallel` feature flag.
 
 The serial range-query path (`Query::run` / `.run_with_cache` for
 `L = ArrivalTime`) now runs the rRAPTOR algorithm from §4 of the
-original paper — a single reverse-chronological scan that reuses
+original paper – a single reverse-chronological scan that reuses
 labels across departures, instead of N independent RAPTOR runs.
 
 Output shape and semantics unchanged. Bench numbers (60-departure
@@ -55,22 +55,22 @@ reuse pays off, which is most non-trivial queries.
 `.run_with_pool()` which keep the naïve-batch semantics for any
 `L: Label + Send + Sync`.
 
-## [0.14.0] — 2026-05-05
+## [0.14.0] – 2026-05-05
 
 API ergonomics pass. The query surface collapses from six methods to one
 typestate builder; primitive `usize` timestamps and walk-time offsets become
 typed `SecondOfDay` / `Duration` / `Transfers` newtypes; the `simple` adapter
-renames to `manual`. Mass breakage with no compatibility shim — pre-release,
+renames to `manual`. Mass breakage with no compatibility shim – pre-release,
 the cleaner shape wins.
 
 ### New types
 
-- `pub struct SecondOfDay(pub u32)` — was `pub type SecondOfDay = usize`. A timestamp,
+- `pub struct SecondOfDay(pub u32)` – was `pub type SecondOfDay = usize`. A timestamp,
   seconds since midnight. `ZERO`, `MAX`, `from_secs`, `hms`, `as_secs`,
   `as_hms`, `From<u32>`, `Display`, plus the arithmetic impls below.
-- `pub struct Duration(pub u32)` — a length of time, distinct from `SecondOfDay`.
+- `pub struct Duration(pub u32)` – a length of time, distinct from `SecondOfDay`.
   Walk-time offsets, transfer times, dwell times all use `Duration`.
-- `pub struct Transfers(pub u8)` — user-facing transfer cap (255 is plenty;
+- `pub struct Transfers(pub u8)` – user-facing transfer cap (255 is plenty;
   RAPTOR's interest is in low-transfer journeys).
 - `pub struct Endpoints { stops: SmallVec<[(StopIdx, Duration); 50]> }` and
   `pub trait IntoEndpoints` so single-stop, slice, and Vec inputs all
@@ -90,14 +90,14 @@ the cleaner shape wins.
 
 The `Timetable` trait's query API is now:
 
-- `tt.query() -> Query<...>` — entry point for the builder.
-- `tt.query_with_label::<L>() -> Query<..., L, ...>` — same, custom label.
+- `tt.query() -> Query<...>` – entry point for the builder.
+- `tt.query_with_label::<L>() -> Query<..., L, ...>` – same, custom label.
 
 The six methods that were here in v0.13.x (`raptor`, `raptor_with_label`,
 `raptor_with_cache`, `raptor_with_cache_and_label`, `raptor_range`,
 `raptor_range_with_cache`) are gone. The two algorithm-entry methods
 (`raptor_with_cache_and_label`, `raptor_range_with_cache`) remain on the
-trait but are `#[doc(hidden)]` — `Query::run` / `Query::run_with_cache`
+trait but are `#[doc(hidden)]` – `Query::run` / `Query::run_with_cache`
 dispatch through them.
 
 ### Builder usage
@@ -111,7 +111,7 @@ let journeys = tt
     .depart_at(SecondOfDay::hms(9, 0, 0))
     .run();
 
-// Range query — same shape, swap the departure method:
+// Range query – same shape, swap the departure method:
 let profile = tt
     .query()
     .from(start).to(end)
@@ -126,15 +126,15 @@ let journeys = tt.query().from(start).to(end)
     .run_with_cache(&mut cache);
 ```
 
-`.run()` is only callable once a departure mode is set — the typestate
+`.run()` is only callable once a departure mode is set – the typestate
 prevents `tt.query().from(s).to(t).run()` from compiling, since there's
 no `.run()` method on `Query<..., NeedsDeparture>`.
 
 ### Module rename
 
 `raptor::simple` → `raptor::manual`. The new name reflects what the
-adapter is — a `Timetable` you build by hand with `.route(...)` /
-`.footpath(...)` calls — rather than reading as "example code". External
+adapter is – a `Timetable` you build by hand with `.route(...)` /
+`.footpath(...)` calls – rather than reading as "example code". External
 imports change accordingly.
 
 ### Migration
@@ -165,7 +165,7 @@ tt.query_with_label::<MyLabel>().from(&origins).to(&targets)
     .max_transfers(K as u8).depart_at(T).run()
 ```
 
-`SecondOfDay` literals must be wrapped — `0` becomes `SecondOfDay(0)`, `SecondOfDay::ZERO`,
+`SecondOfDay` literals must be wrapped – `0` becomes `SecondOfDay(0)`, `SecondOfDay::ZERO`,
 or `SecondOfDay::from_secs(0)`. `Duration` walk-time offsets become
 `Duration::ZERO` or `Duration(N)`. The cross-city benchmark example,
 the test suite, the proptest harness, and the dotgraph adapter were
@@ -183,7 +183,7 @@ handful of hand-edits for the awkward shapes.
   against a 3-trip route.
 - 58/58 tests + proptests + doctests green.
 
-## [0.13.1] — 2026-05-05
+## [0.13.1] – 2026-05-05
 
 Naïve batch range query API. Lands the user-facing range-query
 feature (Phase 3.1) ahead of the planned API ergonomics pass and the
@@ -194,21 +194,21 @@ today won't have to migrate.
 ### Added
 
 - `Timetable::raptor_range(transfers, departures, origins, targets)
-  -> Vec<RangeJourney>` — for each `SecondOfDay` in `departures` (any
+  -> Vec<RangeJourney>` – for each `SecondOfDay` in `departures` (any
   `IntoIterator`), runs the algorithm and Pareto-filters the
   combined results into a profile. Common pattern:
   `tt.raptor_range(10, (t_start..t_end).step_by(60), &origins,
   &targets)` for one query per minute over a window.
-- `Timetable::raptor_range_with_cache::<L>(cache, …)` — generic
+- `Timetable::raptor_range_with_cache::<L>(cache, …)` – generic
   variant taking a `RaptorCache<L>`. The label parameter is
   inferred from `cache`. For server workloads.
 - `pub struct RangeJourney<L: Label = ArrivalTime> { depart, journey }`
-  — one entry per Pareto-optimal `(depart, journey)` pair.
+  – one entry per Pareto-optimal `(depart, journey)` pair.
 
 ### Pareto contract
 
 The returned profile is Pareto-optimal on the triple
-`(later depart, fewer transfers, dominated label)` — concretely,
+`(later depart, fewer transfers, dominated label)` – concretely,
 for any two returned entries, neither has all of `(depart ≥,
 plan.len ≤, label.dominates)` holding. So a caller can read the
 result as a true profile: each entry is either strictly better
@@ -216,7 +216,7 @@ than every other on at least one axis, or incomparable.
 
 ### Implementation note
 
-This is a naïve batch — each departure is a fresh
+This is a naïve batch – each departure is a fresh
 `raptor_with_cache` call with no cross-departure state sharing.
 The proper rRAPTOR algorithm processes events in reverse
 chronological order and reuses labels, dropping the per-call
@@ -229,12 +229,12 @@ shape.
 - `raptor_range_returns_pareto_profile_across_departures`:
   three-trip route with departures `[0, 5, 10, 15, 20]`
   produces profile `[(0, arr 10), (10, arr 20), (20, arr 30)]`
-  — the intermediate `(5, arr 20)` and `(15, arr 30)` entries
+  – the intermediate `(5, arr 20)` and `(15, arr 30)` entries
   are correctly dropped as Pareto-dominated by their
   later-departure counterparts. 55/55 tests + proptests +
   doctests green.
 
-## [0.13.0] — 2026-05-05
+## [0.13.0] – 2026-05-05
 
 Canned multi-criterion `Label` impl + label-aware journey output.
 Closes Phase 2.4 step 3 in minimum-viable form: ships one vetted
@@ -244,8 +244,8 @@ makes that visible.
 
 ### Added
 
-- `pub mod raptor::labels` — canned `Label` impls.
-- `pub struct labels::ArrivalAndWalk { arrival, walk_time }` — two-
+- `pub mod raptor::labels` – canned `Label` impls.
+- `pub struct labels::ArrivalAndWalk { arrival, walk_time }` – two-
   criterion label that tracks accumulated walking time alongside
   arrival time. Trip rides preserve the boarding label's walking
   time; footpaths add to both arrival and walking time. Pareto
@@ -259,7 +259,7 @@ makes that visible.
   this collapsed multi-criterion fronts to single-criterion. The
   new filter keeps any journey not weakly dominated on
   `(plan.len, label)` by another. For single-criterion
-  `ArrivalTime` this collapses to the v0.10 contract — same
+  `ArrivalTime` this collapses to the v0.10 contract – same
   behaviour, same journeys; for multi-criterion impls like
   `ArrivalAndWalk` it returns the actual Pareto front.
 
@@ -267,13 +267,13 @@ makes that visible.
 
 - The algorithm's per-stop pruning during the route scan is still
   arrival-only (`if arr >= time_to_beat { continue; }`). For most
-  multi-criterion queries this is fine — Pareto-incomparable labels
+  multi-criterion queries this is fine – Pareto-incomparable labels
   reach the bag via independent paths (different routes, footpath
   chains) and the bag's `dominates` check preserves them. But a
   candidate label with worse arrival than the current best at the
   same stop, even if its other components are Pareto-better, is
   dropped before the bag sees it. Fully multi-criterion-correct
-  pruning is queued for v0.14+ — see `Label` trait docs.
+  pruning is queued for v0.14+ – see `Label` trait docs.
 
 ### Tests
 
@@ -286,9 +286,9 @@ makes that visible.
   `ArrivalTime` returns 1 journey and `ArrivalAndWalk` returns 2.
   53/53 tests + proptests + doctests green.
 
-## [0.12.0] — 2026-05-05
+## [0.12.0] – 2026-05-05
 
-`Journey::with_timing` — recover per-leg trip and timing info from a
+`Journey::with_timing` – recover per-leg trip and timing info from a
 returned journey. Previously `Journey.plan` was just topology
 (`Vec<(RouteIdx, StopIdx)>`); users wanting "board route X at A at
 08:03, arrive B at 08:17" had to reconstruct it themselves.
@@ -300,7 +300,7 @@ returned journey. Previously `Journey.plan` was just topology
   per transit boarding. Each leg reports `route`, `board`, `alight`,
   the specific `trip: TripIdx` caught, and `depart` / `arrive`
   times. Returns `None` if the plan can't be matched (defensive
-  escape hatch — should not happen for journeys produced by the
+  escape hatch – should not happen for journeys produced by the
   same timetable).
 - `pub struct TimedLeg` with the fields above. Plain `Copy` data,
   no algorithm state.
@@ -324,18 +324,18 @@ returned journey. Previously `Journey.plan` was just topology
   along with correct departure/arrival times. 52/52 tests +
   proptests green.
 
-## [0.11.0] — 2026-05-05
+## [0.11.0] – 2026-05-05
 
 Bag-of-labels representation. Each `(round, stop)` cell now holds a
 Pareto front of `Label`s rather than a single label, enabling
 multi-criterion impls (e.g. `ArrivalAndWalk` from v0.10) to actually
 produce Pareto-optimal journey sets rather than a tiebroken single
-label. Single-criterion `ArrivalTime` bags stay at size 1 — same
+label. Single-criterion `ArrivalTime` bags stay at size 1 – same
 journeys, real but bounded perf hit.
 
 ### Algorithm
 
-- `LabelBag<L>` (private) backs every `(round, stop)` cell — a
+- `LabelBag<L>` (private) backs every `(round, stop)` cell – a
   `SmallVec<[L; 8]>` with Pareto insert/dominate. Insert returns
   `false` when the new label is weakly dominated by an existing one
   and removes any items the new label strictly dominates.
@@ -346,7 +346,7 @@ journeys, real but bounded perf hit.
   dominated by an existing entry join the bag.
 - Footpath relax (both Dijkstra and single-pass) extends every label
   in the source bag along each footpath edge.
-- Boarding tree key is now `(K, StopIdx, SecondOfDay)` — the third component
+- Boarding tree key is now `(K, StopIdx, SecondOfDay)` – the third component
   is the label's effective arrival, disambiguating Pareto-optimal
   labels with distinct arrival times in the same bag. `Step` variants
   carry a `parent_arrival: SecondOfDay` field so reconstruction can pick the
@@ -365,7 +365,7 @@ journeys, real but bounded perf hit.
   bag entries per round, even empties). A `ever_reached: FixedBitSet`
   added to `RaptorCache` gates the carry-forward to stops actually
   touched this query, recovering ~30% of the regression.
-- The remaining gap is from bag operations themselves — for ArrivalTime
+- The remaining gap is from bag operations themselves – for ArrivalTime
   size-1 bags the route scan does 2-3 trait method calls per stop
   visit (insert, dominates, snapshot) where v0.10 used direct `SecondOfDay`
   comparisons. A future v0.12 specialisation can reclaim more for
@@ -378,7 +378,7 @@ journeys, real but bounded perf hit.
 - Helsinki Rautatientori → Pasila now returns 4 Pareto-optimal
   journeys (was 3 in v0.10) at the same min-arrival 09:07:00. The
   extra journeys are alternative plans the v0.10 single-label
-  reconstruction collapsed into one — an honest improvement, not a
+  reconstruction collapsed into one – an honest improvement, not a
   regression.
 
 ### Tests
@@ -387,10 +387,10 @@ journeys, real but bounded perf hit.
   multi-criterion correctness implicitly via the `custom_label_*`
   test from v0.10 and the existing layer 1-3 coverage.
 
-## [0.10.0] — 2026-05-05
+## [0.10.0] – 2026-05-05
 
 McRAPTOR-ready `Label` trait. The algorithm is now generic over a
-caller-supplied label type — single-criterion users see no behaviour
+caller-supplied label type – single-criterion users see no behaviour
 change (the default `ArrivalTime` impl inlines to v0.9 code), but
 custom labels can now ride along (e.g. accumulated walking time) and
 be reported on the resulting `Journey`. The bag-of-labels
@@ -403,10 +403,10 @@ stop) is planned for v0.11.
   and methods `from_departure`, `extend_by_trip`,
   `extend_by_footpath`, `dominates`, `arrival`. The default
   `dominates` impl uses `arrival` (correct for single-criterion).
-- `pub struct ArrivalTime(pub SecondOfDay)` — the only `Label` impl shipped.
+- `pub struct ArrivalTime(pub SecondOfDay)` – the only `Label` impl shipped.
   Default for both `Journey<L>` and `RaptorCache<L>`.
 - `Timetable::raptor_with_label::<L>` and
-  `Timetable::raptor_with_cache_and_label::<L>` — generic variants
+  `Timetable::raptor_with_cache_and_label::<L>` – generic variants
   that take/return a custom label. The non-generic `raptor` and
   `raptor_with_cache` are unchanged and call into the generic
   versions with `L = ArrivalTime`.
@@ -424,7 +424,7 @@ stop) is planned for v0.11.
 
 ### Performance
 
-- Generic refactor adds no measurable overhead — `ArrivalTime`'s
+- Generic refactor adds no measurable overhead – `ArrivalTime`'s
   trait methods inline to direct `SecondOfDay` operations. Cross-city bench
   numbers are unchanged from v0.9 within measurement noise.
 
@@ -436,7 +436,7 @@ stop) is planned for v0.11.
   (no-op) and footpath relaxations (accumulates).
 - All 51 tests + proptests green.
 
-## [0.9.0] — 2026-05-05
+## [0.9.0] – 2026-05-05
 
 Closed-graph fast path for footpath relaxation. Reclaims most of the v0.8
 performance regression on closed-transfer-graph feeds (Berlin, Paris)
@@ -448,7 +448,7 @@ without giving up the v0.8 correctness work for non-closed graphs.
   -> bool`, defaulting to `false`. When `true`, the algorithm uses a
   single-pass `O(E)` per-round footpath relaxation; when `false`, it
   uses the v0.8 multi-source Dijkstra (`O(E log V)`).
-- `GtfsTimetable::assert_footpaths_closed(self) -> Self` — opt-in
+- `GtfsTimetable::assert_footpaths_closed(self) -> Self` – opt-in
   builder for users who know their `transfers.txt` is the entire
   intended footpath relation (no chaining required, which is the
   publisher convention for most curated feeds). Resets to `false`
@@ -473,7 +473,7 @@ walking footpaths, recovering most of the v0.8 regression:
   there to begin with).
 
 Helsinki stays on the Dijkstra path because `with_walking_footpaths`
-clears the closure flag — coordinate-derived edges within a radius are
+clears the closure flag – coordinate-derived edges within a radius are
 not transitively closed (the algorithm reaches farther-away stops by
 chaining short walks). Helsinki latencies and answers are unchanged
 from v0.8.
@@ -487,7 +487,7 @@ when you know the relation is closed (or when you intend the
 publisher's `transfers.txt` to be treated as the entire intended
 relation, which matches v0.7 semantics).
 
-## [0.8.0] — 2026-05-05
+## [0.8.0] – 2026-05-05
 
 Transfer-graph density. The `Timetable` trait no longer requires the
 footpath relation to be transitively closed: if `A → B` and `B → C` are
@@ -498,7 +498,7 @@ longer a soundness prerequisite.
 
 ### Trait change
 
-- `get_footpaths_from` now returns *direct* walks only — the relation
+- `get_footpaths_from` now returns *direct* walks only – the relation
   does not need to be transitively closed. Existing custom adapters that
   pre-closed the relation continue to work without modification (closure
   is a valid superset of the direct-walks relation). The trait-level docs
@@ -525,7 +525,7 @@ longer a soundness prerequisite.
   equirectangular projection anchored at the feed's mean latitude
   (accurate to ~0.5% at city scale) and queries it with
   `locate_within_distance`. Existing `transfers.txt` entries are
-  preserved — coordinate-derived edges are only added where no explicit
+  preserved – coordinate-derived edges are only added where no explicit
   transfer between the pair already exists.
 - New dependency: `rstar = "0.12"` (spatial index for the new builder).
 
@@ -534,7 +534,7 @@ longer a soundness prerequisite.
 - The Helsinki Rautatientori → Pasila query now returns a 7-minute
   journey via walking footpaths. Previously this returned no journey at
   all because the HSL feed has no `transfers.txt` and the two stations
-  use different parent IDs — the only path was a metro/bus combination
+  use different parent IDs – the only path was a metro/bus combination
   that needed a walking interchange the algorithm couldn't see. The
   bench now passes `walking_footpaths_m: Some(500.0)` for Helsinki to
   exercise the new builder.
@@ -547,18 +547,18 @@ longer a soundness prerequisite.
   but pays an `O(log V)` heap operation per visit. Berlin (closed
   transfers.txt, similar density to Paris) shows only a ~20% regression
   on the hand-picked-platforms query (88 µs → 106 µs) and still finishes
-  the station-to-station query in 385 µs — the regression scale depends
+  the station-to-station query in 385 µs – the regression scale depends
   on how many footpath edges the round actually touches.
 
 - A detect-closed-graph optimisation (skip the heap when the graph is
   known to be transitively closed) is a reasonable future addition; for
   now correctness on non-closed graphs is the priority.
 
-## [0.7.0] — 2026-05-05
+## [0.7.0] – 2026-05-05
 
 Multi-source / multi-target queries. The `Timetable::raptor` and
 `raptor_with_cache` signatures now take `&[(StopIdx, SecondOfDay)]` slices for
-both origins and targets — each tuple is a `(stop, walk_time_offset)`
+both origins and targets – each tuple is a `(stop, walk_time_offset)`
 pair. The user supplies the candidate stops near their actual origin
 (and destination) along with how long it takes to walk to each;
 the algorithm minimises effective arrival = arrival_at_target_stop +
@@ -597,7 +597,7 @@ platforms as origins/targets and have the algorithm pick correctly.
   picking the best origin from a set, walk-time offsets changing the
   preferred origin, and walk-time offsets changing the preferred
   target.
-- `raptor-proptest` continues to pass — the existing harness wraps
+- `raptor-proptest` continues to pass – the existing harness wraps
   single-stop queries as `&[(stop, 0)]` and the algorithm degrades to
   the old single-stop behaviour cleanly.
 
@@ -606,13 +606,13 @@ platforms as origins/targets and have the algorithm pick correctly.
 The bench's Berlin query now appears in two forms: hand-picked S-Bahn
 platforms (the v0.6 form, 20m 36s including 15-minute wait at a
 specific eastbound platform) and station-to-station (Hbf parent to
-Alex parent, 7m 6s — the algorithm picks the best of 301 × 50 platform
+Alex parent, 7m 6s – the algorithm picks the best of 301 × 50 platform
 combinations and finds the actually-fastest direct S-Bahn). The
 station-to-station form is ~3-4× slower in latency (~370 µs vs ~110
 µs) because of the extra origins/targets to consider, but still
 well under a millisecond on the 42k-stop Berlin feed.
 
-## [0.6.0] — 2026-05-04
+## [0.6.0] – 2026-05-04
 
 Phase 0.10 (soundness). The GTFS adapter now filters trips by
 `calendar.txt` / `calendar_dates.txt` at construction. Without this,
@@ -636,7 +636,7 @@ practically-bizarre answers on multi-day feeds.
   `gtfs-structures`; now declared directly because the calendar
   resolution code needs `chrono::NaiveDate` at the
   `gtfs-structures` boundary).
-- `gtfs::is_service_active` (private) — six new unit tests cover the
+- `gtfs::is_service_active` (private) – six new unit tests cover the
   calendar/calendar_dates resolution rules.
 
 ### Performance
@@ -648,11 +648,11 @@ practically-bizarre answers on multi-day feeds.
   - Paris Châtelet → Versailles: 35 ms → 9.75 ms
   - Helsinki Rautatientori → Pasila search: 14.6 ms → 2.4 ms
 
-## [0.5.0] — 2026-05-04
+## [0.5.0] – 2026-05-04
 
 Phase 0.11 (soundness). Fixes a bug surfaced by cross-city
 benchmarking against real-world GTFS feeds: trips that revisit a stop
-within their `stop_sequence` (bus loops, terminus turnarounds — common
+within their `stop_sequence` (bus loops, terminus turnarounds – common
 in Berlin, Paris, and most US city feeds) caused silently-wrong
 journey output, including journeys with arrival times *before* the
 query departure time. The fix is a position-aware redesign of the
@@ -673,7 +673,7 @@ ambiguity that was the root cause.
   - `get_departure_time(trip, pos: u32) -> SecondOfDay` (was `(trip, stop)`).
   - `get_earliest_trip(route, at, pos: u32) -> Option<TripIdx>` (was
     `(route, at, stop)`).
-- New trait method: `stop_at(route, pos: u32) -> StopIdx` — looks up
+- New trait method: `stop_at(route, pos: u32) -> StopIdx` – looks up
   the stop at the given position within a route's sequence.
 - Removed: `get_earlier_stop`. The algorithm now folds boarding
   positions via `min(prev_pos, new_pos)` directly.
@@ -710,7 +710,7 @@ reverse maps so each route appears once with its earliest position.
   were one-shot diagnostics used to identify the loop-route bug; the
   proptest harness now covers the class.
 
-## [0.4.0] — 2026-05-04
+## [0.4.0] – 2026-05-04
 
 This release closes the data-representation half of Phase 1: the
 algorithm's hot loop is now branch-friendly array indexing, the GTFS
@@ -751,7 +751,7 @@ adapter pre-computes per-route departure/arrival tables, and the
 ### Performance
 
 - Round labels are now `Vec<Vec<SecondOfDay>>` indexed by `(round, stop_idx)`
-  rather than `Vec<BTreeMap<Stop, SecondOfDay>>` — all label reads/writes in the
+  rather than `Vec<BTreeMap<Stop, SecondOfDay>>` – all label reads/writes in the
   hot loop are array indexing.
 - Marked stops are a `fixedbitset::FixedBitSet` sized to `n_stops`;
   insertion is a single bit write, iteration walks set bits.
@@ -778,7 +778,7 @@ adapter pre-computes per-route departure/arrival tables, and the
   builder without otherwise modifying it (useful when you need a stop
   reachable only via footpaths, with no boarding events of its own).
 
-## [0.3.0] — 2026-05-03
+## [0.3.0] – 2026-05-03
 
 This release closes Phase 0 of the production roadmap: the algorithm now
 produces correct results, and the GTFS adapter no longer silently
@@ -789,7 +789,7 @@ returns wrong answers on real-world feeds.
 - `gtfs::GtfsTimetable`'s associated `Route` type is now
   `gtfs::RouteId` (a `u32` newtype) rather than `&str`. A single GTFS
   `route_id` is split at construction into one or more synthetic
-  `RouteId`s — one per equivalence class of trips with identical,
+  `RouteId`s – one per equivalence class of trips with identical,
   non-overtaking stop sequences. Recover the original `route_id` for
   display via `GtfsTimetable::route_name(RouteId)`.
 
@@ -837,7 +837,7 @@ are in `soundness.md` (issues A–I, all moved to Resolved Issues).
 ### Added
 
 - `RaptorCache<Route, Stop>` and `Timetable::raptor_with_cache` for
-  reusing scratch buffers across queries — recommended for server use
+  reusing scratch buffers across queries – recommended for server use
   cases running many queries against the same timetable.
 - Hegel-based property test harness in the new `raptor-proptest`
   workspace crate that checks the algorithm against a brute-force
@@ -858,7 +858,7 @@ are in `soundness.md` (issues A–I, all moved to Resolved Issues).
   GTFS example reflecting the `RouteId` change, and a "Performance:
   reusing a `RaptorCache`" section.
 
-## [0.2.0] — 2026-03-01
+## [0.2.0] – 2026-03-01
 
 ### Added
 - Benchmarks with different networks and a `dotgraph` visualization tool (#17)

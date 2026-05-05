@@ -1,5 +1,5 @@
-//! [`Query`] — the typestate builder used to configure and run a
-//! RAPTOR call — plus the marker types ([`NeedsDeparture`],
+//! [`Query`] – the typestate builder used to configure and run a
+//! RAPTOR call – plus the marker types ([`NeedsDeparture`],
 //! [`SingleDeparture`], [`RangeDeparture`]) that drive the typestate
 //! transitions and the [`RangeJourney`] returned by range queries.
 
@@ -26,7 +26,7 @@ use crate::time::Transfers;
 /// [`Query::depart_in_window`].
 #[derive(Debug, Clone)]
 pub struct RangeJourney<L: Label = ArrivalTime> {
-    /// The departure time this journey assumes — the user leaves the
+    /// The departure time this journey assumes – the user leaves the
     /// origin (or starts the origin walk) at this time.
     pub depart: SecondOfDay,
     /// The journey itself, as if `depart` had been passed to
@@ -98,7 +98,7 @@ where
     pub(crate) _label: PhantomData<L>,
 }
 
-// ----- Stage 1: NeedsDeparture — optional inputs and mode transitions -----
+// ----- Stage 1: NeedsDeparture – optional inputs and mode transitions -----
 
 impl<'tt, T, L> Query<'tt, T, L, NeedsDeparture>
 where
@@ -119,7 +119,7 @@ where
     }
 
     /// Cap the number of transit boardings the algorithm explores.
-    /// The default is 10. Pass an integer literal — `.max_transfers(10)`
+    /// The default is 10. Pass an integer literal – `.max_transfers(10)`
     /// works directly, no suffix needed.
     pub fn max_transfers(mut self, n: u8) -> Self {
         self.max_transfers = Transfers(n);
@@ -166,7 +166,7 @@ where
     }
 }
 
-// ----- Stage 2a: SingleDeparture — terminal `.run()` -----
+// ----- Stage 2a: SingleDeparture – terminal `.run()` -----
 
 impl<'tt, T, L> Query<'tt, T, L, SingleDeparture>
 where
@@ -199,7 +199,7 @@ where
     }
 }
 
-// ----- Stage 2b: RangeDeparture, ArrivalTime — rRAPTOR -----
+// ----- Stage 2b: RangeDeparture, ArrivalTime – rRAPTOR -----
 
 impl<'tt, T> Query<'tt, T, ArrivalTime, RangeDeparture>
 where

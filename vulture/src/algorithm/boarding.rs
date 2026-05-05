@@ -17,7 +17,7 @@ use crate::time::SecondOfDay;
 
 /// One reconstructable step in a journey: either a transit boarding event
 /// (route-scan) or a walk along a footpath. Walks do not consume a round —
-/// they happen *within* round `k` at the stop they alight on — so the
+/// they happen *within* round `k` at the stop they alight on – so the
 /// reconstruction logic chains through walk entries without decrementing
 /// the round index.
 ///

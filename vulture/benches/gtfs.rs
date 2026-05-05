@@ -81,7 +81,7 @@ fn bench_gtfs_query(c: &mut Criterion) {
 }
 
 /// Range query across a 60-departure window: 09:00 to 10:00 in 1-minute
-/// steps. Compares serial `.run_with_cache(&mut cache)` (rRAPTOR — single
+/// steps. Compares serial `.run_with_cache(&mut cache)` (rRAPTOR – single
 /// reverse-chronological scan reusing labels across departures, paper §4)
 /// against parallel `.run_with_pool(&pool)` (naïve batch fanned across
 /// cores). For wide windows on multicore the parallel arm wins; for

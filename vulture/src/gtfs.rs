@@ -7,7 +7,7 @@
 //!
 //! A "RAPTOR route" is an equivalence class of trips with identical stop
 //! sequences (the paper, §3.1). A GTFS `route_id` is *not* a RAPTOR route
-//! — it routinely groups trips with different stop patterns
+//! – it routinely groups trips with different stop patterns
 //! (short-turns, branching, deadheads). At construction time, this
 //! adapter splits each `route_id` into one or more synthetic routes,
 //! identified by [`RouteIdx`]. Trips on a synthetic route are
@@ -157,16 +157,16 @@ type GtfsResult<T> = std::result::Result<T, GtfsError>;
 ///
 /// Common follow-on calls:
 ///
-/// - [`GtfsTimetable::station_stops`] — expand a parent station to its
+/// - [`GtfsTimetable::station_stops`] – expand a parent station to its
 ///   child platforms for multi-source / multi-target queries.
-/// - [`GtfsTimetable::with_walking_footpaths`] — augment a sparse or
+/// - [`GtfsTimetable::with_walking_footpaths`] – augment a sparse or
 ///   empty `transfers.txt` with coordinate-derived walking edges.
-/// - [`GtfsTimetable::assert_footpaths_closed`] — opt into the
+/// - [`GtfsTimetable::assert_footpaths_closed`] – opt into the
 ///   single-pass footpath relaxation when your `transfers.txt` is the
 ///   entire intended walking relation.
-/// - [`GtfsTimetable::stop_id`] / [`GtfsTimetable::route_id`] — translate
+/// - [`GtfsTimetable::stop_id`] / [`GtfsTimetable::route_id`] – translate
 ///   `StopIdx` / `RouteIdx` values back to the original GTFS IDs.
-/// - [`GtfsTimetable::routes_for_gtfs_id`] — enumerate the synthetic
+/// - [`GtfsTimetable::routes_for_gtfs_id`] – enumerate the synthetic
 ///   [`RouteIdx`]s produced from a single GTFS `route_id` (one per
 ///   distinct, non-overtaking stop-pattern equivalence class).
 pub struct GtfsTimetable<'gtfs> {
@@ -422,19 +422,19 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
     /// `self` for chaining.
     ///
     /// A relation is *transitively closed* when every reachable walk
-    /// is already a single direct edge — `A → B` and `B → C` implies
+    /// is already a single direct edge – `A → B` and `B → C` implies
     /// `A → C` is in the relation too. See the [`Timetable`] trait's
     /// Footpaths section for the full discussion and the soundness
     /// contract.
     ///
     /// Use when you know the underlying `transfers.txt` (or any
-    /// pre-processing you've applied) is closed — typically true for
+    /// pre-processing you've applied) is closed – typically true for
     /// publisher-curated feeds like Berlin VBB or Paris IDFM.
     ///
     /// **Soundness**: asserting closure on a non-closed relation will
     /// cause the algorithm to miss journeys whose optimal path
     /// requires chaining direct walks within a round. If unsure,
-    /// don't call this — the Dijkstra fallback is always sound.
+    /// don't call this – the Dijkstra fallback is always sound.
     ///
     /// [`GtfsTimetable::with_walking_footpaths`] resets this flag,
     /// because coordinate-derived edges are not closed by construction.
@@ -467,7 +467,7 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
     ///
     /// Walk time per edge = `distance_m / walking_speed_m_per_s`,
     /// rounded up. Existing transfers from `transfers.txt` are preserved
-    /// — coordinate-derived edges are only added where no explicit
+    /// – coordinate-derived edges are only added where no explicit
     /// transfer between the pair already exists.
     ///
     /// The algorithm chains walks within a round (footpath relaxation
@@ -522,7 +522,7 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
                     continue;
                 }
                 // Skip if an explicit transfers.txt entry already covers
-                // this directed pair — keep the publisher's value.
+                // this directed pair – keep the publisher's value.
                 if self.transfer_times.contains_key(&(from.idx, near.idx)) {
                     continue;
                 }
@@ -536,7 +536,7 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             }
         }
 
-        // Coordinate-derived edges are direct only — closure is not
+        // Coordinate-derived edges are direct only – closure is not
         // preserved. Drop any prior closure assertion.
         self.transfers_closed = false;
         self
@@ -742,7 +742,7 @@ mod tests {
     #[test]
     fn calendar_inactive_on_weekend_inside_window() {
         let gtfs = weekday_only_feed();
-        // 2026-05-02 is a Saturday — flag is false.
+        // 2026-05-02 is a Saturday – flag is false.
         assert!(!is_service_active(&gtfs, "weekday", ymd(2026, 5, 2)));
     }
 

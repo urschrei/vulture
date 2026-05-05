@@ -21,7 +21,7 @@ use crate::time::SecondOfDay;
 
 /// Single-pass relaxation for adapters that report `true` from
 /// [`Timetable::footpaths_are_transitively_closed`]. One walk per
-/// source — chained walks are unnecessary because every reachable
+/// source – chained walks are unnecessary because every reachable
 /// pair is already a direct edge in the relation.
 ///
 /// `O(E)` per round, no heap. Always sound when the closure
@@ -116,7 +116,7 @@ pub(crate) fn relax_footpaths_round<T: Timetable + ?Sized, L: Label>(
     // label per stop; non-min labels in a source bag don't drive
     // further relaxation. This is sound for arrival-time pruning but
     // may miss Pareto-optimal walk chains where a non-min-arrival
-    // label dominates downstream — a v0.12 concern.
+    // label dominates downstream – a v0.12 concern.
     heap.clear();
     for bit in sources.ones() {
         let min_arr = labels[k][bit].min_arrival();
@@ -129,7 +129,7 @@ pub(crate) fn relax_footpaths_round<T: Timetable + ?Sized, L: Label>(
     while let Some(Reverse((arrival, stop_bit))) = heap.pop() {
         let stop = StopIdx::new(stop_bit);
         let stop_min = labels[k][stop.idx()].min_arrival();
-        // Skip stale entries — a strictly better label was popped earlier.
+        // Skip stale entries – a strictly better label was popped earlier.
         if arrival > stop_min {
             continue;
         }

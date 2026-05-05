@@ -1,4 +1,4 @@
-//! Time newtypes — [`SecondOfDay`] (a timestamp), [`Duration`] (a length of
+//! Time newtypes – [`SecondOfDay`] (a timestamp), [`Duration`] (a length of
 //! time), and [`Transfers`] (a transfer cap). Distinct types so the algorithm
 //! signatures can express which kind they expect; arithmetic across the two
 //! time types is saturating.
@@ -6,11 +6,11 @@
 use std::fmt;
 
 /// A point in time, in seconds since midnight on the timetable's
-/// service date. Wraps a `u32` — the day is 86,400 seconds; `u32`
+/// service date. Wraps a `u32` – the day is 86,400 seconds; `u32`
 /// covers feed quirks like trips encoded past 24h with room to spare.
 ///
-/// SecondOfDay is a *timestamp*. A *length* of time — walk-time offset,
-/// transfer time, dwell time — is a [`Duration`], a distinct type.
+/// SecondOfDay is a *timestamp*. A *length* of time – walk-time offset,
+/// transfer time, dwell time – is a [`Duration`], a distinct type.
 /// The trait surface uses both consistently so they can't be
 /// silently confused.
 ///
@@ -38,7 +38,7 @@ impl SecondOfDay {
         SecondOfDay(h * 3600 + m * 60 + s)
     }
 
-    /// The underlying `u32` — seconds since midnight.
+    /// The underlying `u32` – seconds since midnight.
     pub const fn as_secs(self) -> u32 {
         self.0
     }
@@ -139,7 +139,7 @@ impl Duration {
         Duration(s)
     }
 
-    /// The underlying `u32` — seconds.
+    /// The underlying `u32` – seconds.
     pub const fn as_secs(self) -> u32 {
         self.0
     }
@@ -166,7 +166,7 @@ impl std::ops::Add<Duration> for Duration {
 
 /// User-facing transfer cap. The algorithm explores rounds 0
 /// through `transfers` inclusive, so `Transfers(10)` lets a journey
-/// involve up to 10 boardings. `u8` is plenty — practical journey
+/// involve up to 10 boardings. `u8` is plenty – practical journey
 /// queries cap at single digits.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Transfers(pub u8);

@@ -93,7 +93,7 @@ function main() {
         for (const vq of vf.queries) {
             const jq = jByLabel.get(vq.label);
             if (!jq) {
-                out.push(`| ${vq.label} | — | (planar query missing) | — | — |`);
+                out.push(`| ${vq.label} | – | (planar query missing) | – | – |`);
                 continue;
             }
             const vs = summarise(vq.samples_ns);

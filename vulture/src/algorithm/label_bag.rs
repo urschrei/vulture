@@ -1,5 +1,5 @@
-//! [`LabelBag`] — Pareto front of [`Label`]s at a single `(round, stop)`
-//! cell — and the [`insert_into_bag`] free helper used by the per-round
+//! [`LabelBag`] – Pareto front of [`Label`]s at a single `(round, stop)`
+//! cell – and the [`insert_into_bag`] free helper used by the per-round
 //! footpath relaxation routines.
 
 use fixedbitset::FixedBitSet;
@@ -13,7 +13,7 @@ use crate::label::Label;
 use crate::time::SecondOfDay;
 
 /// A Pareto front of [`Label`]s at a single `(round, stop)` cell.
-/// Backed by `SmallVec<[L; 8]>` — for single-criterion `ArrivalTime`
+/// Backed by `SmallVec<[L; 8]>` – for single-criterion `ArrivalTime`
 /// the bag is always size 1 and stays inline; for multi-criterion
 /// impls it grows up to 8 inline before spilling.
 #[derive(Debug, Clone)]

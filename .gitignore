@@ -3,8 +3,8 @@
 
 # Large external GTFS feeds for cross-city benchmarking. The tracked
 # `aux/dmrc_gtfs.zip` (Delhi Metro, ~6 MB) is small enough to bundle for
-# the proptest harness and the example smoke-test. Other feeds — Paris
-# IDFM, Berlin VBB, etc. — must be downloaded by the user; see
+# the proptest harness and the example smoke-test. Other feeds – Paris
+# IDFM, Berlin VBB, etc. – must be downloaded by the user; see
 # docs/benchmarks.md and scripts/fetch-bench-feeds.sh.
 /aux/external/
 

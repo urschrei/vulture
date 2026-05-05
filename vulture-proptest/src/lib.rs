@@ -32,9 +32,9 @@ pub fn raptor_front(journeys: &[Journey]) -> BTreeSet<(u16, u8)> {
         .iter()
         .map(|j| {
             let arr = u16::try_from(j.arrival().0)
-                .expect("arrival exceeds u16::MAX — generator range exceeded?");
+                .expect("arrival exceeds u16::MAX – generator range exceeded?");
             let k = u8::try_from(j.plan.len())
-                .expect("plan length exceeds u8::MAX — should never happen");
+                .expect("plan length exceeds u8::MAX – should never happen");
             (arr, k)
         })
         .collect();
@@ -121,7 +121,7 @@ fn layer3_matches_reference(tc: hegel::TestCase) {
 ///    between cache reuses, and any non-determinism leaking out of
 ///    Rayon's `collect`.
 ///
-/// Uses `layer1_bounds` to keep the per-case cost low — single-departure
+/// Uses `layer1_bounds` to keep the per-case cost low – single-departure
 /// algorithm correctness is already covered by `layer{1,2,3}_matches_reference`;
 /// this is the only test exercising the range-query path, so it must
 /// stay fast enough to run on every commit.

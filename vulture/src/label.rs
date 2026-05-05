@@ -1,5 +1,5 @@
-//! The [`Label`] trait — what the algorithm carries at each `(round, stop)`
-//! cell — plus the default single-criterion implementation [`ArrivalTime`].
+//! The [`Label`] trait – what the algorithm carries at each `(round, stop)`
+//! cell – plus the default single-criterion implementation [`ArrivalTime`].
 //!
 //! For multi-criterion impls (trade-off queries) see [`crate::labels`].
 
@@ -14,7 +14,7 @@ use crate::time::SecondOfDay;
 /// what almost every routing application wants.
 ///
 /// The trait exists so the algorithm can be reused for *multi-criterion*
-/// routing — minimising arrival time *and* something else at the same
+/// routing – minimising arrival time *and* something else at the same
 /// time, returning a Pareto front of trade-offs. Reach for it when a
 /// single "best" answer is the wrong shape: e.g. an accessibility-aware
 /// query that should also report the route with less walking, even if

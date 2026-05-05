@@ -1,4 +1,4 @@
-//! [`RaptorCache`] — reusable scratch buffers for repeated queries —
+//! [`RaptorCache`] – reusable scratch buffers for repeated queries —
 //! plus the `Sync` freelist variant [`RaptorCachePool`] and its
 //! [`PooledCache`] checkout guard.
 
@@ -24,7 +24,7 @@ use crate::time::SecondOfDay;
 /// `Query::run` allocates a fresh cache on every call. For workloads that
 /// run many queries against the same timetable (a server, a batch job),
 /// allocate a `RaptorCache` once and pass `&mut cache` to
-/// [`Query::run_with_cache`](crate::Query::run_with_cache) at the end of each builder chain — the
+/// [`Query::run_with_cache`](crate::Query::run_with_cache) at the end of each builder chain – the
 /// timetable-sized buffers get reset rather than reallocated between queries.
 ///
 /// ```no_run
@@ -46,7 +46,7 @@ use crate::time::SecondOfDay;
 /// entry. Use [`RaptorCache::with_capacity`] when the timetable isn't yet in
 /// scope.
 ///
-/// `RaptorCache` is `!Sync` — give each worker its own, or use
+/// `RaptorCache` is `!Sync` – give each worker its own, or use
 /// [`RaptorCachePool`] (the `Sync` freelist variant).
 pub struct RaptorCache<L: Label = ArrivalTime> {
     pub(crate) n_stops: u32,
@@ -56,7 +56,7 @@ pub struct RaptorCache<L: Label = ArrivalTime> {
     /// most k trips. Empty bag means unreached.
     pub(crate) labels: Vec<Vec<LabelBag<L>>>,
 
-    /// τ* — Pareto bag of best labels at each stop across all rounds.
+    /// τ* – Pareto bag of best labels at each stop across all rounds.
     pub(crate) best_arrival: Vec<LabelBag<L>>,
 
     /// Boarding tree for journey reconstruction.
@@ -165,7 +165,7 @@ impl<L: Label> RaptorCache<L> {
 ///
 /// Backed by a mutex-protected freelist; the lock is only held long
 /// enough to pop or push, never during the query itself. Caches grow
-/// lazily — the pool starts empty and allocates a fresh cache when a
+/// lazily – the pool starts empty and allocates a fresh cache when a
 /// thread checks out and the freelist is empty. Returned caches are
 /// reused by the next checkout.
 ///
@@ -179,7 +179,7 @@ impl<L: Label> RaptorCache<L> {
 /// # use vulture::{RaptorCachePool, SecondOfDay, Timetable};
 /// # fn ex<T: Timetable + Sync>(tt: &T, queries: &[(vulture::StopIdx, vulture::StopIdx)]) {
 /// let pool = RaptorCachePool::for_timetable(tt);
-/// // Sequential or parallel — same code:
+/// // Sequential or parallel – same code:
 /// for &(start, end) in queries {
 ///     let mut cache = pool.checkout();
 ///     let _ = tt.query()

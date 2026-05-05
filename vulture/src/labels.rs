@@ -5,7 +5,7 @@
 //! small set of vetted impls users can drive the algorithm with via
 //! [`Timetable::query_with_label`](crate::Timetable::query_with_label).
 //!
-//! Custom impls live in user code — see the [`Label`]
+//! Custom impls live in user code – see the [`Label`]
 //! trait docs for the requirements.
 
 use crate::{Duration, Label, SecondOfDay};

@@ -83,7 +83,7 @@ async function runFeed(feed, cfg) {
     }
     if (feed.walking_footpaths_m != null) {
         console.error(
-            `note: ${feed.name} requests walking footpaths (${feed.walking_footpaths_m}m); raptor-journey-planner does not compute these — running with transfers.txt only`,
+            `note: ${feed.name} requests walking footpaths (${feed.walking_footpaths_m}m); raptor-journey-planner does not compute these – running with transfers.txt only`,
         );
     }
 
@@ -93,7 +93,7 @@ async function runFeed(feed, cfg) {
     // date.toISOString() (UTC) but its day-of-week from date.getDay()
     // (local). For any timezone east of UTC, a local-midnight Date
     // produces a UTC dateNumber for the previous day, so trips
-    // get checked against runsOn(prev_day, mon-from-local) — silently
+    // get checked against runsOn(prev_day, mon-from-local) – silently
     // dropping any service that doesn't run the previous day. Using
     // UTC midnight keeps both halves of the inconsistency aligned.
     const serviceDate = new Date(Date.UTC(y, m - 1, d));
@@ -104,7 +104,7 @@ async function runFeed(feed, cfg) {
     // raptor-journey-planner's RaptorAlgorithmFactory.create assumes
     // every trip has a non-empty `stopTimes` array AND a `service`
     // object. Real feeds (Helsinki HSL, Berlin VBB) sometimes hand
-    // back trips that fail one or both — vulture's GtfsTimetable
+    // back trips that fail one or both – vulture's GtfsTimetable
     // rejects these at construction; mirror that here.
     const trips = tripsRaw.filter(
         (t) =>

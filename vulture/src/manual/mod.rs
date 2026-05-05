@@ -21,7 +21,7 @@ use crate::{Duration, RouteIdx, SecondOfDay, StopIdx, Timetable, TripIdx};
 /// A generic in-memory [`Timetable`] backed by interning tables and dense `Vec`s.
 ///
 /// Generic over key types `S` / `R` / `T` (each `Hash + Eq + Clone`) so tests
-/// and benches can use ergonomic keys — enums, integers, strings — while the
+/// and benches can use ergonomic keys – enums, integers, strings – while the
 /// internal storage is dense `u32` indices throughout. Build with `.route(...)`
 /// and `.footpath(...)` / `.transfer_time(...)`; resolve external keys to
 /// indices via [`SimpleTimetable::stop_idx_of`] / [`SimpleTimetable::route_idx_of`]
@@ -127,7 +127,7 @@ where
         // Update the routes_for_stop reverse index, recording the earliest
         // position of each stop on this route. Iterating left-to-right and
         // skipping if route_idx is already present means the FIRST visit
-        // (smallest position) is what gets stored — required so loop routes
+        // (smallest position) is what gets stored – required so loop routes
         // queue correctly in the algorithm.
         for (pos, &s) in stop_idxs.iter().enumerate() {
             let entry = &mut self.routes_for_stop[s.idx()];

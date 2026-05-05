@@ -22,7 +22,7 @@
 //! // Pin the timetable to one service date; inactive trips are filtered out.
 //! let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?;
 //!
-//! // The algorithm takes dense u32 indices, not GTFS string IDs — resolve first.
+//! // The algorithm takes dense u32 indices, not GTFS string IDs – resolve first.
 //! let start = tt.stop_idx("dilshad_garden").expect("unknown stop");
 //! let target = tt.stop_idx("vishwavidyalaya").expect("unknown stop");
 //!
@@ -49,7 +49,7 @@
 //! footpaths to a fixed point. The output is a Pareto front: one [`Journey`]
 //! per trip count between zero and `max_transfers`, with strictly earlier
 //! arrivals as you allow more trips. There is no Dijkstra-style priority queue
-//! and no shortest-path tree — just successive rounds of array updates.
+//! and no shortest-path tree – just successive rounds of array updates.
 //!
 //! The default routing is *single-criterion*: minimise arrival time, then
 //! report one journey per trip count. The criterion under optimisation is
@@ -71,7 +71,7 @@
 //!   per-departure work across Rayon (default-on `parallel` feature).
 //! - **Server reuse.** Allocate a [`RaptorCache`] once via
 //!   [`RaptorCache::for_timetable`] and finish each chain with
-//!   `.run_with_cache(&mut cache)` — amortises scratch-buffer allocation
+//!   `.run_with_cache(&mut cache)` – amortises scratch-buffer allocation
 //!   across queries.
 //! - **Multi-threaded reuse.** [`RaptorCachePool`] is the `Sync` variant.
 //!   Each worker calls [`RaptorCachePool::checkout`] to get a cache for one
@@ -91,7 +91,7 @@
 //! form. Identifiers are dense `u32` newtypes ([`StopIdx`], [`RouteIdx`],
 //! [`TripIdx`]); your adapter interns external IDs to dense indices at
 //! construction. The trait carries one mandatory soundness contract —
-//! no-overtaking within a route — documented on [`Timetable`]. Footpaths
+//! no-overtaking within a route – documented on [`Timetable`]. Footpaths
 //! returned by [`Timetable::get_footpaths_from`] describe direct walks only;
 //! the algorithm chains them within a round, so transitive closure of the
 //! footpath relation is not required (see the [`Timetable`] trait's
@@ -118,31 +118,31 @@
 //!   should follow the same pattern with their own typed error enum.
 //! - **`Option` for lookups.** Resolving an external ID
 //!   ([`gtfs::GtfsTimetable::stop_idx`], [`gtfs::GtfsTimetable::route_idx`])
-//!   returns `Option` — `None` simply means "not in this timetable".
+//!   returns `Option` – `None` simply means "not in this timetable".
 //!   Same for any "find me an `X` matching `Y`" accessor; there's no
 //!   useful structured error.
 //! - **`Result` for plan reconstruction.** [`Journey::with_timing`]
-//!   returns [`Result<_, TimingError>`] — failure modes (no boarding
+//!   returns [`Result<_, TimingError>`] – failure modes (no boarding
 //!   stop reachable, no catchable trip, alighting stop not on route)
 //!   are surfaced as variants because they carry useful debug context.
 //! - **Panics for programmer-violated invariants.** Passing a
 //!   [`RaptorCache`] sized for one timetable to a query against a
-//!   differently-sized timetable panics — the mistake is unrecoverable
+//!   differently-sized timetable panics – the mistake is unrecoverable
 //!   and the assertion message is the diagnostic. Custom [`Timetable`]
 //!   adapters that violate the no-overtaking contract documented on
 //!   the trait will likely produce wrong answers rather than panic.
 //!
-//! There is no all-encompassing `vulture::Error` enum — each failure
+//! There is no all-encompassing `vulture::Error` enum – each failure
 //! lives at a clear boundary, so unifying them would lose information
 //! rather than add it.
 //!
 //! # Cargo features
 //!
-//! - `parallel` (default-on) — pulls in `rayon`, enables [`Query::run_par`] /
+//! - `parallel` (default-on) – pulls in `rayon`, enables [`Query::run_par`] /
 //!   [`Query::run_with_pool`]. Opt out with `default-features = false` for
 //!   wasm or minimal builds; [`RaptorCachePool`] itself stays available.
-//! - `gtfs-bench` — enables the `gtfs` criterion benchmark.
-//! - `internal` — enables the `raptor` criterion benchmark over [`manual`].
+//! - `gtfs-bench` – enables the `gtfs` criterion benchmark.
+//! - `internal` – enables the `raptor` criterion benchmark over [`manual`].
 
 mod algorithm;
 mod cache;
@@ -158,7 +158,7 @@ pub mod gtfs;
 pub mod labels;
 /// In-memory `Timetable` adapter you build by hand with `.route(...)` /
 /// `.footpath(...)` calls. Useful when your data isn't from a parsed
-/// GTFS feed — for tests, custom data sources, and toy examples.
+/// GTFS feed – for tests, custom data sources, and toy examples.
 pub mod manual;
 
 // Central items: the trait, the builder, the result.
@@ -185,7 +185,7 @@ pub use query::NeedsDeparture;
 pub use query::RangeDeparture;
 pub use query::SingleDeparture;
 
-// Endpoints — query input.
+// Endpoints – query input.
 pub use endpoints::Endpoints;
 pub use endpoints::IntoEndpoints;
 

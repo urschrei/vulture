@@ -48,7 +48,7 @@ impl From<StopIdx> for u32 {
 /// Dense index of a route within a [`Timetable`](crate::Timetable). Indices are in `0..tt.n_routes()`.
 ///
 /// In the GTFS adapter, a single GTFS `route_id` may map to multiple
-/// `RouteIdx`s — one per equivalence class of trips with identical stop
+/// `RouteIdx`s – one per equivalence class of trips with identical stop
 /// sequences and pairwise non-overtaking schedules. See
 /// [`gtfs::GtfsTimetable`](crate::gtfs::GtfsTimetable) for the splitting rules and lookup APIs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

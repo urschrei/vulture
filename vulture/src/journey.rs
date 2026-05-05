@@ -1,4 +1,4 @@
-//! [`Journey`] — what the algorithm returns: a sequence of `(route, alight stop)`
+//! [`Journey`] – what the algorithm returns: a sequence of `(route, alight stop)`
 //! steps plus a label at the target. [`Journey::with_timing`] reconstructs
 //! per-leg [`TimedLeg`]s (trip IDs and depart/arrive times) given the
 //! timetable; failures surface as [`TimingError`].
@@ -20,7 +20,7 @@ use crate::time::SecondOfDay;
 /// arrival.
 ///
 /// `origin` is whichever of the user-supplied origin stops this journey
-/// actually started from — relevant for multi-source queries (e.g. "any
+/// actually started from – relevant for multi-source queries (e.g. "any
 /// platform of this station") where the algorithm picks the best origin
 /// internally. Similarly `target` is the target stop reached.
 ///
@@ -35,7 +35,7 @@ pub struct Journey<L: Label = ArrivalTime> {
     pub target: StopIdx,
     /// Sequence of steps, each a (route, alight stop) pair.
     ///
-    /// The origin stop is implicit — it is not part of the plan. Each entry
+    /// The origin stop is implicit – it is not part of the plan. Each entry
     /// means "take this route until this stop". The first step boards at the
     /// origin stop, and each subsequent step boards at the stop where the
     /// previous step got off (possibly via an intermediate footpath).
@@ -68,7 +68,7 @@ impl<L: Label> Journey<L> {
     /// scans the previous alight stop's direct footpath neighbours
     /// for one that *is* served, walks there, and uses that as the
     /// next leg's `board`. The walking time advances `depart`
-    /// without producing a separate leg — callers detect a walking
+    /// without producing a separate leg – callers detect a walking
     /// transfer by comparing `legs[n].alight` with `legs[n+1].board`.
     ///
     /// # Errors
@@ -182,7 +182,7 @@ pub struct TimedLeg {
     pub board: StopIdx,
     /// Stop where the rider alights.
     pub alight: StopIdx,
-    /// The specific trip ridden — the earliest one departing at or
+    /// The specific trip ridden – the earliest one departing at or
     /// after the rider's available time at `board`.
     pub trip: TripIdx,
     /// Departure time at `board`, in seconds since midnight.
@@ -196,7 +196,7 @@ pub struct TimedLeg {
 /// Each variant carries the leg index where reconstruction stopped (zero-based)
 /// and enough context to identify what went wrong. For a `Journey` produced by
 /// the same timetable the algorithm ran against, the only variant a caller
-/// realistically hits is [`TimingError::NoBoardingStop`] — and only when a
+/// realistically hits is [`TimingError::NoBoardingStop`] – and only when a
 /// transfer needs a walk chain longer than one direct footpath hop. The other
 /// two variants surface programmer errors (a `Journey` matched against a
 /// different timetable, a custom adapter violating the no-overtaking contract).
@@ -206,7 +206,7 @@ pub enum TimingError {
     /// No stop in the plan-reconstruction frontier (the previous leg's
     /// alight stop or any of its one-hop footpath neighbours) is served
     /// by the route this leg wants to board. Multi-hop walk chains are
-    /// not reconstructed — if the original journey actually walked
+    /// not reconstructed – if the original journey actually walked
     /// through more than one intermediate stop, that walk can't be
     /// recovered from `Journey.plan` alone today.
     #[error(
@@ -224,7 +224,7 @@ pub enum TimingError {
     },
     /// No trip on the boarded route departs at or after the rider's
     /// available time. For a `Journey` produced by the same timetable
-    /// this should not happen — surface as a programmer-error escape
+    /// this should not happen – surface as a programmer-error escape
     /// hatch.
     #[error(
         "leg {leg}: no trip on route {route} departs at or after {at} from position {board_pos}"
@@ -242,7 +242,7 @@ pub enum TimingError {
     /// The boarded route's stop sequence (from the boarding position
     /// onwards) does not include the claimed alighting stop. For a
     /// `Journey` produced by the same timetable this should not
-    /// happen — surface as a programmer-error escape hatch.
+    /// happen – surface as a programmer-error escape hatch.
     #[error("leg {leg}: route {route} does not reach stop {alight} from position {board_pos}")]
     UnreachableAlight {
         /// Zero-based plan index where reconstruction stopped.

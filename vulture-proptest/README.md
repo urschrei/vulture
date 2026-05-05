@@ -45,15 +45,15 @@ See `soundness.md` at the repo root for the full issue catalogue.
 
 | Soundness issue | Layer that detects it | Notes |
 |-----------------|-----------------------|-------|
-| A — labels not carried forward | resolved in v0.3 | Was layer-2 territory pre-fix. |
-| B — no footpath relaxation from source | resolved in v0.3 | Was layer-2 territory pre-fix. |
-| C — τ\* not updated in footpath stage | resolved in v0.3 | Was layer-2 (indirect) pre-fix. |
-| D — no target pruning in footpath stage | resolved in v0.3 | Was layer-2 (indirect) pre-fix. |
-| E — GTFS adapter route-pattern conflation | (out of scope) | Needs a separate harness over `GtfsTimetable`. |
-| F — output not Pareto-filtered | resolved in v0.3 | `Timetable::raptor` now sorts and Pareto-filters the output. `raptor_front` is now redundant on the algorithm side and could be inlined to a `.iter().map(...).collect::<BTreeSet<_>>()`; left in place as belt-and-braces. |
-| G — non-saturating Tau arithmetic | (out of scope) | Generator ranges keep `tau`, `walk_time` small enough to never trigger overflow; a targeted unit test is more appropriate. |
-| H — footpath transitivity assumption | (out of scope) | Renderer transitively closes footpaths, so the harness can't observe non-closed inputs. |
-| I — journey reconstruction cannot trace through walk legs | resolved in v0.3 | Was the post-0.4 layer-2 blocker. Boarding tree now records walk legs alongside route boardings; reconstruction chains through walks within a round. |
+| A – labels not carried forward | resolved in v0.3 | Was layer-2 territory pre-fix. |
+| B – no footpath relaxation from source | resolved in v0.3 | Was layer-2 territory pre-fix. |
+| C – τ\* not updated in footpath stage | resolved in v0.3 | Was layer-2 (indirect) pre-fix. |
+| D – no target pruning in footpath stage | resolved in v0.3 | Was layer-2 (indirect) pre-fix. |
+| E – GTFS adapter route-pattern conflation | (out of scope) | Needs a separate harness over `GtfsTimetable`. |
+| F – output not Pareto-filtered | resolved in v0.3 | `Timetable::raptor` now sorts and Pareto-filters the output. `raptor_front` is now redundant on the algorithm side and could be inlined to a `.iter().map(...).collect::<BTreeSet<_>>()`; left in place as belt-and-braces. |
+| G – non-saturating Tau arithmetic | (out of scope) | Generator ranges keep `tau`, `walk_time` small enough to never trigger overflow; a targeted unit test is more appropriate. |
+| H – footpath transitivity assumption | (out of scope) | Renderer transitively closes footpaths, so the harness can't observe non-closed inputs. |
+| I – journey reconstruction cannot trace through walk legs | resolved in v0.3 | Was the post-0.4 layer-2 blocker. Boarding tree now records walk legs alongside route boardings; reconstruction chains through walks within a round. |
 
 ## Reproducing a failure
 
@@ -70,7 +70,7 @@ fn layer2_matches_reference(tc: hegel::TestCase) { /* ... */ }
 ## Internal simplification: trips on a route share leg/dwell durations
 
 The generator constrains trips on the same route to share `leg_durations`
-and `dwell_times`. This makes overtaking *structurally impossible* — every
+and `dwell_times`. This makes overtaking *structurally impossible* – every
 spec the generator produces is a valid RAPTOR input.
 
 This is stricter than the paper requires: the paper allows differing

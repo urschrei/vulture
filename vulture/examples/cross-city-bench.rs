@@ -5,7 +5,7 @@
 //! representative queries, and reports load time, query latency
 //! (median of 50 runs), and journey arrival time.
 //!
-//! Skips feeds that are not present without failing — fetch them with
+//! Skips feeds that are not present without failing – fetch them with
 //! `scripts/fetch-bench-feeds.sh` first if you want the full table.
 //!
 //! Usage:
@@ -43,9 +43,9 @@ struct QuerySpec {
 }
 
 enum Endpoint {
-    /// Single stop ID — interpreted as a child platform / standalone stop.
+    /// Single stop ID – interpreted as a child platform / standalone stop.
     Stop(&'static str),
-    /// Parent station ID — expanded to all child platforms via
+    /// Parent station ID – expanded to all child platforms via
     /// `tt.station_stops(...)`.
     Station(&'static str),
 }

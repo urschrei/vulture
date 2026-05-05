@@ -58,7 +58,7 @@ pub(crate) fn filter_range_pareto_front<L: Label>(
 ///
 /// `marked` is the destination bitset; bits already set are preserved.
 /// One `get_earliest_trip` lookup per (route, position) plus one
-/// `get_departure_time` if the lookup hits — overall
+/// `get_departure_time` if the lookup hits – overall
 /// O(n_routes × max_route_len) calls per invocation, each O(log
 /// n_trips_per_route) inside the trait impl.
 pub(crate) fn newly_active_stops_into<T: Timetable + ?Sized>(
@@ -162,7 +162,7 @@ pub(crate) fn raptor_range_rrap_arrival<T: Timetable + ?Sized>(
         }
 
         // (b) Mark stops with newly-catchable trips for this τ. The
-        // window is half-open `[tau, prev_tau)` — trips departing at
+        // window is half-open `[tau, prev_tau)` – trips departing at
         // exactly `tau` are first-catchable in this scan, while trips
         // at `prev_tau` were already covered by the previous scan.
         if let Some(prev) = prev_tau {

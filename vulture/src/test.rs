@@ -12,7 +12,7 @@ macro_rules! plan {
 }
 
 /// When a faster route reaches a mid-route stop, the algorithm must record
-/// that stop as the boarding stop — not the earlier stop where the route
+/// that stop as the boarding stop – not the earlier stop where the route
 /// scan began. See examples/reboarding.rs for the full network.
 #[test]
 fn reboarding_picks_correct_boarding_stop() {
@@ -1376,7 +1376,7 @@ fn query_builder_range_departure() {
 
 #[test]
 fn into_endpoints_accepts_natural_input_shapes() {
-    // The single-stop call is the headline ergonomics win — `start` and
+    // The single-stop call is the headline ergonomics win – `start` and
     // `end` go straight in, no slice-of-tuples wrapping.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum S {
@@ -1409,7 +1409,7 @@ fn into_endpoints_accepts_natural_input_shapes() {
     let b = tt.stop_idx_of(&S::B);
     let c = tt.stop_idx_of(&S::C);
 
-    // 1. Bare StopIdx — the trivial case.
+    // 1. Bare StopIdx – the trivial case.
     let j = tt
         .query()
         .from(a)
@@ -1442,7 +1442,7 @@ fn into_endpoints_accepts_natural_input_shapes() {
         .run();
     assert_eq!(j[0].arrival(), SecondOfDay(20));
 
-    // 4. Slice of (stop, duration) pairs — original v0.13 shape.
+    // 4. Slice of (stop, duration) pairs – original v0.13 shape.
     let pairs = [(a, Duration::ZERO)];
     let j = tt
         .query()
@@ -1541,7 +1541,7 @@ fn closed_path_dispatch_matches_dijkstra() {
     }
 
     // A→B by R1, walk B→C, C→D by R2. The walk is a single direct edge
-    // so closure is trivially satisfied — both paths must agree.
+    // so closure is trivially satisfied – both paths must agree.
     let inner = SimpleTimetable::new()
         .route(
             R::R1,
@@ -1688,10 +1688,10 @@ fn raptor_range_returns_pareto_profile_across_departures() {
     // Querying departures [0, 5, 10, 15, 20]:
     // - depart=0  catches T1, arr=10
     // - depart=5  catches T2, arr=20 (no choice but to wait)
-    // - depart=10 catches T2, arr=20 — strictly better than depart=5
+    // - depart=10 catches T2, arr=20 – strictly better than depart=5
     //   (later departure, same arrival) → depart=5 dominated, dropped.
     // - depart=15 catches T3, arr=30 (must wait)
-    // - depart=20 catches T3, arr=30 — better than depart=15, drop it.
+    // - depart=20 catches T3, arr=30 – better than depart=15, drop it.
     // Profile: [(0, arr 10), (10, arr 20), (20, arr 30)].
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     enum S {
@@ -1889,7 +1889,7 @@ fn with_timing_recovers_per_leg_trip_and_times() {
     // trip from B to C (12->25). A query departing at 0 should ride
     // T1Early (boarding 0, alighting 10), then T2 (boarding 12, alighting
     // 25). Departing at 30 should ride T1Late (boarding 50, alighting 60)
-    // — there's no T2 trip available afterwards, so no journey.
+    // – there's no T2 trip available afterwards, so no journey.
     let tt = SimpleTimetable::new()
         .route(
             R::R1,
@@ -2319,7 +2319,7 @@ fn newly_active_stops_marks_only_in_window() {
 
     // Window [180, 270): R1's T2 (200) and R2's T5 (250) qualify.
     // Stops marked: A and B (R1 reaches both via T2), C and D (R2 reaches both via T5).
-    // T2 also has B at 210 and T5 has D at 260 — both fall in the window.
+    // T2 also has B at 210 and T5 has D at 260 – both fall in the window.
     newly_active_stops_into(&tt, SecondOfDay(180), SecondOfDay(270), &mut marked);
     assert!(marked.contains(tt.stop_idx_of(&S::A).idx()));
     assert!(marked.contains(tt.stop_idx_of(&S::B).idx()));

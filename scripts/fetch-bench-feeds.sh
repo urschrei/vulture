@@ -6,7 +6,7 @@
 # the snapshot. Total download is ~300 MB at the time of writing.
 #
 # License attribution (every feed is redistributable but requires
-# attribution where redistributed downstream — keep these intact in any
+# attribution where redistributed downstream – keep these intact in any
 # derived work):
 #
 # - Helsinki HSL feed:    CC-BY 4.0 (HSL / Helsingin seudun liikenne)

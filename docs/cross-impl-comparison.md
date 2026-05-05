@@ -1,7 +1,7 @@
 # Cross-implementation comparison: vulture vs `raptor-journey-planner`
 
 Side-by-side correctness and latency comparison between this crate and
-[`planarnetwork/raptor`](https://github.com/planarnetwork/raptor) — a
+[`planarnetwork/raptor`](https://github.com/planarnetwork/raptor) – a
 TypeScript RAPTOR implementation by Linus Norton, published as
 [`raptor-journey-planner`](https://www.npmjs.com/package/raptor-journey-planner)
 (GPL-3.0). Same algorithm family (round-based RAPTOR), same input
@@ -48,7 +48,7 @@ Load time: vulture 11.5 s, planar 38.8 s.
 
 | Query                                          | Vulture (median, p95) | Planar (median, p95) | Ratio | Match |
 | ---------------------------------------------- | --------------------: | -------------------: | ----: | :---- |
-| Kamppi metro → Itäkeskus metro                 |     8.83 ms, 9.30 ms  | gtfs-stream parse failure | — | planar empty |
+| Kamppi metro → Itäkeskus metro                 |     8.83 ms, 9.30 ms  | gtfs-stream parse failure | – | planar empty |
 
 `raptor-journey-planner`'s `gtfs-stream` parser returns 0 trips with
 attached `stop_times` for the HSL 2026-05-04 feed (all 490 k trips are
@@ -78,7 +78,7 @@ Load time: vulture 10.5 s, planar 38.5 s.
 
 **Correctness.** Across all eight comparable queries spanning four
 feeds and journey lengths from one to four legs, the two
-implementations agree on the same Pareto frontier — same arrival time,
+implementations agree on the same Pareto frontier – same arrival time,
 same number of transit legs, on every query. This is the first
 end-to-end real-feed correctness check either project has against an
 independent implementation; planar's own test suite asserts only
@@ -104,7 +104,7 @@ distinct effects are bundled into that range:
 The Châtelet → Versailles Rive Droite query is the most representative
 real-world workload (54 k-stop network, multi-leg journey crossing the
 RER C to suburban rail). vulture handles it in 27 ms; planar in
-273 ms — a 10× gap, with both implementations finding the same
+273 ms – a 10× gap, with both implementations finding the same
 journey.
 
 **Load time.** planar takes 3–3.6× longer to parse and index every
@@ -128,7 +128,7 @@ all subsequent queries against the same loaded timetable.
   490 033 trips with no `stopTimes` attached for the 2026-05-04 HSL
   feed (vulture parses it cleanly via `gtfs-structures`). The
   divergence is upstream of the routing algorithm. Stating "vulture
-  handles a feed planar cannot" would be misleading — both
+  handles a feed planar cannot" would be misleading – both
   implementations would presumably agree if planar's parser succeeded.
 
 - **Timezone bug, worked around in the harness.**

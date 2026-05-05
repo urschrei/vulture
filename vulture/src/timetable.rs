@@ -1,4 +1,4 @@
-//! [`Timetable`] — the trait adapters implement to plug a transit
+//! [`Timetable`] – the trait adapters implement to plug a transit
 //! network into the RAPTOR algorithm. The trait carries only the data
 //! accessors, the closure-of-footpaths declaration, and the
 //! [`Timetable::query`] / [`Timetable::query_with_label`] entry points
@@ -37,7 +37,7 @@ use crate::time::Transfers;
 /// already present as a single direct edge: i.e. if `A → B` and
 /// `B → C` are both in the relation, then `A → C` is too, with the
 /// combined walk time ([Wikipedia][tc]). The algorithm does **not**
-/// require closure — it chains direct walks within a single round
+/// require closure – it chains direct walks within a single round
 /// using multi-source Dijkstra, so a non-closed relation produces
 /// correct answers; closure is purely an optimisation that lets the
 /// algorithm switch to a cheaper single-pass `O(E)` relaxation. See
@@ -104,7 +104,7 @@ pub trait Timetable {
     /// Returns all stops directly reachable from the given stop via
     /// walking (footpaths).
     ///
-    /// The relation does not need to be transitively closed — the
+    /// The relation does not need to be transitively closed – the
     /// algorithm chains walks within a round. See the trait-level docs.
     fn get_footpaths_from(&self, stop: StopIdx) -> &[StopIdx];
 
@@ -171,7 +171,7 @@ pub trait Timetable {
     /// returned Pareto front a different trade-off across `L`'s criteria.
     ///
     /// You only need this if [`ArrivalTime`] (the default) is the wrong
-    /// shape for your problem — e.g. you want to surface a slower route
+    /// shape for your problem – e.g. you want to surface a slower route
     /// with less walking. The bundled [`labels::ArrivalAndWalk`](crate::labels::ArrivalAndWalk)
     /// does exactly that. See the [`Label`] trait for what's involved in
     /// writing your own.

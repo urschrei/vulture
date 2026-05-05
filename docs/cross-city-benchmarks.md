@@ -26,7 +26,7 @@ The "Routes" column counts the *synthetic* routes the adapter creates
 after splitting each GTFS `route_id` by stop pattern and overtaking,
 and after dropping any synthetic that has no trips active on the
 service date. The "Trips (active)" column shows how many trips
-survived calendar filtering — Helsinki's feed contains 490k trips
+survived calendar filtering – Helsinki's feed contains 490k trips
 across many service days, of which only ~5% run on a single Monday;
 Berlin runs ~26% and Paris ~32% on a typical Monday.
 
@@ -54,7 +54,7 @@ multi-leg journeys use shared physical interchange stops.
 
 The Helsinki run augments the feed with coordinate-derived walking
 footpaths via `GtfsTimetable::with_walking_footpaths(&gtfs, 500.0,
-1.4)` — without them the Rautatientori → Pasila query returns no
+1.4)` – without them the Rautatientori → Pasila query returns no
 journey because HSL ships an empty `transfers.txt`.
 
 | Query                                              | Median latency |              Result |
@@ -82,14 +82,14 @@ ID is one specific eastbound S-Bahn platform: the 09:00 query waits
 The station-to-station query passes the parent station IDs straight
 to `raptor` (via `GtfsTimetable::station_stops`, added in v0.7),
 expanding each parent to its ~50–300 child platforms and letting the
-multi-source/target search pick the actually-fastest combination — in
+multi-source/target search pick the actually-fastest combination – in
 this case a direct S-Bahn that leaves Hbf at 09:01 and arrives Alex at
 09:07. The cost is ~3.6× the hand-picked latency because of the extra
 origins and targets to consider, but the answer is correct without
 requiring the caller to know which platform serves their direction.
 
 The hand-picked query benefits from the loop-route fix in v0.5 (the
-previous version reported a 245-minute "best journey" — the algorithm
+previous version reported a 245-minute "best journey" – the algorithm
 couldn't find a direct S-Bahn between the platforms originally chosen
 because the IDs were for opposite-direction tracks, and the loop-route
 bug was producing further nonsense in the long alternate routes it
@@ -103,14 +103,14 @@ considered).
 | Châtelet → La Défense              |        0.88 ms | arr 09:10:09 (10 m) |
 | Châtelet → Versailles Rive Droite  |        16.7 ms | arr 09:43:00 (43 m) |
 
-All three queries return single sensible journeys — the loop-route
+All three queries return single sensible journeys – the loop-route
 soundness bug that produced ARR<DEP results in earlier benchmark runs
 was fixed in Phase 0.11 (see [Known limitations](#known-limitations) §2
 for the diagnosis history).
 
 The bench calls `GtfsTimetable::assert_footpaths_closed()` after
 construction, which lets the algorithm use the v0.9 single-pass
-footpath relaxation rather than multi-source Dijkstra — IDFM's
+footpath relaxation rather than multi-source Dijkstra – IDFM's
 `transfers.txt` is publisher-curated, and treating it as the entire
 intended footpath relation matches v0.7 semantics. This recovers most
 of the v0.8 regression (8.7 / 14.0 / 34.5 ms) at the cost of an
@@ -123,7 +123,7 @@ on the roadmap as future work but had not previously been hit on real
 feeds (the bundled Delhi feed is small and clean enough to avoid
 them).
 
-### 1. Parent stations are not aggregated — fixed in v0.7
+### 1. Parent stations are not aggregated – fixed in v0.7
 
 Most large GTFS feeds use a parent-station / child-platform model:
 the parent (`location_type=1`) is the named station, the children
@@ -137,7 +137,7 @@ targets, and adds `GtfsTimetable::station_stops(parent_id)` returning
 the parent's child platforms ready to pass straight to `raptor`. The
 algorithm picks the best origin/target combination internally.
 
-### 2. Routes whose trips revisit a stop (loops) — fixed in Phase 0.11
+### 2. Routes whose trips revisit a stop (loops) – fixed in Phase 0.11
 
 This was the root cause of the Paris ARR<DEP results in earlier
 benchmark runs. Diagnosed by stepping a bad journey through the
@@ -147,7 +147,7 @@ The bug: GTFS allows a trip's `stop_sequence` to revisit the same
 stop_id (bus loops, shuttles that turn around, terminus loops). The
 v0.4 adapter collapsed each trip's stop sequence into a
 `Vec<StopIdx>` and used `Vec::position()` to find a stop's index
-within that sequence — `position()` returns the **first** occurrence.
+within that sequence – `position()` returns the **first** occurrence.
 When a trip visited stop X at sequence-index 0 (early morning) and
 again at sequence-index 12 (late morning), `get_arrival_time(trip, X)`
 returned the early-morning value regardless of which visit the
@@ -174,17 +174,17 @@ loop trips and the algorithm passes against the brute-force reference
 solver. The cross-city Paris queries above now return single sensible
 journeys.
 
-### 3. Calendar / service-day filtering — fixed in v0.6 (Phase 0.10)
+### 3. Calendar / service-day filtering – fixed in v0.6 (Phase 0.10)
 
 `GtfsTimetable::new(&gtfs, service_date)` now takes a
 `jiff::civil::Date` and filters trips by `calendar.txt` /
 `calendar_dates.txt` at construction. The cross-city numbers above
-reflect this — each feed gets a representative weekday in its calendar
+reflect this – each feed gets a representative weekday in its calendar
 window, and only trips active on that day enter the timetable. Per-feed
 trip counts dropped substantially (Helsinki's 490k → 35k, Paris's 459k
 → 49k), with corresponding query-latency speedups in the 3–6× range.
 
-### 4. Transfer-graph density — fixed in v0.8
+### 4. Transfer-graph density – fixed in v0.8
 
 Two changes in v0.8 close this gap:
 
@@ -214,7 +214,7 @@ reads once per query, dispatching to a single-pass `O(E)` relaxation
 when set. The cross-city bench above calls this for every feed
 without walking footpaths, recovering most of the v0.8 Paris
 regression (8.7 / 14.0 / 34.5 ms back down to 0.77 / 0.88 / 16.7 ms).
-Asserting closure is a soundness commitment from the caller — see the
+Asserting closure is a soundness commitment from the caller – see the
 trait method's docstring.
 
 These four items are the priority follow-ups for Phase 0.x; each is
@@ -239,9 +239,9 @@ repo) is exercised even without step 1.
 | Feed         | Source                                                                                                    | License                                       |
 |--------------|-----------------------------------------------------------------------------------------------------------|-----------------------------------------------|
 | Delhi Metro  | bundled `aux/dmrc_gtfs.zip` (snapshot)                                                                    | bundled with repo                             |
-| Helsinki HSL | [`http://dev.hsl.fi/gtfs/hsl.zip`](http://dev.hsl.fi/gtfs/hsl.zip)                                        | CC-BY 4.0 — © HSL / Helsingin seudun liikenne |
-| Berlin VBB   | [`https://www.vbb.de/vbbgtfs`](https://www.vbb.de/vbbgtfs)                                                | CC-BY 3.0 DE — © Verkehrsverbund Berlin-Brandenburg |
-| Paris IDFM   | [`https://eu.ftp.opendatasoft.com/stif/GTFS/IDFM-gtfs.zip`](https://eu.ftp.opendatasoft.com/stif/GTFS/IDFM-gtfs.zip) | Licence Mobilités — © Île-de-France Mobilités |
+| Helsinki HSL | [`http://dev.hsl.fi/gtfs/hsl.zip`](http://dev.hsl.fi/gtfs/hsl.zip)                                        | CC-BY 4.0 – © HSL / Helsingin seudun liikenne |
+| Berlin VBB   | [`https://www.vbb.de/vbbgtfs`](https://www.vbb.de/vbbgtfs)                                                | CC-BY 3.0 DE – © Verkehrsverbund Berlin-Brandenburg |
+| Paris IDFM   | [`https://eu.ftp.opendatasoft.com/stif/GTFS/IDFM-gtfs.zip`](https://eu.ftp.opendatasoft.com/stif/GTFS/IDFM-gtfs.zip) | Licence Mobilités – © Île-de-France Mobilités |
 
 Snapshots taken on 2026-05-04. Feeds are updated by their publishers
 on regular cadences (HSL daily, VBB twice weekly, IDFM three times

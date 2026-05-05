@@ -73,7 +73,7 @@ time** and **number of transfers** in a public transit network.
 **Optimizations:**
 - **Marking**: Only routes containing stops improved in the previous round
   are scanned.
-- **Local pruning**: Track τ\*(pᵢ) — earliest arrival at pᵢ across all
+- **Local pruning**: Track τ\*(pᵢ) – earliest arrival at pᵢ across all
   rounds.
 - **Target pruning**: Don't update or mark stops whose arrival exceeds
   τ\*(pₜ).
@@ -86,7 +86,7 @@ None known. The closure-of-footpaths concern that earlier versions of
 this document carried is now addressed in two complementary ways
 (*transitive closure* of the footpath relation means every walk
 reachable through a chain of direct edges is already present as a
-single direct edge — `A → B` and `B → C` implies `A → C` with the
+single direct edge – `A → B` and `B → C` implies `A → C` with the
 combined walk time; see the [`Timetable` trait docs][tt-fp] and
 [Wikipedia][tc]):
 
@@ -102,8 +102,8 @@ combined walk time; see the [`Timetable` trait docs][tt-fp] and
 [tt-fp]: https://docs.rs/vulture/latest/vulture/trait.Timetable.html#footpaths
 [tc]: https://en.wikipedia.org/wiki/Transitive_closure
 
-The earlier "wish list" item — an opt-in transitive-closure pass
-during `GtfsTimetable::new` — has effectively been replaced by
+The earlier "wish list" item – an opt-in transitive-closure pass
+during `GtfsTimetable::new` – has effectively been replaced by
 [`GtfsTimetable::with_walking_footpaths`], which builds a coordinate-
 derived walking graph from stop locations using an R-tree. This
 augments rather than closes the existing relation, but it solves the
@@ -147,7 +147,7 @@ A–I were resolved on the v0.3 development branch; J and K landed
 later (Phase 0.10 and Phase 0.11 respectively, against bugs surfaced
 by the cross-city benchmarks on real feeds).
 
-### A: Round labels are not carried forward — **Fixed (v0.3)**
+### A: Round labels are not carried forward – **Fixed (v0.3)**
 
 **Was**: labels lived in `BTreeMap<(K, Stop), SecondOfDay>` and entries were
 only inserted on improvement, so footpath relaxation in round k could
@@ -163,7 +163,7 @@ original v0.3 `Vec<BTreeMap<Stop, SecondOfDay>>` shape; Phase 2's
 multi-criterion work then generalised the inner cell from
 `SecondOfDay` to `LabelBag<L>`.
 
-### B: Footpath relaxation from the source missing in round 1 — **Fixed (v0.3)**
+### B: Footpath relaxation from the source missing in round 1 – **Fixed (v0.3)**
 
 **Was**: only `(0, ps) = tau` was set at init; the footpath stage ran
 inside the round loop and never relaxed walks from `ps` itself before
@@ -174,7 +174,7 @@ and called once at init for round 0. Combined with A, walk-reachable
 neighbours of `ps` carry forward into round 1 and are usable as
 boarding points for the first route scan.
 
-### C: τ\* not updated in the footpath stage — **Fixed (v0.3)**
+### C: τ\* not updated in the footpath stage – **Fixed (v0.3)**
 
 **Was**: walk-derived label updates were written to
 `best_arrival_per_k` only; `best_arrival` (τ\*) remained stale, leaving
@@ -183,7 +183,7 @@ local and target pruning unaware of walk-reached arrivals.
 **Now**: `relax_footpaths_round` updates both `labels[k]` and
 `best_arrival` whenever a walk strictly improves an arrival.
 
-### D: No target pruning in the footpath stage — **Fixed (v0.3)**
+### D: No target pruning in the footpath stage – **Fixed (v0.3)**
 
 **Was**: every walk-reachable stop was unconditionally pushed into the
 marked set, including stops whose arrival exceeded τ\*(pₜ).
@@ -191,7 +191,7 @@ marked set, including stops whose arrival exceeded τ\*(pₜ).
 **Now**: `relax_footpaths_round` only marks `p_dash` if the walk-derived
 arrival strictly improves on `best_arrival[pt]`.
 
-### E: GTFS adapter conflated route_id with RAPTOR route — **Fixed (v0.3)**
+### E: GTFS adapter conflated route_id with RAPTOR route – **Fixed (v0.3)**
 
 **Was**: `cache_trips_for_routes` indexed trips by GTFS `route_id` and
 sorted them by first-stop departure. `get_earliest_trip` then binary-
@@ -208,12 +208,12 @@ greedily splits each group into non-overtaking sub-groups
 `RouteId`s. The original GTFS `route_id` is recoverable for display via
 `GtfsTimetable::route_name`.
 
-This is a public API change — `Journey`'s `Route` type for this
+This is a public API change – `Journey`'s `Route` type for this
 adapter is now `RouteId` rather than `&str`. The binary search in
 `get_earliest_trip` is now sound because every synthetic route's trips
 share a stop sequence and pairwise do not overtake.
 
-### F: Output is not Pareto-filtered — **Fixed (v0.3)**
+### F: Output is not Pareto-filtered – **Fixed (v0.3)**
 
 **Was**: `Query::run` (dispatching through the algorithm free fn `run_per_call_query`) collected one journey per
 `k ∈ 1..=transfers` from `reconstruct_journey` without an explicit
@@ -226,7 +226,7 @@ strictly less than the best seen so far. The trait doc documents the
 contract: arrival strictly decreases as trip count increases. Output
 is deterministic and independent of pruning correctness.
 
-### I: Journey reconstruction cannot trace through walk legs — **Fixed (v0.3)**
+### I: Journey reconstruction cannot trace through walk legs – **Fixed (v0.3)**
 
 **Was**: the boarding tree recorded only route-scan boardings, so
 reconstruction broke whenever the optimal path involved a walk leg
@@ -246,7 +246,7 @@ enum Step<Route, Stop> {
 
 `relax_footpaths_round` inserts `Walked` entries whenever a walk
 strictly improves a label. `reconstruct_journey` chains through walk
-entries without decrementing the round index — walks happen within a
+entries without decrementing the round index – walks happen within a
 round and do not consume a trip. The hegel proptest layers 2 and 3
 (footpath-bearing networks) turned green on this fix.
 
@@ -255,7 +255,7 @@ journey ending in a walk is emitted with its last *boarded* alight stop
 in the plan and the walk-derived arrival time. Surfacing walk steps in
 the public API is a future enhancement.
 
-### G: Saturating arithmetic on `SecondOfDay` everywhere — **Fixed (v0.3)**
+### G: Saturating arithmetic on `SecondOfDay` everywhere – **Fixed (v0.3)**
 
 **Was**: the v0.2.0 footpath stage added `transfer_time` without
 `saturating_add`, allowing wrap on misconfigured input.
@@ -267,7 +267,7 @@ A 0.8 audit confirmed there is no other `SecondOfDay` arithmetic in
 (beyond reading values out of the underlying timetable, which the
 algorithm only compares, never combines).
 
-### H: Footpath transitivity is undocumented — **Fixed (v0.3)**
+### H: Footpath transitivity is undocumented – **Fixed (v0.3)**
 
 **Was**: the assumption that the footpath relation is transitively
 closed was implicit. Feeds whose `transfers.txt` derives from
@@ -276,7 +276,7 @@ journeys.
 
 **Now**: the `Timetable` trait documents the closure requirement at
 the trait level and on `get_footpaths_from`. The algorithm itself no
-longer *requires* closure — Phase 0.7 rewrote `relax_footpaths_round`
+longer *requires* closure – Phase 0.7 rewrote `relax_footpaths_round`
 to use multi-source Dijkstra inside each round, chaining direct walks
 to a fixed point. Adapters whose `transfers.txt` *is* closed can opt
 into the cheaper single-pass relaxation via
@@ -284,7 +284,7 @@ into the cheaper single-pass relaxation via
 defaults to `false`; opt in with
 `GtfsTimetable::assert_footpaths_closed()`.
 
-### J: GTFS adapter ignored calendar / service-day filtering — **Fixed (v0.6, Phase 0.10)**
+### J: GTFS adapter ignored calendar / service-day filtering – **Fixed (v0.6, Phase 0.10)**
 
 **Was**: the GTFS adapter loaded every trip in the feed regardless of
 whether its `service_id` was active on the user's chosen date. For
@@ -301,13 +301,13 @@ arithmetic uses [`jiff`](https://crates.io/crates/jiff); the
 `gtfs-structures` chrono dates convert at the boundary. See
 [`vulture/src/gtfs.rs`](../vulture/src/gtfs.rs) `is_service_active`.
 
-### K: Routes that revisit a stop (loop routes) — **Fixed (v0.5, Phase 0.11)**
+### K: Routes that revisit a stop (loop routes) – **Fixed (v0.5, Phase 0.11)**
 
 **Was**: GTFS allows a trip's `stop_sequence` to revisit the same
 `stop_id` (bus loops, shuttles that turn around, terminus loops). The
 v0.4 adapter collapsed each trip's stop sequence to `Vec<StopIdx>`
 and used `Vec::position()` to find a stop's index within that
-sequence — `position()` returns the *first* occurrence. So when the
+sequence – `position()` returns the *first* occurrence. So when the
 algorithm asked "where on this route does stop X sit?", the answer
 silently picked the first visit even when the journey actually
 boarded or alighted at the second. On Paris IDFM this produced
@@ -324,7 +324,7 @@ resolved at the trait boundary; the algorithm is unaffected. The
 hegel proptest harness's layer-3 generator emits loop routes; both
 the per-call algorithm and the rRAPTOR scan stay sound.
 
-### R1: `get_earliest_trip` missing time parameter — **Fixed**
+### R1: `get_earliest_trip` missing time parameter – **Fixed**
 
 **Was**: the `Timetable::get_earliest_trip` trait method took only
 `(route, stop)`, with no way to specify the minimum departure time
@@ -346,7 +346,7 @@ fn get_earliest_trip(
 correct `t_prev_pi = τₖ₋₁(pᵢ)` value. The `simple` and `gtfs` adapters
 implement this correctly.
 
-### R2: Footpath transfer time not added to walking arrivals — **Fixed**
+### R2: Footpath transfer time not added to walking arrivals – **Fixed**
 
 **Was**: the footpath stage took the minimum of the destination's
 existing arrival and the origin's arrival, without adding the walking
@@ -355,7 +355,7 @@ duration. Footpaths were effectively teleportation.
 **Now**: `relax_footpaths_round` adds
 `self.get_transfer_time(stop, p_dash)` via `saturating_add`.
 
-### R3: `get_stops_after` semantics ambiguous — **Fixed**
+### R3: `get_stops_after` semantics ambiguous – **Fixed**
 
 **Was**: it was unclear whether `get_stops_after(route, stop)` should
 include `stop` itself. The paper's "for each stop pᵢ of r beginning with
@@ -367,7 +367,7 @@ use inclusive semantics. The trait documentation at `vulture/src/timetable.rs`
 confirms: "Returns all stops on a route from the given stop onwards
 (inclusive)".
 
-### R4: Loop range excluded the final round — **Fixed**
+### R4: Loop range excluded the final round – **Fixed**
 
 **Was**: `for k in 1..transfers` (exclusive upper bound), so a query
 with `transfers=3` ran only rounds 1 and 2.
@@ -375,9 +375,9 @@ with `transfers=3` ran only rounds 1 and 2.
 **Now**: `for k in 1..=transfers` at `vulture/src/algorithm/per_call.rs` (the rounds loop in `run_raptor_rounds`). Inclusive,
 matching the paper.
 
-### R5: Trip update logic depended on broken `get_earliest_trip` — **Fixed**
+### R5: Trip update logic depended on broken `get_earliest_trip` – **Fixed**
 
-**Was**: a downstream consequence of R1 — the trip-hop logic at the
+**Was**: a downstream consequence of R1 – the trip-hop logic at the
 inner loop could not correctly determine when to switch trips because
 the underlying accessor was unsound.
 
@@ -385,5 +385,5 @@ the underlying accessor was unsound.
 `t_prev_pi` as the lower bound when calling `get_earliest_trip`, and the
 trait method now respects it. The remaining concern in this area is
 covered by Issue E (the GTFS adapter's binary-search-over-route-trips is
-still unsound for a different reason — multiple stop patterns per
+still unsound for a different reason – multiple stop patterns per
 `route_id`).

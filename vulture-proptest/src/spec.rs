@@ -57,7 +57,7 @@ pub struct QuerySpec {
 /// Total and panic-free on every spec the layer generators produce.
 /// Deterministic: same spec always renders byte-identically. The renderer
 /// does not silently drop or normalize anything that violates the spec
-/// contract — generator bugs surface as panics in debug rather than as
+/// contract – generator bugs surface as panics in debug rather than as
 /// hidden mis-tests.
 pub fn render(spec: &NetworkSpec) -> SimpleTimetable<u8, u8, u16> {
     let mut tt: SimpleTimetable<u8, u8, u16> = SimpleTimetable::new();
@@ -319,7 +319,7 @@ pub struct LayerBounds {
     pub stop_seq_max: u8,
     pub allow_footpaths: bool,
     /// When true, a route's stop_sequence may contain duplicate stop ids
-    /// (a "loop route" — the trip revisits the same stop). When false,
+    /// (a "loop route" – the trip revisits the same stop). When false,
     /// every stop in a route's sequence is distinct.
     pub allow_loops: bool,
 }

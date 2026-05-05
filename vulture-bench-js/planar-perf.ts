@@ -2,7 +2,7 @@
 //
 // Source:    https://github.com/planarnetwork/raptor/blob/master/test/performance.ts
 // Author:    Linus Norton <linusnorton@gmail.com>
-// License:   GPL-3.0-only (this file only — see ../LICENSE for the
+// License:   GPL-3.0-only (this file only – see ../LICENSE for the
 //            Apache-2.0 covering the rest of the workspace).
 //
 // Only imports were changed: the upstream file resolves its imports
@@ -17,7 +17,7 @@
 //     npm run perf           # expects ./gtfs.zip in this directory
 //
 // The original perf test is hard-coded to a UK National Rail feed
-// (CRS station codes — NRW = Norwich, LIV = Liverpool Lime Street, EUS
+// (CRS station codes – NRW = Norwich, LIV = Liverpool Lime Street, EUS
 // = London Euston, etc.). Drop a UK-rail GTFS zip in this directory
 // as `gtfs.zip` and it Just Works.
 

@@ -1,6 +1,6 @@
 # vulture-dotgraph
 
-Renders the synthetic transit networks built by [`vulture::manual::builders`](../vulture/src/manual/builders.rs) — the same shapes the criterion bench harness exercises — as [Graphviz](https://graphviz.org/) DOT. Useful when you want to see what `grid/raptor/10r_30s_6c` (or any other criterion bench case from [`vulture/benches/raptor.rs`](../vulture/benches/raptor.rs)) actually looks like.
+Renders the synthetic transit networks built by [`vulture::manual::builders`](../vulture/src/manual/builders.rs) – the same shapes the criterion bench harness exercises – as [Graphviz](https://graphviz.org/) DOT. Useful when you want to see what `grid/raptor/10r_30s_6c` (or any other criterion bench case from [`vulture/benches/raptor.rs`](../vulture/benches/raptor.rs)) actually looks like.
 
 ## Usage
 

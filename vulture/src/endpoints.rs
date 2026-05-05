@@ -12,12 +12,12 @@ use crate::time::Duration;
 /// target of a query.
 ///
 /// Constructed via the [`IntoEndpoints`] trait, which is implemented
-/// for the natural input shapes — a single stop, a slice of stops,
+/// for the natural input shapes – a single stop, a slice of stops,
 /// a slice of `(stop, duration)` pairs, the owning `Vec` forms.
 /// Most callers don't construct `Endpoints` directly; they pass
 /// whatever they have to a query method that takes `impl IntoEndpoints`.
 ///
-/// Stored inline up to 50 entries — covers the typical
+/// Stored inline up to 50 entries – covers the typical
 /// parent-station case (the largest real example we've seen is
 /// Berlin Hauptbahnhof at ~301 child platforms, which spills to the
 /// heap; everything else stays inline).
@@ -57,13 +57,13 @@ impl Endpoints {
 /// [`Endpoints`] value the algorithm can consume.
 ///
 /// Implemented for:
-/// - `StopIdx` — a single stop, walk-time = 0.
-/// - `(StopIdx, Duration)` — a single stop with explicit walk-time.
-/// - `&[StopIdx]`, `&[StopIdx; N]` — multiple stops, all walk = 0.
-/// - `&[(StopIdx, Duration)]`, `&[(StopIdx, Duration); N]` — multiple
+/// - `StopIdx` – a single stop, walk-time = 0.
+/// - `(StopIdx, Duration)` – a single stop with explicit walk-time.
+/// - `&[StopIdx]`, `&[StopIdx; N]` – multiple stops, all walk = 0.
+/// - `&[(StopIdx, Duration)]`, `&[(StopIdx, Duration); N]` – multiple
 ///   stops with explicit walks.
-/// - `Vec<StopIdx>`, `Vec<(StopIdx, Duration)>` — owned variants.
-/// - `&Endpoints`, `Endpoints` — already-built value, identity.
+/// - `Vec<StopIdx>`, `Vec<(StopIdx, Duration)>` – owned variants.
+/// - `&Endpoints`, `Endpoints` – already-built value, identity.
 ///
 /// For anything else (an iterator, your own collection type),
 /// collect into one of the above first or build an [`Endpoints`]

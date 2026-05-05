@@ -1,8 +1,8 @@
 // Inspect what raptor-journey-planner's GTFS loader actually has for
 // the two trips at the centre of the Berlin-divergence diagnosis:
 //
-//   277442991 — S5 S-Bahn, 09:15:24 Hbf -> 09:20:36 Alex (vulture's pick)
-//   292578855 — regional, 09:26:00 Hbf -> 09:31:00 Alex (planar's pick)
+//   277442991 – S5 S-Bahn, 09:15:24 Hbf -> 09:20:36 Alex (vulture's pick)
+//   292578855 – regional, 09:26:00 Hbf -> 09:31:00 Alex (planar's pick)
 //
 // Tells us: is the S5 trip in the loaded set at all? Does it have
 // stopTimes? Does its service.runsOn say it runs on 2026-05-04?

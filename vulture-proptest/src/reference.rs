@@ -104,7 +104,7 @@ fn relax(
 ///
 /// The state is `(stop, time)`; the cost stored at each state is `trips_used`.
 /// Since the time component is encoded into the node, we keep min trips per
-/// node — sufficient for the Pareto-front semantics: any state reachable
+/// node – sufficient for the Pareto-front semantics: any state reachable
 /// from `(s, t, k)` is also reachable from `(s, t, k')` with `k' < k` via
 /// the same sequence of edges.
 pub fn reference_solve(
@@ -182,7 +182,7 @@ pub fn reference_solve(
 
     // Pareto filter: sort by trip count ascending, keep strictly-decreasing
     // arrival. Walk-only journeys (k == 0) are kept here so that they can
-    // dominate higher-k journeys — RAPTOR's local/target pruning has the
+    // dominate higher-k journeys – RAPTOR's local/target pruning has the
     // same effect, dropping any route-based journey that doesn't improve
     // on the walk-only τ\*(pt).
     at_pt.sort_by_key(|&(t, k)| (k, t));
