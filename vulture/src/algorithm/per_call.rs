@@ -151,6 +151,13 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
 
                 // 1. Alight every active riding entry at pi.
                 for &(boarding_label, trip, boarding_stop) in route_bag.iter() {
+                    // Skip stops where this trip doesn't allow drop-off
+                    // (GTFS drop_off_type = 1). The trip still passes
+                    // through `pi`, but the rider cannot disembark, so
+                    // we don't update arrival labels here.
+                    if !tt.drop_off_allowed(trip, pos) {
+                        continue;
+                    }
                     let arr = tt.get_arrival_time(trip, pos);
                     let best_to_pi = best_arrival[pi.idx()].min_arrival();
                     let time_to_beat = best_to_pi.min(pt_threshold);

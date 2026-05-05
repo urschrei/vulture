@@ -91,6 +91,13 @@ pub trait Timetable {
     ///
     /// `pos` disambiguates which visit of the stop to consider when the route
     /// revisits it. Returns `None` if no trip departs at or after `at`.
+    ///
+    /// **Pickup contract.** The returned trip must allow boarding at `pos`
+    /// (i.e. [`pickup_allowed(trip, pos)`](Self::pickup_allowed) is `true`).
+    /// Trips that visit `pos` only to drop off passengers are not valid
+    /// boarding candidates and must be skipped by the adapter; the
+    /// algorithm relies on this filter happening here rather than gating
+    /// every returned trip itself.
     fn get_earliest_trip(&self, route: RouteIdx, at: SecondOfDay, pos: u32) -> Option<TripIdx>;
 
     /// Returns the arrival time of a trip at the given position within its
@@ -100,6 +107,43 @@ pub trait Timetable {
     /// Returns the departure time of a trip at the given position within its
     /// route's sequence.
     fn get_departure_time(&self, trip: TripIdx, pos: u32) -> SecondOfDay;
+
+    /// Reports whether a passenger can *board* `trip` at the stop at
+    /// `pos` along its route's sequence.
+    ///
+    /// Maps to GTFS `stop_times.pickup_type`: `0` (regularly scheduled),
+    /// `2` (must phone agency), and `3` (must coordinate with driver) all
+    /// count as boardable; `1` (no pickup available) is the only false
+    /// case. Adapters whose data has no equivalent flag should leave the
+    /// default impl in place.
+    ///
+    /// The algorithm consults this only as a contract on
+    /// [`get_earliest_trip`](Self::get_earliest_trip) — adapters must
+    /// filter unboardable trips out of that lookup directly. The method
+    /// is exposed publicly as a way for callers (and adapter
+    /// implementations) to query the same flag.
+    fn pickup_allowed(&self, trip: TripIdx, pos: u32) -> bool {
+        let (_, _) = (trip, pos);
+        true
+    }
+
+    /// Reports whether a passenger can *alight* from `trip` at the stop
+    /// at `pos` along its route's sequence.
+    ///
+    /// Maps to GTFS `stop_times.drop_off_type`: only `1` (no drop-off
+    /// available) returns `false`; the other values all permit
+    /// alighting. Adapters whose data has no equivalent flag should
+    /// leave the default impl in place.
+    ///
+    /// The algorithm consults this during the alighting phase of each
+    /// round: an arrival time at `pos` is recorded only when this method
+    /// returns `true`. Trips that pass through `pos` but don't allow
+    /// drop-off cannot be the alighting leg of a journey ending or
+    /// transferring there.
+    fn drop_off_allowed(&self, trip: TripIdx, pos: u32) -> bool {
+        let (_, _) = (trip, pos);
+        true
+    }
 
     /// Returns all stops directly reachable from the given stop via
     /// walking (footpaths).

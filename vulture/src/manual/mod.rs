@@ -12,7 +12,7 @@
 #[cfg(feature = "internal")]
 pub mod builders;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
 
@@ -56,6 +56,13 @@ where
     /// position of the stop on that route. Each route appears at most
     /// once per stop.
     routes_for_stop: Vec<Vec<(RouteIdx, u32)>>,
+
+    /// `(trip, pos)` pairs where boarding is forbidden (GTFS
+    /// `pickup_type = 1`). Empty by default (all stops boardable).
+    no_pickup: HashSet<(TripIdx, u32)>,
+    /// `(trip, pos)` pairs where alighting is forbidden (GTFS
+    /// `drop_off_type = 1`). Empty by default (all stops alightable).
+    no_drop_off: HashSet<(TripIdx, u32)>,
 }
 
 impl<S, R, T> SimpleTimetable<S, R, T>
@@ -78,6 +85,8 @@ where
             footpaths: Vec::new(),
             transfer_times: HashMap::new(),
             routes_for_stop: Vec::new(),
+            no_pickup: HashSet::new(),
+            no_drop_off: HashSet::new(),
         }
     }
 
@@ -179,6 +188,22 @@ where
         self
     }
 
+    /// Mark `pos` on `trip` as not-boardable (GTFS `pickup_type = 1`).
+    /// Both `trip` and the stop at `pos` must already exist on the route
+    /// the trip serves.
+    pub fn no_pickup_at(mut self, trip: T, pos: u32) -> Self {
+        let trip_idx = self.trip_idx_of(&trip);
+        self.no_pickup.insert((trip_idx, pos));
+        self
+    }
+
+    /// Mark `pos` on `trip` as not-alightable (GTFS `drop_off_type = 1`).
+    pub fn no_drop_off_at(mut self, trip: T, pos: u32) -> Self {
+        let trip_idx = self.trip_idx_of(&trip);
+        self.no_drop_off.insert((trip_idx, pos));
+        self
+    }
+
     /// Returns the index assigned to the given stop key. Panics if the
     /// key was never inserted via [`route`](Self::route),
     /// [`footpath`](Self::footpath), or [`transfer_time`](Self::transfer_time).
@@ -244,12 +269,19 @@ where
     }
 
     fn get_earliest_trip(&self, route: RouteIdx, at: SecondOfDay, pos: u32) -> Option<TripIdx> {
+        let no_pickup_empty = self.no_pickup.is_empty();
         self.trips
             .iter()
             .enumerate()
             .filter_map(|(i, slot)| slot.as_ref().map(|entry| (i, entry)))
             .filter(|(_, (r, _))| *r == route)
             .filter(|(_, (_, times))| times[pos as usize].1 >= at)
+            // Skip trips that don't permit boarding at `pos`. The trait's
+            // get_earliest_trip contract requires this filter to be done
+            // by the adapter rather than by the algorithm.
+            .filter(|(i, _)| {
+                no_pickup_empty || !self.no_pickup.contains(&(TripIdx::new(*i as u32), pos))
+            })
             .min_by_key(|(_, (_, times))| times[pos as usize].1)
             .map(|(trip_idx, _)| TripIdx::new(trip_idx as u32))
     }
@@ -273,6 +305,14 @@ where
             .get(&(from, to))
             .copied()
             .unwrap_or(Duration(1))
+    }
+
+    fn pickup_allowed(&self, trip: TripIdx, pos: u32) -> bool {
+        self.no_pickup.is_empty() || !self.no_pickup.contains(&(trip, pos))
+    }
+
+    fn drop_off_allowed(&self, trip: TripIdx, pos: u32) -> bool {
+        self.no_drop_off.is_empty() || !self.no_drop_off.contains(&(trip, pos))
     }
 }
 

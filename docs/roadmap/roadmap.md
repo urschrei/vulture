@@ -12,12 +12,6 @@ Real-time delays, cancellations, and added trips. Standard pattern: keep the sta
 
 Open questions: how to expose the overlay in the public API (a separate `Timetable` impl that wraps a `GtfsTimetable` + a delta? a builder method?), whether the overlay needs its own `Cargo` feature, and how to source updates (the `gtfs-rt` crate can decode protobuf feeds – wiring is straightforward, the design is the work).
 
-### Pickup / drop-off type flags
-
-GTFS `stop_times.pickup_type` and `drop_off_type` allow a feed to mark a scheduled stop as not-boardable (`pickup_type = 1`) or not-alightable (`drop_off_type = 1`) – common on long-distance rail with explicit "set down only" stops, or on airport shuttles that pick up at one terminal but don't drop there on the return. Vulture currently ignores both flags and treats every scheduled stop as boardable and alightable; on metros this is invisible (all flags are 0/0), but a long-distance feed could see vulture produce journeys the operator does not actually allow.
-
-Fix: gate the boarding scan in `Timetable::get_earliest_trip` on `pickup_type ≠ 1` and the alighting candidacy check on `drop_off_type ≠ 1`. The flags are per `(trip, stop_sequence)` so they fit naturally into the existing per-position trait accessors. Surfaced by [`docs/cross-impl-comparison.md`](../cross-impl-comparison.md) – `raptor-journey-planner` honours these.
-
 ### Multi-day journey search
 
 A 23:00 query that needs an after-midnight or next-morning trip currently returns no journey because the `GtfsTimetable` is calendar-filtered to a single service date at construction. RAPTOR itself extends naturally across days; the `Timetable` just needs to know about tomorrow's services. Two shapes worth considering:
