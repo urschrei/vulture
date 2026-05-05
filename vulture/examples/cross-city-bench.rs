@@ -244,13 +244,9 @@ fn main() -> anyhow::Result<()> {
             let arrival_str = match last_arrival {
                 Some(t) if t >= DEPARTURE_TIME => {
                     let travel = (t - DEPARTURE_TIME).0;
-                    format!("{}m {}s (arr {})", travel / 60, travel % 60, format_hms(t))
+                    format!("{}m {}s (arr {t})", travel / 60, travel % 60)
                 }
-                Some(t) => format!(
-                    "ARR<DEP ({} < {})",
-                    format_hms(t),
-                    format_hms(DEPARTURE_TIME)
-                ),
+                Some(t) => format!("ARR<DEP ({t} < {DEPARTURE_TIME})"),
                 None => "no journey".to_string(),
             };
             query_lines.push(format!(
@@ -298,11 +294,6 @@ fn resolve_endpoint(
             }
         }
     }
-}
-
-fn format_hms(t: SecondOfDay) -> String {
-    let (h, m, s) = t.as_hms();
-    format!("{h:02}:{m:02}:{s:02}")
 }
 
 fn format_duration(ns: u64) -> String {
