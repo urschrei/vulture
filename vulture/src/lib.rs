@@ -194,8 +194,10 @@ pub use ids::RouteIdx;
 pub use ids::StopIdx;
 pub use ids::TripIdx;
 pub use time::Duration;
+pub use time::ParseSecondOfDayError;
 pub use time::SecondOfDay;
 pub use time::Transfers;
+pub use time::TryFromSignedDurationError;
 
 #[cfg(test)]
 mod test;

@@ -2,9 +2,13 @@
 
 ## Unreleased
 
-Two range-query improvements: rRAPTOR for the serial path (single
-reverse-chronological scan replacing the naïve batch), and a Rayon-based
-parallel batch behind a new default-on `parallel` feature flag.
+Three threads: range-query improvements (rRAPTOR for the serial path,
+plus a Rayon-based parallel batch behind a new default-on `parallel`
+feature flag); ergonomic conveniences on the time newtypes (jiff
+conversions, `FromStr`, `HH:MM:SS` Display); and a new
+cross-implementation comparison harness against
+[`raptor-journey-planner`](https://github.com/planarnetwork/raptor)
+documented in [`docs/cross-impl-comparison.md`](docs/cross-impl-comparison.md).
 
 ### New API
 
@@ -47,6 +51,45 @@ is slightly slower (~547 µs → 1.12 ms) because the per-τ overhead
 doesn't amortise on a single-route query; rRAPTOR wins where label
 reuse pays off, which is most non-trivial queries.
 
+### Time-type conveniences
+
+Conversions to and from jiff for the public time newtypes:
+
+- `From<jiff::civil::Time> for SecondOfDay` (truncating subseconds)
+  and `TryFrom<SecondOfDay> for jiff::civil::Time` (returns
+  `jiff::Error` when the value is `>= 86_400` — GTFS allows
+  after-midnight values like 25:30:00 that don't fit in `civil::Time`).
+- `From<vulture::Duration> for jiff::SignedDuration` (total) and
+  `TryFrom<jiff::SignedDuration> for vulture::Duration` returning a
+  new `TryFromSignedDurationError` (`Negative` / `Overflow`).
+- `FromStr for SecondOfDay` accepting `HH:MM:SS` or `HH:MM` (seconds
+  default to 0; hours have no upper bound to round-trip GTFS
+  after-midnight times). New `ParseSecondOfDayError`
+  (`BadFormat` / `BadField` / `OutOfRange`).
+- New error types `ParseSecondOfDayError` and
+  `TryFromSignedDurationError` re-exported from the crate root.
+
+### Cross-implementation comparison
+
+New comparison harness exercising the same four real-feed queries
+through both vulture and the TypeScript
+`raptor-journey-planner` (`vulture-bench-js/`), with
+`bench-queries.json` as the shared spec and
+`vulture-bench-js/compare.mjs` rendering side-by-side latency tables
+plus result-frontier match/mismatch. Documented end-to-end in
+[`docs/cross-impl-comparison.md`](docs/cross-impl-comparison.md);
+includes a verbatim copy of upstream's `test/performance.ts` under
+its GPL-3.0 attribution. All eight comparable queries agree on the
+Pareto frontier; vulture is 4–463× faster on warm-cache queries.
+
+### Removed
+
+`BENCHMARKS.md` and `scripts/update-bench-docs.nu` (auto-generated
+table of synthetic-microbench results that bit-rotted between manual
+runs and was unreferenced by README). The criterion benches
+themselves stay in `vulture/benches/raptor.rs` for local regression
+checking via `cargo bench`.
+
 ### Breaking changes
 
 `Query<L, RangeDeparture>` no longer exposes `.run()` /
@@ -54,6 +97,11 @@ reuse pays off, which is most non-trivial queries.
 `L = ArrivalTime`. Custom-Label range queries use `.run_par()` /
 `.run_with_pool()` which keep the naïve-batch semantics for any
 `L: Label + Send + Sync`.
+
+`Display for SecondOfDay` now formats as `HH:MM:SS` instead of the
+underlying `u32` seconds. `SecondOfDay::hms(9, 30, 0).to_string()`
+returns `"09:30:00"`, not `"34200"`. Code that relied on the raw
+integer view should call `.as_secs()` (or write `t.0`).
 
 ## [0.14.0] – 2026-05-05
 

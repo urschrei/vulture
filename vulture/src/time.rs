@@ -2,8 +2,16 @@
 //! time), and [`Transfers`] (a transfer cap). Distinct types so the algorithm
 //! signatures can express which kind they expect; arithmetic across the two
 //! time types is saturating.
+//!
+//! Conversions to and from [`jiff::civil::Time`] and [`jiff::SignedDuration`]
+//! are provided so callers already in jiff land don't have to disassemble
+//! values manually.
 
 use std::fmt;
+use std::str::FromStr;
+
+use jiff::SignedDuration;
+use jiff::civil::Time;
 
 /// A point in time, in seconds since midnight on the timetable's
 /// service date. Wraps a `u32` – the day is 86,400 seconds; `u32`
@@ -83,10 +91,92 @@ impl From<u32> for SecondOfDay {
     }
 }
 
-impl fmt::Display for SecondOfDay {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+impl From<Time> for SecondOfDay {
+    /// `(t.hour() * 3600 + t.minute() * 60 + t.second())`. Subseconds
+    /// are truncated; vulture works in whole seconds.
+    fn from(t: Time) -> Self {
+        SecondOfDay((t.hour() as u32) * 3600 + (t.minute() as u32) * 60 + (t.second() as u32))
     }
+}
+
+impl TryFrom<SecondOfDay> for Time {
+    type Error = jiff::Error;
+    /// Fails with a [`jiff::Error`] when `s.0 >= 86_400`. GTFS feeds
+    /// regularly use after-midnight values like 25:30:00 to encode trips
+    /// that started on the previous service day; those don't fit in a
+    /// `civil::Time`.
+    fn try_from(s: SecondOfDay) -> Result<Self, Self::Error> {
+        let (h, m, sec) = s.as_hms();
+        // jiff::civil::Time accepts 0..=23 hours, so this fails for
+        // anything from 24:00:00 onwards. The hour-out-of-range error
+        // bubbles through unchanged.
+        Time::new(h as i8, m as i8, sec as i8, 0)
+    }
+}
+
+impl fmt::Display for SecondOfDay {
+    /// `HH:MM:SS`. Hours can exceed 23 for after-midnight times often
+    /// seen in GTFS feeds (e.g. `25:30:00`).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (h, m, s) = self.as_hms();
+        write!(f, "{h:02}:{m:02}:{s:02}")
+    }
+}
+
+impl FromStr for SecondOfDay {
+    type Err = ParseSecondOfDayError;
+    /// Parse `HH:MM:SS` or `HH:MM` (seconds default to 0). Hours have no
+    /// upper bound (GTFS allows values like 25:30:00); minutes and seconds
+    /// must be 0–59.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut parts = s.split(':');
+        let h_str = parts
+            .next()
+            .ok_or_else(|| ParseSecondOfDayError::BadFormat(s.to_string()))?;
+        let m_str = parts
+            .next()
+            .ok_or_else(|| ParseSecondOfDayError::BadFormat(s.to_string()))?;
+        let sec_str = parts.next();
+        if parts.next().is_some() {
+            return Err(ParseSecondOfDayError::BadFormat(s.to_string()));
+        }
+        let h: u32 = h_str
+            .parse()
+            .map_err(|_| ParseSecondOfDayError::BadField(h_str.to_string()))?;
+        let m: u32 = m_str
+            .parse()
+            .map_err(|_| ParseSecondOfDayError::BadField(m_str.to_string()))?;
+        if m > 59 {
+            return Err(ParseSecondOfDayError::OutOfRange(m));
+        }
+        let sec: u32 = match sec_str {
+            None => 0,
+            Some(s) => {
+                let v: u32 = s
+                    .parse()
+                    .map_err(|_| ParseSecondOfDayError::BadField(s.to_string()))?;
+                if v > 59 {
+                    return Err(ParseSecondOfDayError::OutOfRange(v));
+                }
+                v
+            }
+        };
+        Ok(SecondOfDay::hms(h, m, sec))
+    }
+}
+
+/// Errors produced when parsing a string into a [`SecondOfDay`] via [`FromStr`].
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
+pub enum ParseSecondOfDayError {
+    /// The input did not match `HH:MM` or `HH:MM:SS`.
+    #[error("expected HH:MM[:SS], got `{0}`")]
+    BadFormat(String),
+    /// One of the colon-separated components was not a base-10 integer.
+    #[error("invalid time field: `{0}`")]
+    BadField(String),
+    /// Minutes or seconds outside `0..=59`.
+    #[error("time field out of range: {0} (must be 0..=59)")]
+    OutOfRange(u32),
 }
 
 impl std::ops::Add<Duration> for SecondOfDay {
@@ -151,6 +241,41 @@ impl From<u32> for Duration {
     }
 }
 
+impl From<Duration> for SignedDuration {
+    /// Total, lossless: vulture's [`Duration`] is `u32` seconds, jiff's
+    /// [`SignedDuration`] is `i64` seconds + `i32` subsec nanos.
+    fn from(d: Duration) -> Self {
+        SignedDuration::from_secs(d.0 as i64)
+    }
+}
+
+impl TryFrom<SignedDuration> for Duration {
+    type Error = TryFromSignedDurationError;
+    /// Fails when the value is negative or its whole-second part exceeds
+    /// `u32::MAX`. Subseconds are truncated; vulture works in whole seconds.
+    fn try_from(d: SignedDuration) -> Result<Self, Self::Error> {
+        let secs = d.as_secs();
+        if secs < 0 {
+            return Err(TryFromSignedDurationError::Negative);
+        }
+        u32::try_from(secs)
+            .map(Duration)
+            .map_err(|_| TryFromSignedDurationError::Overflow)
+    }
+}
+
+/// Errors produced when narrowing a [`jiff::SignedDuration`] into a
+/// vulture [`Duration`].
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
+pub enum TryFromSignedDurationError {
+    /// The source duration was negative; [`Duration`] is unsigned.
+    #[error("negative duration cannot be represented as vulture::Duration")]
+    Negative,
+    /// The source duration's whole-second component overflowed `u32`.
+    #[error("duration overflows u32 seconds")]
+    Overflow,
+}
+
 impl fmt::Display for Duration {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
@@ -197,5 +322,109 @@ impl From<u8> for Transfers {
 impl fmt::Display for Transfers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn second_of_day_display_is_hms() {
+        assert_eq!(SecondOfDay::hms(9, 30, 0).to_string(), "09:30:00");
+        assert_eq!(SecondOfDay::hms(0, 0, 0).to_string(), "00:00:00");
+        assert_eq!(SecondOfDay::hms(25, 30, 5).to_string(), "25:30:05");
+    }
+
+    #[test]
+    fn second_of_day_from_str_round_trips() {
+        for s in ["00:00:00", "09:30:00", "23:59:59", "25:30:05"] {
+            let parsed: SecondOfDay = s.parse().expect("parses");
+            assert_eq!(parsed.to_string(), s, "round-trip {s}");
+        }
+    }
+
+    #[test]
+    fn second_of_day_from_str_accepts_hh_mm() {
+        let s: SecondOfDay = "09:30".parse().expect("parses");
+        assert_eq!(s, SecondOfDay::hms(9, 30, 0));
+    }
+
+    #[test]
+    fn second_of_day_from_str_rejects_garbage() {
+        assert!(matches!(
+            "9:30:".parse::<SecondOfDay>(),
+            Err(ParseSecondOfDayError::BadField(_))
+        ));
+        assert!(matches!(
+            "abc".parse::<SecondOfDay>(),
+            Err(ParseSecondOfDayError::BadFormat(_))
+        ));
+        assert!(matches!(
+            "09:30:00:00".parse::<SecondOfDay>(),
+            Err(ParseSecondOfDayError::BadFormat(_))
+        ));
+        assert!(matches!(
+            "09:60:00".parse::<SecondOfDay>(),
+            Err(ParseSecondOfDayError::OutOfRange(60))
+        ));
+        assert!(matches!(
+            "09:30:99".parse::<SecondOfDay>(),
+            Err(ParseSecondOfDayError::OutOfRange(99))
+        ));
+    }
+
+    #[test]
+    fn second_of_day_jiff_time_round_trip() {
+        let t = Time::new(9, 30, 5, 0).unwrap();
+        let s: SecondOfDay = t.into();
+        assert_eq!(s, SecondOfDay::hms(9, 30, 5));
+        let back: Time = s.try_into().unwrap();
+        assert_eq!(back, t);
+    }
+
+    #[test]
+    fn jiff_time_subseconds_truncated() {
+        let t = Time::new(9, 30, 5, 999_999_999).unwrap();
+        let s: SecondOfDay = t.into();
+        assert_eq!(s, SecondOfDay::hms(9, 30, 5));
+    }
+
+    #[test]
+    fn second_of_day_after_midnight_is_unrepresentable_as_jiff_time() {
+        let s = SecondOfDay::hms(25, 30, 0);
+        assert!(Time::try_from(s).is_err());
+    }
+
+    #[test]
+    fn duration_to_signed_duration_total() {
+        let d = Duration::from_secs(60);
+        let sd: SignedDuration = d.into();
+        assert_eq!(sd.as_secs(), 60);
+    }
+
+    #[test]
+    fn signed_duration_to_duration_truncates_subseconds() {
+        let sd = SignedDuration::new(60, 999_999_999);
+        let d: Duration = sd.try_into().unwrap();
+        assert_eq!(d, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn signed_duration_negative_rejected() {
+        let sd = SignedDuration::from_secs(-1);
+        assert_eq!(
+            Duration::try_from(sd),
+            Err(TryFromSignedDurationError::Negative)
+        );
+    }
+
+    #[test]
+    fn signed_duration_overflow_rejected() {
+        let sd = SignedDuration::from_secs(i64::from(u32::MAX) + 1);
+        assert_eq!(
+            Duration::try_from(sd),
+            Err(TryFromSignedDurationError::Overflow)
+        );
     }
 }

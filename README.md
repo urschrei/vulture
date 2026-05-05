@@ -170,7 +170,7 @@ Single-query latency, warm `RaptorCache`, M-series Apple Silicon, single thread.
 | Berlin VBB | 42,000 | 71,000 | Hbf → Alex (station-to-station) | 385 µs |
 | Paris IDFM | 54,000 | 146,000 | Châtelet → Versailles RD | 17 ms |
 
-For range-query latencies (serial rRAPTOR vs parallel naïve batch), see the [bench source](vulture/benches/gtfs.rs) and the linked benchmark page.
+For range-query latencies (serial rRAPTOR vs parallel naïve batch), see the [bench source](vulture/benches/gtfs.rs) and the linked benchmark page. For a head-to-head against an independent RAPTOR implementation (the TypeScript [`raptor-journey-planner`](https://github.com/planarnetwork/raptor)) on the same four feeds — including the correctness diff and a diagnosed timezone bug in the upstream library — see [`docs/cross-impl-comparison.md`](docs/cross-impl-comparison.md).
 
 ## Soundness
 
