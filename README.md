@@ -35,6 +35,15 @@ Runnable as `cargo run --example gtfs-timetable -- aux/dmrc_gtfs.zip 2024-01-15 
 
 A returned `Journey` has `plan: Vec<(RouteIdx, StopIdx)>` ("take this route, get off at this stop"), an `origin` and `target` (relevant when the query supplies multiple of either), and a `label` carrying the criterion under optimisation. `journey.arrival()` reads it as a `SecondOfDay`. See [`Journey`](https://docs.rs/vulture/latest/vulture/struct.Journey.html) for the full contract; for trip IDs and per-leg depart/arrive times see [`Journey::with_timing`](https://docs.rs/vulture/latest/vulture/struct.Journey.html#method.with_timing).
 
+`Gtfs::new(path)` is the local-file form; the same `gtfs-structures` API also exposes [`Gtfs::from_url`](https://docs.rs/gtfs-structures/latest/gtfs_structures/structures/gtfs/struct.Gtfs.html#method.from_url) (`reqwest`-backed sync fetch), [`Gtfs::from_url_async`](https://docs.rs/gtfs-structures/latest/gtfs_structures/structures/gtfs/struct.Gtfs.html#method.from_url_async), and [`Gtfs::from_reader`](https://docs.rs/gtfs-structures/latest/gtfs_structures/structures/gtfs/struct.Gtfs.html#method.from_reader) (any `Read + Seek`), all returning the same `Gtfs` value `GtfsTimetable::new` consumes:
+
+```rust,ignore
+let gtfs = Gtfs::from_url("https://example.org/feed/gtfs.zip")?;
+let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?;
+```
+
+True streaming isn't useful — GTFS is a zip of CSVs, the parser has to buffer the whole archive before any of it is queryable.
+
 ## Worked examples
 
 ### Berlin VBB: station-level query

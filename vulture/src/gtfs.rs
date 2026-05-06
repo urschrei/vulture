@@ -3,6 +3,13 @@
 //! Wraps a parsed [`Gtfs`] object and pre-computes lookup indices for
 //! efficient route, stop, and trip queries.
 //!
+//! ## Loading sources
+//!
+//! The `Gtfs` value [`GtfsTimetable::new`] consumes can come from a local
+//! path ([`Gtfs::new`]) or from any of the alternatives `gtfs-structures`
+//! already exposes: `Gtfs::from_url` (sync HTTP fetch), `Gtfs::from_url_async`
+//! (async), and `Gtfs::from_reader` for any `Read + Seek`.
+//!
 //! ## Synthetic routes
 //!
 //! A "RAPTOR route" is an equivalence class of trips with identical stop
