@@ -166,7 +166,7 @@ fn main() -> anyhow::Result<()> {
         let load_start = Instant::now();
         let gtfs = Gtfs::new(feed.path)?;
         let timetable = {
-            let mut tt = GtfsTimetable::new(&gtfs, feed.service_date)?;
+            let mut tt = GtfsTimetable::new(&gtfs, feed.service_date, 0)?;
             if let Some(d) = feed.walking_footpaths_m {
                 tt = tt.with_walking_footpaths(&gtfs, d, 1.4);
             } else {

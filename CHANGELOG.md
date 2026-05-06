@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### `GtfsTimetable::new` takes `n_overnight_days`; `with_overnight_days` removed
+
+The chainable `with_overnight_days(self, &Gtfs, n)` method is gone.
+Multi-day loads now happen via the constructor's third argument:
+
+```rust
+// Before:
+let tt = GtfsTimetable::new(&gtfs, date)?
+    .with_overnight_days(&gtfs, 1)?
+    .with_walking_footpaths(&gtfs, 500.0, 1.4);
+
+// After:
+let tt = GtfsTimetable::new(&gtfs, date, 1)?
+    .with_walking_footpaths(&gtfs, 500.0, 1.4);
+```
+
+Eliminates the rebuild-discards-footpaths footgun: the old
+`with_overnight_days` did a full rebuild from `&Gtfs`, silently
+discarding any state set by `with_walking_footpaths` /
+`assert_footpaths_closed` if those came earlier in the chain. Pass
+`0` for the single-day case (the majority of routing applications).
+The `GtfsError::DateOutOfRange` variant is unchanged.
+
 ## [0.17.0] – 2026-05-06
 
 ### `Label` trait gains per-trip / per-footpath context

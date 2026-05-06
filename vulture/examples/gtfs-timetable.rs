@@ -28,7 +28,7 @@ fn main() -> anyhow::Result<()> {
     let target = args[4].as_str();
 
     let gtfs = Gtfs::new(path)?;
-    let timetable = GtfsTimetable::new(&gtfs, service_date)?;
+    let timetable = GtfsTimetable::new(&gtfs, service_date, 0)?;
 
     let start_idx = timetable
         .stop_idx(start)
