@@ -1,6 +1,55 @@
 # Changelog
 
-## Unreleased
+## [0.17.0] – 2026-05-06
+
+### `Label` trait gains per-trip / per-footpath context
+
+The `Label` trait now threads richer information through every
+extension call so multi-criterion impls can evaluate criteria that
+depend on the surrounding trip or footpath:
+
+- New associated type `Label::Ctx: Default` is a user-supplied
+  sidecar threaded immutably into `from_departure`, `extend_by_trip`
+  and `extend_by_footpath`. Use it to carry tables the label needs
+  (a route → fare map, a stop → zone map). `ArrivalTime` and
+  `ArrivalAndWalk` keep `Ctx = ()`; new label `ArrivalAndFare` uses
+  `Ctx = FareTable` (a route → fare lookup).
+- `extend_by_trip` now receives `(trip, route, board_stop,
+  board_pos, alight_stop, alight_pos, arrival)` instead of just
+  `arrival`. `extend_by_footpath` receives `(from_stop, to_stop,
+  walk_time)`.
+- `Query::with_context(ctx)` is the new builder step for supplying
+  a non-default `Ctx`. `Timetable::query()` /
+  `Timetable::query_with_label()` continue to default the context
+  via `Default::default()`, so callers using a `()` `Ctx` need no
+  change.
+
+`vulture::labels::ArrivalAndFare` is a worked example: it pairs
+arrival time with accumulated fare drawn from a `FareTable` keyed
+on `RouteIdx`, returning a Pareto front of (arrival, fare)
+trade-offs at each target.
+
+Criterion benches against the pre-change baseline showed deltas
+within ±5% on every group (per-call, range, parallel, big-network,
+gtfs).
+
+### Multi-source reconstruction fix
+
+`reconstruct_journey` no longer short-circuits when the target stop
+also happens to be one of the multi-source origins. Previously the
+reconstruction loop terminated before its first boarding-tree
+lookup if `target ∈ origins`, dropping the genuine boarded journey
+from a different origin. Surfaces in multi-origin queries where one
+origin coincides with a target stop. Single-source queries are
+unaffected. Regression test added in `vulture/src/test.rs`.
+
+### Proptest: fare-label property
+
+`vulture-proptest` now generates a per-route `fare` field on layer 3
+specs and runs an `ArrivalAndFare` property check verifying that
+the label's accumulated fare equals the per-leg sum of fares for
+each returned journey.
+
 
 ### Multi-day journey search
 

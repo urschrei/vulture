@@ -17,11 +17,16 @@ use crate::time::SecondOfDay;
 /// The trait exists so the algorithm can be reused for *multi-criterion*
 /// routing – minimising arrival time *and* something else at the same
 /// time, returning a Pareto front of trade-offs. Reach for it when a
-/// single "best" answer is the wrong shape: e.g. an accessibility-aware
-/// query that should also report the route with less walking, even if
-/// it arrives slightly later. The bundled [`labels::ArrivalAndWalk`](crate::labels::ArrivalAndWalk)
-/// is one such impl; see also [`Timetable::query_with_label`](crate::Timetable::query_with_label) for the
-/// builder entry point.
+/// single "best" answer is the wrong shape: e.g. a fare-aware query
+/// that should also report the cheapest journey alongside the fastest.
+/// The bundled
+/// [`ArrivalAndWalk`](crate::labels::ArrivalAndWalk) (arrival vs.
+/// walking time) and
+/// [`ArrivalAndFare`](crate::labels::ArrivalAndFare) (arrival vs.
+/// accumulated fare from a route → fare table threaded via [`Label::Ctx`])
+/// are worked examples; see [`Timetable::query_with_label`](crate::Timetable::query_with_label)
+/// for the builder entry point and [`Query::with_context`](crate::Query::with_context)
+/// for supplying lookup tables.
 ///
 /// The algorithm maintains a Pareto front (a *bag* of mutually
 /// non-dominated labels) per `(round, stop)`, so multi-criterion impls

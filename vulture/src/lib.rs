@@ -78,7 +78,9 @@
 //!   query; the cache returns to the pool on drop.
 //! - **Multi-criterion routing.** [`Timetable::query_with_label`] takes a
 //!   custom [`Label`]. The bundled [`labels::ArrivalAndWalk`] trades arrival
-//!   time against accumulated walking time.
+//!   time against accumulated walking time; [`labels::ArrivalAndFare`]
+//!   trades arrival time against accumulated fare from a route → fare
+//!   table supplied via [`Query::with_context`].
 //! - **Per-leg trip IDs and timing.** [`Journey::with_timing`] reconstructs
 //!   per-leg `(boarding stop, trip, depart, alight stop, arrive)` tuples.
 //!   `Journey.plan` on its own is just topology.
