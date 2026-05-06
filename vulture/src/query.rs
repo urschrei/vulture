@@ -7,6 +7,7 @@ use std::marker::PhantomData;
 
 use crate::Timetable;
 use crate::algorithm::per_call::run_per_call_query;
+#[cfg(feature = "parallel")]
 use crate::algorithm::range::filter_range_pareto_front;
 use crate::algorithm::range::raptor_range_rrap_arrival;
 use crate::cache::RaptorCache;
