@@ -33,6 +33,113 @@ use crate::time::SecondOfDay;
 /// produce real Pareto fronts at the targets rather than a single
 /// tiebroken label. Single-criterion `ArrivalTime` bags stay size 1,
 /// with no behaviour change versus a non-bag implementation.
+///
+/// # Defining a custom label
+///
+/// The example below sketches a *route-preference* label: every route
+/// has an integer "badness" score (lower = nicer route — perhaps more
+/// scenic, better A/C, fewer crowds) and the algorithm should return
+/// a Pareto front of `(arrival_time, worst_score_on_journey)`
+/// trade-offs. The fast journey may pick the worst route; a slightly
+/// slower journey may avoid it entirely.
+///
+/// 1. Define your label `struct` and a `Ctx` carrying the lookup
+///    table. `Ctx` is borrowed immutably by every callback, so put
+///    your big tables here rather than cloning them into the label.
+/// 2. Implement [`Label`]. The per-trip context passed to
+///    [`Label::extend_by_trip`] gives you `route` and `trip` to look
+///    up scores; [`Label::extend_by_footpath`] is the place to
+///    accumulate walk-side criteria.
+/// 3. At query time, build the `Ctx` once and supply it via
+///    [`Query::with_context`](crate::Query::with_context) before
+///    `.depart_at(...)`.
+///
+/// ```no_run
+/// use std::collections::HashMap;
+/// use vulture::{
+///     Duration, Journey, Label, RouteIdx, SecondOfDay, StopIdx, Timetable, TripIdx,
+/// };
+///
+/// // 1. Ctx: a route -> badness-score lookup. Default = empty map
+/// //    (every route scores zero).
+/// #[derive(Default, Debug, Clone)]
+/// pub struct RouteScores(pub HashMap<RouteIdx, u32>);
+///
+/// // 2. Label: arrival time + worst score encountered along the
+/// //    journey so far. Pareto-dominance is component-wise.
+/// #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+/// pub struct ArrivalAndWorstScore {
+///     pub arrival: SecondOfDay,
+///     pub worst: u32,
+/// }
+///
+/// impl Label for ArrivalAndWorstScore {
+///     type Ctx = RouteScores;
+///     const UNREACHED: Self = Self {
+///         arrival: SecondOfDay::MAX,
+///         worst: 0,
+///     };
+///
+///     fn from_departure(_ctx: &Self::Ctx, at: SecondOfDay) -> Self {
+///         Self { arrival: at, worst: 0 }
+///     }
+///
+///     fn extend_by_trip(
+///         self,
+///         ctx: &Self::Ctx,
+///         _trip: TripIdx,
+///         route: RouteIdx,
+///         _board_stop: StopIdx,
+///         _board_pos: u32,
+///         _alight_stop: StopIdx,
+///         _alight_pos: u32,
+///         arrival: SecondOfDay,
+///     ) -> Self {
+///         let score = ctx.0.get(&route).copied().unwrap_or(0);
+///         Self {
+///             arrival,
+///             worst: self.worst.max(score),
+///         }
+///     }
+///
+///     fn extend_by_footpath(
+///         self,
+///         _ctx: &Self::Ctx,
+///         _from_stop: StopIdx,
+///         _to_stop: StopIdx,
+///         walk: Duration,
+///     ) -> Self {
+///         Self { arrival: self.arrival + walk, worst: self.worst }
+///     }
+///
+///     fn dominates(&self, other: &Self) -> bool {
+///         self.arrival <= other.arrival && self.worst <= other.worst
+///     }
+///
+///     fn arrival(&self) -> SecondOfDay { self.arrival }
+/// }
+///
+/// // 3. Wire it in at query time.
+/// # fn run<T: Timetable>(
+/// #     tt: &T,
+/// #     start: StopIdx,
+/// #     target: StopIdx,
+/// #     scores: HashMap<RouteIdx, u32>,
+/// # ) {
+/// let journeys: Vec<Journey<ArrivalAndWorstScore>> = tt
+///     .query_with_label::<ArrivalAndWorstScore>()
+///     .with_context(RouteScores(scores))
+///     .from(start)
+///     .to(target)
+///     .max_transfers(5)
+///     .depart_at(SecondOfDay::hms(9, 0, 0))
+///     .run();
+///
+/// for j in &journeys {
+///     println!("arrives {}, worst route score {}", j.label.arrival, j.label.worst);
+/// }
+/// # }
+/// ```
 pub trait Label: Copy + std::fmt::Debug {
     /// User-supplied sidecar data the algorithm threads into every
     /// `extend_*` / `from_departure` call. Use this to carry tables

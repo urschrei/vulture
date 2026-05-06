@@ -181,13 +181,51 @@ where
         }
     }
 
-    /// Replace the per-`Label` sidecar context. The default is
-    /// [`Default::default`] for `L::Ctx`, which is `()` for
-    /// [`ArrivalTime`](crate::ArrivalTime) and
-    /// [`ArrivalAndWalk`](crate::labels::ArrivalAndWalk). Custom
-    /// labels with non-trivial context (e.g. a fare-aware
-    /// `ArrivalAndFare` carrying a per-route fare table) need to
-    /// chain this before `.depart_at(...)`.
+    /// Supply the per-[`Label`] sidecar context — the lookup tables
+    /// the label needs to evaluate its criteria. Build once per
+    /// query (or share across queries via [`Clone`]); the algorithm
+    /// borrows it immutably and threads `&L::Ctx` into every
+    /// [`Label::from_departure`], [`Label::extend_by_trip`] and
+    /// [`Label::extend_by_footpath`] call.
+    ///
+    /// The default is [`Default::default`] for `L::Ctx`. Labels
+    /// whose `Ctx` is `()` (e.g. [`ArrivalTime`](crate::ArrivalTime)
+    /// and [`ArrivalAndWalk`](crate::labels::ArrivalAndWalk)) never
+    /// need this call. Labels carrying tables —
+    /// [`ArrivalAndFare`](crate::labels::ArrivalAndFare) with a
+    /// route → fare lookup, your own custom `Label` with a per-route
+    /// preference map — chain `.with_context(ctx)` before
+    /// `.depart_at(...)` / `.depart_in_window(...)`. The context
+    /// outlives the query call, not the label values: labels
+    /// produced during the scan only need to *carry* the criterion
+    /// values they read out of `ctx`, never the table itself.
+    ///
+    /// ```no_run
+    /// use std::collections::HashMap;
+    /// use vulture::{RouteIdx, SecondOfDay, StopIdx, Timetable};
+    /// use vulture::labels::{ArrivalAndFare, FareTable};
+    ///
+    /// # fn run<T: Timetable>(tt: &T, start: StopIdx, target: StopIdx, premium: RouteIdx) {
+    /// let mut per_route = HashMap::new();
+    /// per_route.insert(premium, 500);
+    /// let fares = FareTable { per_route };
+    ///
+    /// let journeys = tt
+    ///     .query_with_label::<ArrivalAndFare>()
+    ///     .with_context(fares)
+    ///     .from(start)
+    ///     .to(target)
+    ///     .max_transfers(5)
+    ///     .depart_at(SecondOfDay::hms(9, 0, 0))
+    ///     .run();
+    /// # let _ = journeys;
+    /// # }
+    /// ```
+    ///
+    /// For range queries (`.depart_in_window(...).run_par()`) the
+    /// parallel path requires `L::Ctx: Sync`; in practice every
+    /// natural `Ctx` shape (a [`HashMap`](std::collections::HashMap),
+    /// a flat `Vec`-backed table, etc.) already satisfies it.
     pub fn with_context(mut self, ctx: L::Ctx) -> Self {
         self.ctx = ctx;
         self
