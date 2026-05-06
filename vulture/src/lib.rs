@@ -20,7 +20,7 @@
 //! # fn main() -> anyhow::Result<()> {
 //! let gtfs = Gtfs::new("path/to/gtfs.zip")?;
 //! // Pin the timetable to one service date; inactive trips are filtered out.
-//! let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4), 0)?;
+//! let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?;
 //!
 //! // The algorithm takes dense u32 indices, not GTFS string IDs – resolve first.
 //! let start = tt.stop_idx("dilshad_garden").expect("unknown stop");
@@ -89,11 +89,12 @@
 //!   trips and stops marked `NotAvailable` in the GTFS
 //!   `wheelchair_accessible` / `wheelchair_boarding` fields. Default
 //!   behaviour is unchanged.
-//! - **Multi-day search.** Pass `n_overnight_days` to
-//!   [`gtfs::GtfsTimetable::new`] to load N additional service days
-//!   after the base date, shifting day-`d` trips by `d × 86 400`
-//!   seconds. Lets a late-night query find an early trip the next
-//!   morning.
+//! - **Multi-day search.**
+//!   [`gtfs::GtfsTimetable::new_with_overnight_days`] takes an
+//!   [`gtfs::OvernightDays`] count and loads that many additional
+//!   service days after the base date, shifting day-`d` trips by
+//!   `d × 86 400` seconds. Lets a late-night query find an early
+//!   trip the next morning.
 //! - **Sparse `transfers.txt`.** [`gtfs::GtfsTimetable::with_walking_footpaths`]
 //!   builds bidirectional walking edges from stop coordinates using an R-tree.
 //!
@@ -192,6 +193,7 @@ pub use cache::RaptorCachePool;
 // Label trait + the default single-criterion impl.
 pub use label::ArrivalTime;
 pub use label::Label;
+pub use label::TripContext;
 
 // Query builder typestate markers.
 pub use query::NeedsDeparture;

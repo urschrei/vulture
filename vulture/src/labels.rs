@@ -10,7 +10,8 @@
 
 use std::collections::HashMap;
 
-use crate::{Duration, Label, RouteIdx, SecondOfDay, StopIdx, TripIdx};
+use crate::label::TripContext;
+use crate::{Duration, Label, RouteIdx, SecondOfDay, StopIdx};
 
 /// Two-criterion label tracking arrival time *and* accumulated walking
 /// time. Trip rides preserve the boarding label's walking time;
@@ -70,19 +71,9 @@ impl Label for ArrivalAndWalk {
     }
 
     #[inline]
-    fn extend_by_trip(
-        self,
-        _ctx: &Self::Ctx,
-        _trip: TripIdx,
-        _route: RouteIdx,
-        _board_stop: StopIdx,
-        _board_pos: u32,
-        _alight_stop: StopIdx,
-        _alight_pos: u32,
-        arrival: SecondOfDay,
-    ) -> Self {
+    fn extend_by_trip(self, _ctx: &Self::Ctx, leg: TripContext) -> Self {
         ArrivalAndWalk {
-            arrival,
+            arrival: leg.arrival,
             walk_time: self.walk_time,
         }
     }
@@ -203,20 +194,10 @@ impl Label for ArrivalAndFare {
     }
 
     #[inline]
-    fn extend_by_trip(
-        self,
-        ctx: &Self::Ctx,
-        _trip: TripIdx,
-        route: RouteIdx,
-        _board_stop: StopIdx,
-        _board_pos: u32,
-        _alight_stop: StopIdx,
-        _alight_pos: u32,
-        arrival: SecondOfDay,
-    ) -> Self {
+    fn extend_by_trip(self, ctx: &Self::Ctx, leg: TripContext) -> Self {
         ArrivalAndFare {
-            arrival,
-            fare: self.fare.saturating_add(ctx.fare_for(route)),
+            arrival: leg.arrival,
+            fare: self.fare.saturating_add(ctx.fare_for(leg.route)),
         }
     }
 

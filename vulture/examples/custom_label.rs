@@ -25,7 +25,7 @@
 use std::collections::HashMap;
 
 use vulture::manual::SimpleTimetable;
-use vulture::{Duration, Label, RouteIdx, SecondOfDay, StopIdx, Timetable, TripIdx};
+use vulture::{Duration, Label, RouteIdx, SecondOfDay, StopIdx, Timetable, TripContext};
 
 /// Per-route preference scores. Default = empty map (every route
 /// scores zero). Borrowed immutably by every label callback.
@@ -53,20 +53,10 @@ impl Label for ArrivalAndWorstScore {
         }
     }
 
-    fn extend_by_trip(
-        self,
-        ctx: &Self::Ctx,
-        _trip: TripIdx,
-        route: RouteIdx,
-        _board_stop: StopIdx,
-        _board_pos: u32,
-        _alight_stop: StopIdx,
-        _alight_pos: u32,
-        arrival: SecondOfDay,
-    ) -> Self {
-        let score = ctx.0.get(&route).copied().unwrap_or(0);
+    fn extend_by_trip(self, ctx: &Self::Ctx, leg: TripContext) -> Self {
+        let score = ctx.0.get(&leg.route).copied().unwrap_or(0);
         Self {
-            arrival,
+            arrival: leg.arrival,
             worst: self.worst.max(score),
         }
     }
