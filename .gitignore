@@ -14,3 +14,10 @@
 /vulture-bench-js/node_modules/
 /vulture-bench-js/results/
 /vulture-bench-js/package-lock.json
+
+# vulture-wasm demo build outputs. The wasm + JS bindings come from
+# wasm-pack and the GTFS zip is copied from `aux/` — both produced by
+# `scripts/build-demo.sh` and the GitHub Pages workflow.
+/docs/demo/pkg/
+/docs/demo/dmrc_gtfs.zip
+/vulture-wasm/pkg/

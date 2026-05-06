@@ -1,9 +1,18 @@
 [workspace]
-members = ["vulture", "vulture-proptest", "dotgraph"]
+members = ["vulture", "vulture-proptest", "vulture-wasm", "dotgraph"]
 resolver = "3"
 
 [profile.dev]
 debug = "full"
+
+# Aggressive size optimisation for vulture-wasm's browser delivery;
+# the wasm blob is user-visible bandwidth. Native release builds
+# inherit this too — slightly slower compile, smaller binaries.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
 
 [workspace.dependencies]
 vulture = { path = "./vulture" }

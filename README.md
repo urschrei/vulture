@@ -2,6 +2,8 @@
 
 Rust implementation of [RAPTOR](https://www.microsoft.com/en-us/research/publication/round-based-public-transit-routing/) (Delling, Pajor, Werneck): given a public transit network, find all Pareto-optimal journeys between two stops, trading fewer transfers against earlier arrival.
 
+**[Live browser demo](https://urschrei.github.io/vulture/)** — vulture compiled to WASM (~275 KB gzipped) running in your browser against the Delhi Metro feed: stop-to-stop routing, depart-in-window Pareto profile, walking-footpath augmentation. See [`vulture-wasm/`](vulture-wasm/) for the bindings and [`docs/demo/`](docs/demo/) for the page itself.
+
 ## Quick start
 
 The `gtfs` module wraps a parsed GTFS feed and implements the `Timetable` trait. The repo bundles `aux/dmrc_gtfs.zip` (Delhi Metro) so you can run the example without downloading anything:
