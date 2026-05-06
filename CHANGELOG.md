@@ -33,6 +33,33 @@ applies: a route-bag of size 1 means sibling trips on the same route
 with identical schedules but different drop-off flags can't be
 switched between mid-journey. Multi-day load doesn't change that.
 
+### Proptest harness expansion
+
+Two new threads of random pressure on `vulture-proptest`. No
+behavioural change in the crate; existing tests still pass.
+
+- **Multi-source / multi-target queries.** `QuerySpec` now carries
+  `origins: Vec<(u8, u16)>` and `targets: Vec<(u8, u16)>` (each entry
+  a `(stop, walk_offset_seconds)` pair, `len() ∈ [1, 3]` per query).
+  Layer-3 random cases now exercise the `Endpoints` /
+  `IntoEndpoints` paths and the multi-target Pareto filter that the
+  previous single-pair spec couldn't reach. Walk offsets up to 20 s
+  also pressure the seed-phase saturating arithmetic. The
+  brute-force reference solver mirrors: seeds Dijkstra from every
+  origin at `tau + walk_offset` and applies the Pareto filter
+  across effective arrivals at every target.
+
+- **Range queries vs reference solver.** New
+  `range_query_matches_reference` property compares vulture's
+  `Vec<RangeJourney<ArrivalTime>>` against a brute-force reference
+  built by calling the per-departure solver once per `τ` and
+  applying the same 3-D Pareto filter (`later depart, fewer
+  transfers, earlier arrival`) vulture's `filter_range_pareto_front`
+  uses. Where the existing `parallel_naive_matches_serial_rrap` is a
+  self-consistency check between the rRAPTOR serial path and the
+  parallel naïve batch, this gives both an independent ground truth.
+  Stays on `layer1_bounds` for per-case cost.
+
 ## [0.16.0] – 2026-05-06
 
 GtfsError variants now carry the offending trip's `route_id` and the
