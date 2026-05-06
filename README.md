@@ -1,6 +1,6 @@
 # Vulture
 
-Rust implementation of [RAPTOR](https://www.microsoft.com/en-us/research/publication/round-based-public-transit-routing/) (Delling, Pajor, Werneck): given a transit network, find all Pareto-optimal journeys between two stops, trading fewer transfers against earlier arrival.
+Rust implementation of [RAPTOR](https://www.microsoft.com/en-us/research/publication/round-based-public-transit-routing/) (Delling, Pajor, Werneck): given a public transit network, find all Pareto-optimal journeys between two stops, trading fewer transfers against earlier arrival.
 
 ## Quick start
 

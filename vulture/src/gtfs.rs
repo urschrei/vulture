@@ -330,9 +330,10 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
     /// would otherwise discard.
     ///
     /// **Output semantics.** Returned arrival times can exceed
-    /// 86 400 seconds. [`SecondOfDay::Display`] formats them as
-    /// `HH:MM:SS` with hours past 24 (e.g. `25:30:00`); divide by
-    /// 86 400 to recover the day offset. [`Journey::with_timing`](crate::Journey::with_timing)'s
+    /// 86 400 seconds. [`SecondOfDay`]'s `Display` impl formats them
+    /// as `HH:MM:SS` with hours past 24 (e.g. `25:30:00`); divide by
+    /// 86 400 to recover the day offset.
+    /// [`Journey::with_timing`](crate::Journey::with_timing)'s
     /// [`TimedLeg`](crate::TimedLeg) entries carry the same shifted
     /// times.
     pub fn with_overnight_days(self, gtfs: &'gtfs Gtfs, n: u8) -> GtfsResult<Self> {

@@ -1,7 +1,7 @@
 #![deny(missing_docs)]
 
-//! Rust implementation of [RAPTOR][paper] (Delling, Pajor, Werneck): given a
-//! transit network, find all Pareto-optimal journeys between two stops,
+//! An implementation of [RAPTOR][paper] (Delling, Pajor, Werneck): given a
+//! public transit network, find all Pareto-optimal journeys between two stops,
 //! trading fewer transfers against earlier arrival.
 //!
 //! [paper]: https://www.microsoft.com/en-us/research/publication/round-based-public-transit-routing/
