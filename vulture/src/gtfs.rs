@@ -158,6 +158,18 @@ pub enum GtfsError {
         /// The stop the stop_time refers to.
         stop: String,
     },
+    /// `with_overnight_days(n)` would push the loaded date range past
+    /// jiff's representable range. Only triggered by absurd `base + n`
+    /// combinations near the year-9999 ceiling.
+    #[error(
+        "base_date + {days_added} days falls outside jiff's representable range (base = {base})"
+    )]
+    DateOutOfRange {
+        /// The base service date the multi-day load was anchored at.
+        base: Date,
+        /// The day offset that overflowed.
+        days_added: u32,
+    },
 }
 
 type GtfsResult<T> = std::result::Result<T, GtfsError>;
@@ -258,6 +270,15 @@ pub struct GtfsTimetable<'gtfs> {
     /// non-closed edges).
     transfers_closed: bool,
 
+    /// The base service date passed to [`GtfsTimetable::new`]. Retained
+    /// so [`GtfsTimetable::with_overnight_days`] can rebuild the
+    /// timetable starting from the same anchor.
+    base_date: Date,
+    /// Number of additional service days loaded after `base_date`. The
+    /// timetable covers `base_date` through `base_date + n_overnight_days`
+    /// inclusive. Default `0` (single-day operation).
+    n_overnight_days: u8,
+
     /// For each parent-station GTFS id, the child platform `StopIdx`es
     /// (each paired with a default zero walk time, ready to pass to
     /// `Query::from` / `Query::to` as a multi-source/multi-target query).
@@ -286,7 +307,54 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
     /// footpath relation to be transitively closed (see the trait-level
     /// docs).
     pub fn new(gtfs: &'gtfs Gtfs, service_date: Date) -> GtfsResult<Self> {
-        let date_chrono = jiff_to_chrono(service_date);
+        Self::build(gtfs, service_date, 0)
+    }
+
+    /// Loads `n` additional service days *after* the original
+    /// [`GtfsTimetable::new`] base date, so the algorithm can find
+    /// journeys that depart late on day 0 and arrive on day 1
+    /// (or later). Trips active on each subsequent day get their
+    /// stop_times shifted by `day_offset × 86400` and inserted as
+    /// additional trips on the same RAPTOR route as their day-0
+    /// counterparts; the algorithm sees a single time axis monotone
+    /// across `0..=n × 86400` seconds.
+    ///
+    /// `n = 0` is a no-op. `n = 1` is the typical "last train home"
+    /// configuration. Larger values are unusual; memory and load time
+    /// scale linearly.
+    ///
+    /// **Order of builder calls.** This method does a full rebuild
+    /// from `gtfs`. Call it *before*
+    /// [`GtfsTimetable::with_walking_footpaths`] and
+    /// [`GtfsTimetable::assert_footpaths_closed`], whose effects it
+    /// would otherwise discard.
+    ///
+    /// **Output semantics.** Returned arrival times can exceed
+    /// 86 400 seconds. [`SecondOfDay::Display`] formats them as
+    /// `HH:MM:SS` with hours past 24 (e.g. `25:30:00`); divide by
+    /// 86 400 to recover the day offset. [`Journey::with_timing`](crate::Journey::with_timing)'s
+    /// [`TimedLeg`](crate::TimedLeg) entries carry the same shifted
+    /// times.
+    pub fn with_overnight_days(self, gtfs: &'gtfs Gtfs, n: u8) -> GtfsResult<Self> {
+        if n == self.n_overnight_days {
+            return Ok(self);
+        }
+        Self::build(gtfs, self.base_date, n)
+    }
+
+    fn build(gtfs: &'gtfs Gtfs, base_date: Date, n_overnight_days: u8) -> GtfsResult<Self> {
+        // Build a small lookup of day_offset -> NaiveDate so the
+        // service-day check is one cheap call per (trip, day) pair.
+        let mut day_dates: Vec<NaiveDate> = Vec::with_capacity(usize::from(n_overnight_days) + 1);
+        for d in 0..=n_overnight_days {
+            let day = base_date
+                .checked_add(jiff::Span::new().days(i64::from(d)))
+                .map_err(|_| GtfsError::DateOutOfRange {
+                    base: base_date,
+                    days_added: u32::from(d),
+                })?;
+            day_dates.push(jiff_to_chrono(day));
+        }
 
         // 1. Intern stops in iteration order.
         let mut stop_ids: Vec<&'gtfs str> = Vec::with_capacity(gtfs.stops.len());
@@ -301,54 +369,63 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             }
         }
 
-        // 2. Validate trips active on `service_date` and group by
-        //    (route_id, stop_sequence) using interned stop indices. Trips
-        //    on inactive services are skipped silently.
-        let mut groups: std::collections::BTreeMap<(&'gtfs str, Vec<StopIdx>), Vec<&'gtfs str>> =
+        // 2. For each service day in the loaded range, validate trips
+        //    active on that day and group by (route_id, stop_sequence).
+        //    A trip active on multiple days gets multiple entries in
+        //    its group, distinguished by `day_offset`. Phase 3 shifts
+        //    each entry's times by `day_offset × 86400` so day-d trips
+        //    sit strictly after all day-(d-1) trips on the same route.
+        type GroupKey<'g> = (&'g str, Vec<StopIdx>);
+        type GroupEntries<'g> = Vec<(&'g str, u8)>;
+        let mut groups: std::collections::BTreeMap<GroupKey<'gtfs>, GroupEntries<'gtfs>> =
             std::collections::BTreeMap::new();
-        for (trip_id, trip) in &gtfs.trips {
-            if !is_service_active(gtfs, &trip.service_id, date_chrono) {
-                continue;
-            }
-            // Lift route + agency once per trip so the per-stop error
-            // paths don't re-look-up under every stop_time.
-            let route_id = trip.route_id.clone();
-            let agency_id = gtfs
-                .routes
-                .get(&trip.route_id)
-                .and_then(|r| r.agency_id.clone());
-            if trip.stop_times.is_empty() {
-                return Err(GtfsError::MissingStopTimes {
-                    trip: trip_id.clone(),
-                    route: route_id,
-                    agency: agency_id,
-                });
-            }
-            let mut stop_seq: Vec<StopIdx> = Vec::with_capacity(trip.stop_times.len());
-            for st in &trip.stop_times {
-                let raw_id = st.stop.id.as_str();
-                let stop_idx = *stop_by_id
-                    .get(raw_id)
-                    .ok_or_else(|| GtfsError::MissingStop {
-                        stop: raw_id.to_owned(),
+        for (day_offset, &day_chrono) in day_dates.iter().enumerate() {
+            let day_offset = day_offset as u8;
+            for (trip_id, trip) in &gtfs.trips {
+                if !is_service_active(gtfs, &trip.service_id, day_chrono) {
+                    continue;
+                }
+                // Lift route + agency once per trip so the per-stop
+                // error paths don't re-look-up under every stop_time.
+                let route_id = trip.route_id.clone();
+                let agency_id = gtfs
+                    .routes
+                    .get(&trip.route_id)
+                    .and_then(|r| r.agency_id.clone());
+                if trip.stop_times.is_empty() {
+                    return Err(GtfsError::MissingStopTimes {
                         trip: trip_id.clone(),
-                        route: route_id.clone(),
-                        agency: agency_id.clone(),
-                    })?;
-                if st.departure_time.is_none() {
-                    return Err(GtfsError::MissingDepartureTime {
-                        trip: trip_id.clone(),
-                        route: route_id.clone(),
-                        agency: agency_id.clone(),
-                        stop: raw_id.to_owned(),
+                        route: route_id,
+                        agency: agency_id,
                     });
                 }
-                stop_seq.push(stop_idx);
+                let mut stop_seq: Vec<StopIdx> = Vec::with_capacity(trip.stop_times.len());
+                for st in &trip.stop_times {
+                    let raw_id = st.stop.id.as_str();
+                    let stop_idx =
+                        *stop_by_id
+                            .get(raw_id)
+                            .ok_or_else(|| GtfsError::MissingStop {
+                                stop: raw_id.to_owned(),
+                                trip: trip_id.clone(),
+                                route: route_id.clone(),
+                                agency: agency_id.clone(),
+                            })?;
+                    if st.departure_time.is_none() {
+                        return Err(GtfsError::MissingDepartureTime {
+                            trip: trip_id.clone(),
+                            route: route_id.clone(),
+                            agency: agency_id.clone(),
+                            stop: raw_id.to_owned(),
+                        });
+                    }
+                    stop_seq.push(stop_idx);
+                }
+                groups
+                    .entry((trip.route_id.as_str(), stop_seq))
+                    .or_default()
+                    .push((trip_id.as_str(), day_offset));
             }
-            groups
-                .entry((trip.route_id.as_str(), stop_seq))
-                .or_default()
-                .push(trip_id.as_str());
         }
 
         // 3. For each (route_id, stop_seq) group, sort trips by first-stop
@@ -372,20 +449,25 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             vec![SmallVec::new(); stop_ids.len()];
 
         for ((gtfs_route_id, stop_seq), trips) in groups {
-            let mut trips_with_schedules: Vec<(&'gtfs str, &'gtfs [gtfs_structures::StopTime])> =
+            // Resolve schedules and tag each entry with its day_offset.
+            // Sort first by shifted first-stop departure (= day_offset *
+            // 86400 + raw departure) so day-d trips appear strictly after
+            // day-(d-1) trips on the same route.
+            let mut trips_with_schedules: Vec<(&'gtfs str, u8, &'gtfs [gtfs_structures::StopTime])> =
                 trips
                     .into_iter()
-                    .map(|trip_id| {
+                    .map(|(trip_id, day_offset)| {
                         let trip = gtfs.get_trip(trip_id).expect(
                             "trip_id is a key in gtfs.trips (groups was built by iterating gtfs.trips earlier in new())",
                         );
-                        (trip_id, trip.stop_times.as_slice())
+                        (trip_id, day_offset, trip.stop_times.as_slice())
                     })
                     .collect();
-            trips_with_schedules.sort_by_key(|(_, st)| {
-                st[0].departure_time.expect(
+            trips_with_schedules.sort_by_key(|(_, day_offset, st)| {
+                let raw_dep = st[0].departure_time.expect(
                     "first stop_time.departure_time is required by the GtfsError::MissingDepartureTime check earlier in new()",
-                )
+                );
+                shift_dep(raw_dep, *day_offset)
             });
 
             for sub_group in split_non_overtaking(&trips_with_schedules) {
@@ -394,10 +476,15 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
                 stops_for_route.push(stop_seq.clone());
 
                 let mut sub_trip_idxs: Vec<TripIdx> = Vec::with_capacity(sub_group.len());
-                for trip_id in &sub_group {
+                for (trip_id, _day_offset) in &sub_group {
                     let trip_idx = TripIdx::new(trip_ids.len() as u32);
                     trip_ids.push(trip_id);
-                    trip_by_id.insert(trip_id, trip_idx);
+                    // trip_by_id maps to the FIRST occurrence (lowest
+                    // day_offset) so external `tt.trip_idx(id)` lookups
+                    // are deterministic when a trip is active on
+                    // multiple days. Subsequent days' instances are
+                    // reachable via `route_for_trip` / `trips_for_route`.
+                    trip_by_id.entry(trip_id).or_insert(trip_idx);
                     sub_trip_idxs.push(trip_idx);
                     debug_assert_eq!(route_for_trip.len(), trip_idx.idx());
                     route_for_trip.push((route_idx, sub_trip_idxs.len() - 1));
@@ -412,7 +499,7 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
                     vec![vec![SecondOfDay::MAX; n_trips_in_route]; n_stops_in_route];
                 let mut dep_table: Vec<Vec<SecondOfDay>> =
                     vec![vec![SecondOfDay::MAX; n_trips_in_route]; n_stops_in_route];
-                for (trip_pos, trip_id) in sub_group.iter().enumerate() {
+                for (trip_pos, (trip_id, day_offset)) in sub_group.iter().enumerate() {
                     let trip = gtfs.get_trip(trip_id).expect(
                         "trip_id originated from gtfs.trips and survived service-day filtering",
                     );
@@ -422,12 +509,12 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
                     }
                     for (stop_pos, st) in trip.stop_times.iter().enumerate() {
                         if let Some(a) = st.arrival_time {
-                            arr_table[stop_pos][trip_pos] = SecondOfDay(a);
+                            arr_table[stop_pos][trip_pos] = shift_dep(a, *day_offset);
                         }
                         let d = st.departure_time.expect(
                             "stop_time.departure_time is required by the GtfsError::MissingDepartureTime check earlier in new()",
                         );
-                        dep_table[stop_pos][trip_pos] = SecondOfDay(d);
+                        dep_table[stop_pos][trip_pos] = shift_dep(d, *day_offset);
                         if matches!(st.pickup_type, PickupDropOffType::NotAvailable) {
                             no_pickup.insert((trip_idx, stop_pos as u32));
                         }
@@ -517,6 +604,8 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             no_drop_off,
             inaccessible_trips,
             inaccessible_stops,
+            base_date,
+            n_overnight_days,
         })
     }
 
@@ -704,15 +793,15 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
 /// whole sub-group by transitivity (all members are pairwise
 /// non-overtaking and times are monotone over the sequence).
 fn split_non_overtaking<'gtfs>(
-    trips: &[(&'gtfs str, &'gtfs [gtfs_structures::StopTime])],
-) -> Vec<Vec<&'gtfs str>> {
-    let mut sub_groups: Vec<Vec<(&'gtfs str, &'gtfs [gtfs_structures::StopTime])>> = Vec::new();
+    trips: &[(&'gtfs str, u8, &'gtfs [gtfs_structures::StopTime])],
+) -> Vec<Vec<(&'gtfs str, u8)>> {
+    let mut sub_groups: Vec<Vec<(&'gtfs str, u8, &'gtfs [gtfs_structures::StopTime])>> = Vec::new();
     'outer: for &entry in trips {
         for sub_group in &mut sub_groups {
-            let (_, last_st) = *sub_group
+            let (_, last_day, last_st) = *sub_group
                 .last()
                 .expect("sub_groups are seeded with vec![entry] and only ever grown");
-            if !overtakes(last_st, entry.1) {
+            if !overtakes(last_st, last_day, entry.2, entry.1) {
                 sub_group.push(entry);
                 continue 'outer;
             }
@@ -721,20 +810,43 @@ fn split_non_overtaking<'gtfs>(
     }
     sub_groups
         .into_iter()
-        .map(|g| g.into_iter().map(|(id, _)| id).collect())
+        .map(|g| {
+            g.into_iter()
+                .map(|(id, day_offset, _)| (id, day_offset))
+                .collect()
+        })
         .collect()
 }
 
-/// Returns true if `later` overtakes `earlier` at any stop. Both
-/// schedules are assumed to share a stop sequence and to have departure
-/// times at every stop (validated at construction).
-fn overtakes(earlier: &[gtfs_structures::StopTime], later: &[gtfs_structures::StopTime]) -> bool {
+/// Shift a raw GTFS departure / arrival time (seconds since the
+/// service-day's anchor) by `day_offset × 86 400` so day-`d` trips
+/// sit strictly after day-`(d-1)` trips on the same RAPTOR route.
+fn shift_dep(raw: u32, day_offset: u8) -> SecondOfDay {
+    SecondOfDay(raw.saturating_add(u32::from(day_offset) * 86_400))
+}
+
+/// Returns true if `later` overtakes `earlier` at any stop, comparing
+/// times *after* the per-trip day-offset shift. Both schedules are
+/// assumed to share a stop sequence and to have departure times at
+/// every stop (validated at construction).
+fn overtakes(
+    earlier: &[gtfs_structures::StopTime],
+    earlier_day: u8,
+    later: &[gtfs_structures::StopTime],
+    later_day: u8,
+) -> bool {
     earlier.iter().zip(later).any(|(es, ls)| {
-        let e_dep = es.departure_time.expect(
-            "stop_time.departure_time is required by the GtfsError::MissingDepartureTime check earlier in GtfsTimetable::new()",
+        let e_dep = shift_dep(
+            es.departure_time.expect(
+                "stop_time.departure_time is required by the GtfsError::MissingDepartureTime check earlier in GtfsTimetable::new()",
+            ),
+            earlier_day,
         );
-        let l_dep = ls.departure_time.expect(
-            "stop_time.departure_time is required by the GtfsError::MissingDepartureTime check earlier in GtfsTimetable::new()",
+        let l_dep = shift_dep(
+            ls.departure_time.expect(
+                "stop_time.departure_time is required by the GtfsError::MissingDepartureTime check earlier in GtfsTimetable::new()",
+            ),
+            later_day,
         );
         if l_dep < e_dep {
             return true;
@@ -743,7 +855,7 @@ fn overtakes(earlier: &[gtfs_structures::StopTime], later: &[gtfs_structures::St
         // earlier trip's arrival is also overtaking.
         matches!(
             (es.arrival_time, ls.arrival_time),
-            (Some(e_arr), Some(l_arr)) if l_arr < e_arr
+            (Some(e_arr), Some(l_arr)) if shift_dep(l_arr, later_day) < shift_dep(e_arr, earlier_day)
         )
     })
 }
@@ -939,7 +1051,7 @@ mod tests {
         // Two stops; later trip arrives before earlier trip at the second stop.
         let earlier = vec![st(0, 0), st(20, 20)];
         let later = vec![st(5, 5), st(15, 15)];
-        assert!(overtakes(&earlier, &later));
+        assert!(overtakes(&earlier, 0, &later, 0));
     }
 
     #[test]
@@ -947,14 +1059,14 @@ mod tests {
         // Later trip's departure precedes earlier's at the second stop.
         let earlier = vec![st(0, 0), st(10, 30)];
         let later = vec![st(5, 5), st(10, 20)];
-        assert!(overtakes(&earlier, &later));
+        assert!(overtakes(&earlier, 0, &later, 0));
     }
 
     #[test]
     fn non_overtaking_pair_is_clean() {
         let earlier = vec![st(0, 0), st(10, 10)];
         let later = vec![st(5, 5), st(15, 15)];
-        assert!(!overtakes(&earlier, &later));
+        assert!(!overtakes(&earlier, 0, &later, 0));
     }
 
     #[test]
@@ -962,7 +1074,20 @@ mod tests {
         // Two trips with identical schedules don't overtake each other.
         let a = vec![st(0, 0), st(10, 10)];
         let b = vec![st(0, 0), st(10, 10)];
-        assert!(!overtakes(&a, &b));
+        assert!(!overtakes(&a, 0, &b, 0));
+    }
+
+    #[test]
+    fn day_offset_keeps_overlapping_schedules_non_overtaking() {
+        // Two trips with the same raw schedule but different day_offset
+        // values are *not* overtaking — day-1 starts strictly after
+        // day-0 ends thanks to the +86400 shift.
+        let day0 = vec![st(0, 0), st(10, 10)];
+        let day1 = vec![st(0, 0), st(10, 10)];
+        assert!(!overtakes(&day0, 0, &day1, 1));
+        // The reverse direction *is* overtaking — day-0 trip would
+        // arrive long before the day-1 trip if treated as `later`.
+        assert!(overtakes(&day1, 1, &day0, 0));
     }
 
     #[test]
@@ -971,12 +1096,12 @@ mod tests {
         let t2 = vec![st(5, 5), st(15, 15)];
         let t3 = vec![st(10, 10), st(20, 20)];
         let trips = vec![
-            ("t1", t1.as_slice()),
-            ("t2", t2.as_slice()),
-            ("t3", t3.as_slice()),
+            ("t1", 0u8, t1.as_slice()),
+            ("t2", 0u8, t2.as_slice()),
+            ("t3", 0u8, t3.as_slice()),
         ];
         let groups = split_non_overtaking(&trips);
-        assert_eq!(groups, vec![vec!["t1", "t2", "t3"]]);
+        assert_eq!(groups, vec![vec![("t1", 0), ("t2", 0), ("t3", 0)]]);
     }
 
     #[test]
@@ -986,17 +1111,17 @@ mod tests {
         let t2_express = vec![st(10, 10), st(20, 20)];
         let t3_local = vec![st(70, 70), st(130, 130)];
         let trips = vec![
-            ("t1", t1_local.as_slice()),
-            ("t2", t2_express.as_slice()),
-            ("t3", t3_local.as_slice()),
+            ("t1", 0u8, t1_local.as_slice()),
+            ("t2", 0u8, t2_express.as_slice()),
+            ("t3", 0u8, t3_local.as_slice()),
         ];
         let groups = split_non_overtaking(&trips);
         // Two non-overtaking sub-groups: {t1, t3} (locals) and {t2} (express).
         // Greedy insertion places t2 in a new sub-group when it overtakes t1,
         // then t3 lands in the t1 sub-group since it doesn't overtake t1.
         assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0], vec!["t1", "t3"]);
-        assert_eq!(groups[1], vec!["t2"]);
+        assert_eq!(groups[0], vec![("t1", 0), ("t3", 0)]);
+        assert_eq!(groups[1], vec![("t2", 0)]);
     }
 
     #[test]
@@ -1025,5 +1150,125 @@ mod tests {
             msg.contains("agency ?"),
             "missing agency placeholder in {msg}"
         );
+    }
+
+    /// Build a synthetic single-route Gtfs: stops A, B; route R; one trip
+    /// per day under the supplied service id, departing 06:00 → 06:30.
+    fn synthetic_overnight_feed() -> Gtfs {
+        use gtfs_structures::{Route, Stop, Trip};
+        use std::sync::Arc;
+
+        let mut g = weekday_only_feed();
+        let stop_a = Arc::new(Stop {
+            id: "A".into(),
+            ..Default::default()
+        });
+        let stop_b = Arc::new(Stop {
+            id: "B".into(),
+            ..Default::default()
+        });
+        g.stops.insert("A".into(), Arc::clone(&stop_a));
+        g.stops.insert("B".into(), Arc::clone(&stop_b));
+
+        g.routes.insert(
+            "R".into(),
+            Route {
+                id: "R".into(),
+                ..Default::default()
+            },
+        );
+
+        let trip = Trip {
+            id: "T".into(),
+            service_id: "weekday".into(),
+            route_id: "R".into(),
+            stop_times: vec![
+                StopTime {
+                    arrival_time: Some(6 * 3600),
+                    departure_time: Some(6 * 3600),
+                    stop: Arc::clone(&stop_a),
+                    ..Default::default()
+                },
+                StopTime {
+                    arrival_time: Some(6 * 3600 + 30 * 60),
+                    departure_time: Some(6 * 3600 + 30 * 60),
+                    stop: Arc::clone(&stop_b),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        g.trips.insert("T".into(), trip);
+        g
+    }
+
+    #[test]
+    fn with_overnight_days_loads_next_day_trip() {
+        // A 23:00 query on Mon 2026-05-04 cannot catch a single 06:00
+        // trip that departs the same morning. Loading n=1 overnight
+        // days makes the next morning's instance available, shifted
+        // by 86 400 s, and the query finds it.
+        use crate::{Duration, RaptorCache, SecondOfDay, Timetable};
+        use jiff::civil::date;
+
+        let g = synthetic_overnight_feed();
+
+        // Single-day timetable: no journey from a 23:00 query.
+        let tt = GtfsTimetable::new(&g, date(2026, 5, 4)).unwrap();
+        let a = tt.stop_idx("A").unwrap();
+        let b = tt.stop_idx("B").unwrap();
+        let mut cache = RaptorCache::for_timetable(&tt);
+        let journeys = tt
+            .query()
+            .from(a)
+            .to(b)
+            .max_transfers(1)
+            .depart_at(SecondOfDay::hms(23, 0, 0))
+            .run_with_cache(&mut cache);
+        assert!(
+            journeys.iter().all(|j| j.plan.is_empty()),
+            "no journey expected without overnight load"
+        );
+
+        // Multi-day timetable: the next morning's trip is shifted to
+        // 30:00, well after the 23:00 departure, and the journey is
+        // found.
+        let tt = GtfsTimetable::new(&g, date(2026, 5, 4))
+            .unwrap()
+            .with_overnight_days(&g, 1)
+            .unwrap();
+        let a = tt.stop_idx("A").unwrap();
+        let b = tt.stop_idx("B").unwrap();
+        let mut cache = RaptorCache::for_timetable(&tt);
+        let journeys = tt
+            .query()
+            .from(&[(a, Duration::ZERO)])
+            .to(&[(b, Duration::ZERO)])
+            .max_transfers(1)
+            .depart_at(SecondOfDay::hms(23, 0, 0))
+            .run_with_cache(&mut cache);
+        let best = journeys
+            .iter()
+            .filter(|j| !j.plan.is_empty())
+            .min_by_key(|j| j.arrival())
+            .expect("overnight journey should exist");
+        // 86 400 (next day) + 6 * 3600 + 30 * 60 = 109 800
+        assert_eq!(best.arrival(), SecondOfDay(86_400 + 6 * 3600 + 30 * 60));
+    }
+
+    #[test]
+    fn with_overnight_days_zero_is_a_noop() {
+        // Loading zero extra days is a no-op; the resulting timetable
+        // is byte-equivalent to one built without the call.
+        let g = synthetic_overnight_feed();
+        let tt = GtfsTimetable::new(&g, ymd_jiff(2026, 5, 4))
+            .unwrap()
+            .with_overnight_days(&g, 0)
+            .unwrap();
+        assert_eq!(tt.n_overnight_days, 0);
+    }
+
+    fn ymd_jiff(y: i16, m: i8, d: i8) -> Date {
+        Date::new(y, m, d).unwrap()
     }
 }

@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Multi-day journey search
+
+`GtfsTimetable::with_overnight_days(&gtfs, n)` extends the loaded
+timetable by `n` calendar days after the base date passed to
+[`GtfsTimetable::new`]. Trips active on each subsequent day get
+their stop_times shifted by `day_offset × 86_400` and inserted as
+additional trips on the same RAPTOR route as their day-0
+counterparts, so the algorithm sees a single time axis monotone
+across `0..=n × 86 400` seconds. A 23:00 query that needs an early-
+morning trip the next day now finds it; without the call the same
+query returns no journey, matching previous behaviour exactly.
+
+The algorithm is unchanged. `SecondOfDay` was already documented as
+permitting values past 86 400; the [`SecondOfDay::Display`] format
+already prints `HH:MM:SS` with hours past 24 (e.g. `25:30:00`), so
+the day offset of any journey leg is decodable as
+`arrival_seconds / 86_400`.
+
+`GtfsTimetable::with_overnight_days` does a full rebuild from the
+underlying [`Gtfs`]; call it *before*
+[`GtfsTimetable::with_walking_footpaths`] and
+[`GtfsTimetable::assert_footpaths_closed`], whose effects it would
+otherwise discard. New error variant `GtfsError::DateOutOfRange`
+covers `base_date + n` falling past jiff's representable range
+(only triggers near the year-9999 ceiling).
+
+`Timetable::drop_off_allowed`'s rustdoc Caveat about issue L still
+applies: a route-bag of size 1 means sibling trips on the same route
+with identical schedules but different drop-off flags can't be
+switched between mid-journey. Multi-day load doesn't change that.
+
 ## [0.16.0] – 2026-05-06
 
 GtfsError variants now carry the offending trip's `route_id` and the

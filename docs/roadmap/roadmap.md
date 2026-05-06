@@ -12,15 +12,6 @@ Real-time delays, cancellations, and added trips. Standard pattern: keep the sta
 
 Open questions: how to expose the overlay in the public API (a separate `Timetable` impl that wraps a `GtfsTimetable` + a delta? a builder method?), whether the overlay needs its own `Cargo` feature, and how to source updates (the `gtfs-rt` crate can decode protobuf feeds – wiring is straightforward, the design is the work).
 
-### Multi-day journey search
-
-A 23:00 query that needs an after-midnight or next-morning trip currently returns no journey because the `GtfsTimetable` is calendar-filtered to a single service date at construction. RAPTOR itself extends naturally across days; the `Timetable` just needs to know about tomorrow's services. Two shapes worth considering:
-
-- **Eager:** load N consecutive service days at construction. Simpler; uses more memory; arithmetic over `SecondOfDay` already permits values past 86400.
-- **Lazy:** when the algorithm exhausts the current day's service without finding a journey, roll forward into the next day's calendar and retry. Closer to what `raptor-journey-planner`'s `maxSearchDays = 3` does. More complex but pays only on overnight queries.
-
-Either way it's a `GtfsTimetable` builder option (`.with_overnight_days(usize)` or similar) plus algorithm-side handling of cross-midnight times. Real value for "last train home" and red-eye flight queries; nuisance otherwise.
-
 ### CI on real feeds
 
 Current CI presumably runs unit + proptests. Add:
