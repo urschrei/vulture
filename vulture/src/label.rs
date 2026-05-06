@@ -7,6 +7,36 @@ use crate::ids::{RouteIdx, StopIdx, TripIdx};
 use crate::time::Duration;
 use crate::time::SecondOfDay;
 
+/// Per-trip context passed to [`Label::extend_by_trip`]. Bundles the
+/// boarding-and-alighting information so the trait method has a
+/// single sidecar argument rather than an eight-positional signature
+/// — single-criterion labels ignore most of it; multi-criterion
+/// impls (fare-aware, route-preference, transfer-penalty) read the
+/// fields they need to evaluate per-trip criteria.
+#[derive(Debug, Clone, Copy)]
+pub struct TripContext {
+    /// The trip the rider is alighting from.
+    pub trip: TripIdx,
+    /// The route the trip belongs to. Use this as the key for fare
+    /// tables, per-route preference scores, and similar route-keyed
+    /// lookup data threaded via [`Label::Ctx`].
+    pub route: RouteIdx,
+    /// The stop where the rider boarded `trip`.
+    pub board_stop: StopIdx,
+    /// The position of `board_stop` within the route's stop
+    /// sequence (the index into `Timetable::get_stops_after(route, 0)`).
+    pub board_pos: u32,
+    /// The stop where the rider is alighting.
+    pub alight_stop: StopIdx,
+    /// The position of `alight_stop` within the route's stop
+    /// sequence.
+    pub alight_pos: u32,
+    /// The trip's arrival time at `alight_pos`. The most-frequently
+    /// read field — single-criterion labels copy this into their
+    /// arrival component.
+    pub arrival: SecondOfDay,
+}
+
 /// A label attached to a `(round, stop)` cell during the RAPTOR scan.
 ///
 /// **Most users can ignore this trait.** [`Timetable::query`](crate::Timetable::query) uses
@@ -57,7 +87,7 @@ use crate::time::SecondOfDay;
 /// ```no_run
 /// use std::collections::HashMap;
 /// use vulture::{
-///     Duration, Journey, Label, RouteIdx, SecondOfDay, StopIdx, Timetable, TripIdx,
+///     Duration, Journey, Label, RouteIdx, SecondOfDay, StopIdx, Timetable, TripContext,
 /// };
 ///
 /// // 1. Ctx: a route -> badness-score lookup. Default = empty map
@@ -84,20 +114,10 @@ use crate::time::SecondOfDay;
 ///         Self { arrival: at, worst: 0 }
 ///     }
 ///
-///     fn extend_by_trip(
-///         self,
-///         ctx: &Self::Ctx,
-///         _trip: TripIdx,
-///         route: RouteIdx,
-///         _board_stop: StopIdx,
-///         _board_pos: u32,
-///         _alight_stop: StopIdx,
-///         _alight_pos: u32,
-///         arrival: SecondOfDay,
-///     ) -> Self {
-///         let score = ctx.0.get(&route).copied().unwrap_or(0);
+///     fn extend_by_trip(self, ctx: &Self::Ctx, leg: TripContext) -> Self {
+///         let score = ctx.0.get(&leg.route).copied().unwrap_or(0);
 ///         Self {
-///             arrival,
+///             arrival: leg.arrival,
 ///             worst: self.worst.max(score),
 ///         }
 ///     }
@@ -166,32 +186,12 @@ pub trait Label: Copy + std::fmt::Debug {
 
     /// New label produced by alighting from a trip at this stop with
     /// the given arrival time. `self` is the label at the boarding
-    /// stop. The algorithm passes the surrounding trip context so
-    /// criteria like fare-per-trip can be evaluated:
-    ///
-    /// - `trip` / `route` — identifiers for fare-table or
-    ///   per-route-rank lookups via `ctx`.
-    /// - `board_stop` / `board_pos` — where the rider boarded this
-    ///   trip on the route (position is the index into the route's
-    ///   stop sequence).
-    /// - `alight_stop` / `alight_pos` — where the rider is alighting.
-    /// - `arrival` — the trip's arrival time at `alight_pos`.
-    ///
-    /// For multi-criterion impls, components like accumulated
-    /// walking time inherit from `self`; per-trip criteria pull from
-    /// `ctx` keyed on the identifiers above.
-    #[allow(clippy::too_many_arguments)]
-    fn extend_by_trip(
-        self,
-        ctx: &Self::Ctx,
-        trip: TripIdx,
-        route: RouteIdx,
-        board_stop: StopIdx,
-        board_pos: u32,
-        alight_stop: StopIdx,
-        alight_pos: u32,
-        arrival: SecondOfDay,
-    ) -> Self;
+    /// stop; `leg` bundles the boarding-and-alighting context so
+    /// criteria like fare-per-trip can be evaluated. See
+    /// [`TripContext`] for the field list. Single-criterion labels
+    /// typically read only `leg.arrival`; multi-criterion impls pull
+    /// from `ctx` keyed on `leg.route` / `leg.trip` etc.
+    fn extend_by_trip(self, ctx: &Self::Ctx, leg: TripContext) -> Self;
 
     /// New label after walking a footpath of duration `walk_time`
     /// from `from_stop` to `to_stop`. `ctx` carries any walk-criterion
@@ -234,18 +234,8 @@ impl Label for ArrivalTime {
     }
 
     #[inline]
-    fn extend_by_trip(
-        self,
-        _ctx: &Self::Ctx,
-        _trip: TripIdx,
-        _route: RouteIdx,
-        _board_stop: StopIdx,
-        _board_pos: u32,
-        _alight_stop: StopIdx,
-        _alight_pos: u32,
-        arrival: SecondOfDay,
-    ) -> Self {
-        ArrivalTime(arrival)
+    fn extend_by_trip(self, _ctx: &Self::Ctx, leg: TripContext) -> Self {
+        ArrivalTime(leg.arrival)
     }
 
     #[inline]

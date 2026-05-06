@@ -184,13 +184,15 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
                     }
                     let new_label = boarding_label.extend_by_trip(
                         ctx,
-                        trip,
-                        route,
-                        boarding_stop,
-                        board_pos,
-                        pi,
-                        pos,
-                        arr,
+                        crate::label::TripContext {
+                            trip,
+                            route,
+                            board_stop: boarding_stop,
+                            board_pos,
+                            alight_stop: pi,
+                            alight_pos: pos,
+                            arrival: arr,
+                        },
                     );
                     if labels[k][pi.idx()].insert(new_label) {
                         best_arrival[pi.idx()].insert(new_label);
