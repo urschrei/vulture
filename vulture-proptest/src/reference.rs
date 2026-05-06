@@ -118,8 +118,14 @@ fn relax(
 }
 
 /// Brute-force ground-truth solver for the Pareto front of
-/// `(arrival, trip_count)` from `ps` to `pt` departing at `tau`, capped at
-/// `max_trips` total trips.
+/// `(arrival, trip_count)` from any of `origins` to any of `targets`,
+/// departing at `tau`, capped at `max_trips` total trips.
+///
+/// `origins` and `targets` are `(stop, walk_offset_seconds)` slices —
+/// each origin seeds the search at `tau + walk_offset`, and each
+/// target's effective arrival is `arrival_at_stop + walk_offset`.
+/// The Pareto filter is applied across the union of effective
+/// arrivals at every target.
 ///
 /// The state is `(stop, time)`; the cost stored at each state is `trips_used`.
 /// Since the time component is encoded into the node, we keep min trips per
@@ -134,29 +140,33 @@ fn relax(
 /// `no_pickup_at` / `no_drop_off_at` are enforced unconditionally.
 pub fn reference_solve(
     spec: &NetworkSpec,
-    ps: u8,
-    pt: u8,
+    origins: &[(u8, u16)],
+    targets: &[(u8, u16)],
     tau: u16,
     max_trips: u8,
     require_wheelchair_accessible: bool,
 ) -> BTreeSet<(u16, u8)> {
-    if ps == pt {
-        // `reconstruct_journey` only returns journeys with ≥ 1 trip, so
-        // "stay put at the source" is not modelled as a journey. The
-        // sibling case for `ps != pt` (a walk-only journey with 0 trips)
-        // is filtered below.
-        return BTreeSet::new();
-    }
-
-    let prep = Prep::build(spec, ps, tau);
+    // Use the first origin as Prep's nominal start; Prep's job is to
+    // enumerate candidate timepoints, and adding more sources only
+    // grows that set — Prep handles all reachable starts uniformly.
+    let nominal_start = origins.first().map(|&(s, _)| s).unwrap_or(0);
+    let prep = Prep::build(spec, nominal_start, tau);
     let inaccessible_stops = &spec.inaccessible_stops;
 
     let mut min_trips: BTreeMap<(u8, u16), u8> = BTreeMap::new();
     let mut heap: BinaryHeap<Reverse<(u16, u8, u8)>> = BinaryHeap::new();
 
-    let start = (ps, tau);
-    min_trips.insert(start, 0);
-    heap.push(Reverse((tau, 0, ps)));
+    // Seed every origin at `tau + walk_offset`, saturating on overflow
+    // so degenerate walks don't pollute the search horizon.
+    for &(origin, walk) in origins {
+        let start_t = tau.saturating_add(walk);
+        let key = (origin, start_t);
+        let entry = min_trips.entry(key).or_insert(u8::MAX);
+        if 0 < *entry {
+            *entry = 0;
+            heap.push(Reverse((start_t, 0, origin)));
+        }
+    }
 
     while let Some(Reverse((t, trips, stop))) = heap.pop() {
         if min_trips.get(&(stop, t)).copied() != Some(trips) {
@@ -219,12 +229,18 @@ pub fn reference_solve(
         }
     }
 
-    let mut at_pt: Vec<(u16, u8)> = min_trips
-        .iter()
-        .filter(|((s, _), _)| *s == pt)
-        .filter(|&(_, &k)| k <= max_trips)
-        .map(|(&(_, t), &k)| (t, k))
-        .collect();
+    // For each target, take all (trips, time) entries at that stop and
+    // shift the time by the target's walk_offset. Then merge across
+    // targets and Pareto-filter the union.
+    let mut at_pt: Vec<(u16, u8)> = Vec::new();
+    for &(target_stop, target_walk) in targets {
+        for (&(stop, t), &k) in min_trips.iter() {
+            if stop != target_stop || k > max_trips {
+                continue;
+            }
+            at_pt.push((t.saturating_add(target_walk), k));
+        }
+    }
 
     // Pareto filter: sort by trip count ascending, keep strictly-decreasing
     // arrival. Walk-only journeys (k == 0) are kept here so that they can
@@ -263,14 +279,14 @@ mod tests {
             footpaths: vec![],
             inaccessible_stops: BTreeSet::new(),
             query: QuerySpec {
-                ps: 0,
-                pt: 0,
+                origins: vec![(0, 0)],
+                targets: vec![(0, 0)],
                 tau: 42,
                 max_transfers: 3,
                 require_wheelchair_accessible: false,
             },
         };
-        let r = reference_solve(&spec, 0, 0, 42, 3, false);
+        let r = reference_solve(&spec, &[(0, 0)], &[(0, 0)], 42, 3, false);
         assert!(r.is_empty(), "ps == pt is not modelled as a journey");
     }
 
@@ -282,14 +298,14 @@ mod tests {
             footpaths: vec![],
             inaccessible_stops: BTreeSet::new(),
             query: QuerySpec {
-                ps: 0,
-                pt: 1,
+                origins: vec![(0, 0)],
+                targets: vec![(1, 0)],
                 tau: 0,
                 max_transfers: 3,
                 require_wheelchair_accessible: false,
             },
         };
-        let r = reference_solve(&spec, 0, 1, 0, 3, false);
+        let r = reference_solve(&spec, &[(0, 0)], &[(1, 0)], 0, 3, false);
         assert!(r.is_empty());
     }
 
@@ -311,14 +327,14 @@ mod tests {
             footpaths: vec![],
             inaccessible_stops: BTreeSet::new(),
             query: QuerySpec {
-                ps: 0,
-                pt: 1,
+                origins: vec![(0, 0)],
+                targets: vec![(1, 0)],
                 tau: 0,
                 max_transfers: 3,
                 require_wheelchair_accessible: false,
             },
         };
-        let r = reference_solve(&spec, 0, 1, 0, 3, false);
+        let r = reference_solve(&spec, &[(0, 0)], &[(1, 0)], 0, 3, false);
         assert_eq!(r, front(&[(30, 1)]));
     }
 
@@ -337,14 +353,14 @@ mod tests {
             }],
             inaccessible_stops: BTreeSet::new(),
             query: QuerySpec {
-                ps: 0,
-                pt: 1,
+                origins: vec![(0, 0)],
+                targets: vec![(1, 0)],
                 tau: 100,
                 max_transfers: 3,
                 require_wheelchair_accessible: false,
             },
         };
-        let r = reference_solve(&spec, 0, 1, 100, 3, false);
+        let r = reference_solve(&spec, &[(0, 0)], &[(1, 0)], 100, 3, false);
         assert!(r.is_empty(), "walk-only journey should be filtered out");
     }
 
@@ -371,14 +387,14 @@ mod tests {
             }],
             inaccessible_stops: BTreeSet::new(),
             query: QuerySpec {
-                ps: 0,
-                pt: 2,
+                origins: vec![(0, 0)],
+                targets: vec![(2, 0)],
                 tau: 0,
                 max_transfers: 3,
                 require_wheelchair_accessible: false,
             },
         };
-        let r = reference_solve(&spec, 0, 2, 0, 3, false);
+        let r = reference_solve(&spec, &[(0, 0)], &[(2, 0)], 0, 3, false);
         assert_eq!(r, front(&[(70, 1)]));
     }
 
@@ -415,14 +431,14 @@ mod tests {
             footpaths: vec![],
             inaccessible_stops: BTreeSet::new(),
             query: QuerySpec {
-                ps: 0,
-                pt: 1,
+                origins: vec![(0, 0)],
+                targets: vec![(1, 0)],
                 tau: 0,
                 max_transfers: 3,
                 require_wheelchair_accessible: false,
             },
         };
-        let r = reference_solve(&spec, 0, 1, 0, 3, false);
+        let r = reference_solve(&spec, &[(0, 0)], &[(1, 0)], 0, 3, false);
         assert_eq!(r, front(&[(80, 1)]));
     }
 
@@ -448,8 +464,8 @@ mod tests {
             }],
             inaccessible_stops: BTreeSet::new(),
             query: QuerySpec {
-                ps: 0,
-                pt: 2,
+                origins: vec![(0, 0)],
+                targets: vec![(2, 0)],
                 tau: 0,
                 max_transfers: 2,
                 require_wheelchair_accessible: false,

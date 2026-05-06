@@ -59,11 +59,16 @@ pub struct FootpathSpec {
     pub walk_time: u16,
 }
 
-/// The query parameters: source, target, departure, max trip count.
+/// The query parameters: source set, target set, departure, max trip count.
+///
+/// Origins and targets are vectors of `(stop, walk_offset_seconds)`
+/// pairs to exercise vulture's multi-source / multi-target paths.
+/// `len() ∈ [1, 3]` for both. Walk offsets are bounded so cases stay
+/// small and feasible.
 #[derive(Debug, Clone)]
 pub struct QuerySpec {
-    pub ps: u8,
-    pub pt: u8,
+    pub origins: Vec<(u8, u16)>,
+    pub targets: Vec<(u8, u16)>,
     pub tau: u16,
     pub max_transfers: u8,
     /// When `true`, the query call adds `.require_wheelchair_accessible()`
@@ -242,8 +247,8 @@ fn close_footpaths_two_hop_chain() {
         ],
         inaccessible_stops: BTreeSet::new(),
         query: QuerySpec {
-            ps: 0,
-            pt: 2,
+            origins: vec![(0, 0)],
+            targets: vec![(2, 0)],
             tau: 0,
             max_transfers: 1,
             require_wheelchair_accessible: false,
@@ -276,8 +281,8 @@ fn close_footpaths_picks_min_when_duplicate() {
         ],
         inaccessible_stops: BTreeSet::new(),
         query: QuerySpec {
-            ps: 0,
-            pt: 1,
+            origins: vec![(0, 0)],
+            targets: vec![(1, 0)],
             tau: 0,
             max_transfers: 1,
             require_wheelchair_accessible: false,
@@ -306,8 +311,8 @@ fn render_single_route_two_stops_one_trip() {
         footpaths: vec![],
         inaccessible_stops: BTreeSet::new(),
         query: QuerySpec {
-            ps: 0,
-            pt: 1,
+            origins: vec![(0, 0)],
+            targets: vec![(1, 0)],
             tau: 0,
             max_transfers: 1,
             require_wheelchair_accessible: false,
@@ -352,8 +357,8 @@ fn render_emits_transitively_closed_footpaths() {
         ],
         inaccessible_stops: BTreeSet::new(),
         query: QuerySpec {
-            ps: 0,
-            pt: 2,
+            origins: vec![(0, 0)],
+            targets: vec![(2, 0)],
             tau: 0,
             max_transfers: 1,
             require_wheelchair_accessible: false,
@@ -603,16 +608,32 @@ pub fn network_spec(tc: hegel::TestCase, bounds: LayerBounds) -> NetworkSpec {
         Vec::new()
     };
 
-    let ps = tc.draw(
-        generators::integers::<u8>()
-            .min_value(0)
-            .max_value(n_stops - 1),
-    );
-    let pt = tc.draw(
-        generators::integers::<u8>()
-            .min_value(0)
-            .max_value(n_stops - 1),
-    );
+    // Multi-source / multi-target: 1–3 origins and 1–3 targets, each
+    // a (stop, walk_offset) pair. Walk offsets capped at 20 s so they
+    // can't dominate trip times and tip every case into walk-only
+    // territory.
+    let n_origins = tc.draw(generators::integers::<u8>().min_value(1).max_value(3));
+    let mut origins: Vec<(u8, u16)> = Vec::with_capacity(usize::from(n_origins));
+    for _ in 0..n_origins {
+        let s = tc.draw(
+            generators::integers::<u8>()
+                .min_value(0)
+                .max_value(n_stops - 1),
+        );
+        let w = tc.draw(generators::integers::<u16>().min_value(0).max_value(20));
+        origins.push((s, w));
+    }
+    let n_targets = tc.draw(generators::integers::<u8>().min_value(1).max_value(3));
+    let mut targets: Vec<(u8, u16)> = Vec::with_capacity(usize::from(n_targets));
+    for _ in 0..n_targets {
+        let s = tc.draw(
+            generators::integers::<u8>()
+                .min_value(0)
+                .max_value(n_stops - 1),
+        );
+        let w = tc.draw(generators::integers::<u16>().min_value(0).max_value(20));
+        targets.push((s, w));
+    }
     let tau = tc.draw(generators::integers::<u16>().min_value(0).max_value(500));
     let max_transfers = tc.draw(generators::integers::<u8>().min_value(1).max_value(5));
 
@@ -639,8 +660,8 @@ pub fn network_spec(tc: hegel::TestCase, bounds: LayerBounds) -> NetworkSpec {
         footpaths,
         inaccessible_stops,
         query: QuerySpec {
-            ps,
-            pt,
+            origins,
+            targets,
             tau,
             max_transfers,
             require_wheelchair_accessible,

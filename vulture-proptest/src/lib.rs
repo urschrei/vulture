@@ -56,12 +56,22 @@ use vulture::{Duration, SecondOfDay, Timetable};
 #[cfg(test)]
 fn run_property(tc: &hegel::TestCase, spec: &spec::NetworkSpec) {
     let timetable = spec::render(spec);
-    let ps_idx = timetable.stop_idx_of(&spec.query.ps);
-    let pt_idx = timetable.stop_idx_of(&spec.query.pt);
+    let origins: Vec<(vulture::StopIdx, Duration)> = spec
+        .query
+        .origins
+        .iter()
+        .map(|&(s, w)| (timetable.stop_idx_of(&s), Duration(u32::from(w))))
+        .collect();
+    let targets: Vec<(vulture::StopIdx, Duration)> = spec
+        .query
+        .targets
+        .iter()
+        .map(|&(s, w)| (timetable.stop_idx_of(&s), Duration(u32::from(w))))
+        .collect();
     let mut q = timetable
         .query()
-        .from(&[(ps_idx, Duration::ZERO)])
-        .to(&[(pt_idx, Duration::ZERO)])
+        .from(origins.as_slice())
+        .to(targets.as_slice())
         .max_transfers(spec.query.max_transfers as usize as u8);
     if spec.query.require_wheelchair_accessible {
         q = q.require_wheelchair_accessible();
@@ -69,8 +79,8 @@ fn run_property(tc: &hegel::TestCase, spec: &spec::NetworkSpec) {
     let ours = q.depart_at(SecondOfDay(spec.query.tau as u32)).run();
     let theirs = reference::reference_solve(
         spec,
-        spec.query.ps,
-        spec.query.pt,
+        &spec.query.origins,
+        &spec.query.targets,
         spec.query.tau,
         spec.query.max_transfers,
         spec.query.require_wheelchair_accessible,
@@ -134,8 +144,13 @@ fn parallel_naive_matches_serial_rrap(tc: hegel::TestCase) {
 
     let spec = tc.draw(spec::network_spec(spec::layer1_bounds()));
     let timetable = spec::render(&spec);
-    let ps = timetable.stop_idx_of(&spec.query.ps);
-    let pt = timetable.stop_idx_of(&spec.query.pt);
+    // Range-query test stays single-source / single-target by design —
+    // it's stressing rRAPTOR vs the parallel naïve batch, not endpoint
+    // expansion. Take the first entry of each set.
+    let (ps_raw, _) = spec.query.origins[0];
+    let (pt_raw, _) = spec.query.targets[0];
+    let ps = timetable.stop_idx_of(&ps_raw);
+    let pt = timetable.stop_idx_of(&pt_raw);
 
     // Three-departure window around tau. Saturating sub ensures we
     // stay non-negative even for tau == 0.
