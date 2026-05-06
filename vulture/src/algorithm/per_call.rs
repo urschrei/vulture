@@ -26,31 +26,10 @@ use crate::label::Label;
 use crate::time::Duration;
 use crate::time::SecondOfDay;
 
-/// Wraps [`Timetable::get_earliest_trip`] with optional
-/// wheelchair-accessibility gating: when `require_accessible` is
-/// `true`, walks forward over disallowed trips by re-querying with a
-/// later `at` until either an accessible trip is found or the trip
-/// list at `pos` is exhausted. When `require_accessible` is `false`
-/// this is exactly the underlying call.
-pub(crate) fn earliest_accessible_trip<T: Timetable + ?Sized>(
-    tt: &T,
-    route: RouteIdx,
-    mut at: SecondOfDay,
-    pos: u32,
-    require_accessible: bool,
-) -> Option<TripIdx> {
-    if !require_accessible {
-        return tt.get_earliest_trip(route, at, pos);
-    }
-    loop {
-        let trip = tt.get_earliest_trip(route, at, pos)?;
-        if tt.trip_wheelchair_accessible(trip) {
-            return Some(trip);
-        }
-        let dep = tt.get_departure_time(trip, pos);
-        at = dep + Duration::from_secs(1);
-    }
-}
+// `earliest_accessible_trip` lives on the `Timetable` trait now so
+// adapters with direct access to per-route trip lists can walk by
+// trip-index instead of by time, avoiding the simultaneous-departure
+// leapfrog bug. See `Timetable::earliest_accessible_trip`.
 
 /// Run round-0 footpath relaxation followed by rounds `1..=transfers`
 /// against an already-seeded cache. Shared by the per-call algorithm
@@ -235,8 +214,7 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
                 staged.extend(labels[k - 1][pi.idx()].iter().copied());
                 for candidate in &staged {
                     let cand_arr = candidate.arrival();
-                    let trip = match earliest_accessible_trip(
-                        tt,
+                    let trip = match tt.earliest_accessible_trip(
                         route,
                         cand_arr,
                         pos,

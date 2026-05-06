@@ -3011,3 +3011,55 @@ fn multi_source_target_equal_to_origin_finds_other_origins_journey() {
     assert_eq!(j.label.0.0, 1);
     assert_eq!(j.plan.len(), 1);
 }
+
+/// Regression: when two trips on the same route have identical
+/// departure times at the boarding stop but differ in their
+/// `wheelchair_accessible` flag, the algorithm's wheelchair-required
+/// scan must walk the trip list by *index*, not by `dep + 1s`. The
+/// previous time-based fallback would leapfrog tied departures and
+/// miss the accessible sibling, returning an empty result for a
+/// query that has a real journey.
+#[test]
+fn wheelchair_query_finds_accessible_sibling_at_same_departure() {
+    use crate::Journey;
+
+    const A: u8 = 0;
+    const B: u8 = 1;
+    let tt = SimpleTimetable::new()
+        .route(
+            0u8,
+            &[A, B],
+            &[
+                (
+                    0u16,
+                    &[
+                        (SecondOfDay(50), SecondOfDay(50)),
+                        (SecondOfDay(51), SecondOfDay(51)),
+                    ],
+                ),
+                (
+                    1u16,
+                    &[
+                        (SecondOfDay(50), SecondOfDay(50)),
+                        (SecondOfDay(51), SecondOfDay(51)),
+                    ],
+                ),
+            ],
+        )
+        .no_wheelchair_on_trip(0u16);
+
+    let s_a = tt.stop_idx_of(&A);
+    let s_b = tt.stop_idx_of(&B);
+
+    let journeys: Vec<Journey<crate::ArrivalTime>> = tt
+        .query()
+        .from(&[(s_a, Duration::ZERO)])
+        .to(&[(s_b, Duration::ZERO)])
+        .max_transfers(1)
+        .require_wheelchair_accessible()
+        .depart_at(SecondOfDay(0))
+        .run();
+
+    assert_eq!(journeys.len(), 1, "expected one journey, got {journeys:#?}");
+    assert_eq!(journeys[0].label.0.0, 51);
+}

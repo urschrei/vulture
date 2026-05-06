@@ -311,6 +311,35 @@ where
             .map(|(trip_idx, _)| TripIdx::new(trip_idx as u32))
     }
 
+    fn earliest_accessible_trip(
+        &self,
+        route: RouteIdx,
+        at: SecondOfDay,
+        pos: u32,
+        require_wheelchair_accessible: bool,
+    ) -> Option<TripIdx> {
+        if !require_wheelchair_accessible {
+            return self.get_earliest_trip(route, at, pos);
+        }
+        // Filter wheelchair-inaccessible trips out *before* the
+        // min-by-departure selection so a wheelchair query never picks
+        // an inaccessible tied-departure trip and skips the accessible
+        // sibling.
+        let no_pickup_empty = self.no_pickup.is_empty();
+        self.trips
+            .iter()
+            .enumerate()
+            .filter_map(|(i, slot)| slot.as_ref().map(|entry| (i, entry)))
+            .filter(|(_, (r, _))| *r == route)
+            .filter(|(_, (_, times))| times[pos as usize].1 >= at)
+            .filter(|(i, _)| {
+                no_pickup_empty || !self.no_pickup.contains(&(TripIdx::new(*i as u32), pos))
+            })
+            .filter(|(i, _)| !self.inaccessible_trips.contains(&TripIdx::new(*i as u32)))
+            .min_by_key(|(_, (_, times))| times[pos as usize].1)
+            .map(|(trip_idx, _)| TripIdx::new(trip_idx as u32))
+    }
+
     fn get_arrival_time(&self, trip: TripIdx, pos: u32) -> SecondOfDay {
         let (_route, times) = self.trips[trip.idx()].as_ref().expect(
             "trip slot must be filled by SimpleTimetable::route() before any algorithm call",

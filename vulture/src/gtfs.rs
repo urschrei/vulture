@@ -901,6 +901,33 @@ impl<'gtfs> Timetable for GtfsTimetable<'gtfs> {
         None
     }
 
+    fn earliest_accessible_trip(
+        &self,
+        route: RouteIdx,
+        at: SecondOfDay,
+        pos: u32,
+        require_wheelchair_accessible: bool,
+    ) -> Option<TripIdx> {
+        if !require_wheelchair_accessible {
+            return self.get_earliest_trip(route, at, pos);
+        }
+        // Walk by trip index, not by time, so simultaneously-departing
+        // trips that differ only in their wheelchair flag don't get
+        // leapfrogged by the trait's default `+1s` fallback.
+        let trips = &self.trips_for_route[route.idx()];
+        let dep_row = &self.departure_times[route.idx()][pos as usize];
+        let mut idx = dep_row.partition_point(|&dep| dep < at);
+        let no_pickup_empty = self.no_pickup.is_empty();
+        while let Some(&trip) = trips.get(idx) {
+            let pickup_ok = no_pickup_empty || !self.no_pickup.contains(&(trip, pos));
+            if pickup_ok && !self.inaccessible_trips.contains(&trip) {
+                return Some(trip);
+            }
+            idx += 1;
+        }
+        None
+    }
+
     fn get_arrival_time(&self, trip: TripIdx, pos: u32) -> SecondOfDay {
         let (route_idx, trip_pos) = self.route_for_trip[trip.idx()];
         self.arrival_times[route_idx.idx()][pos as usize][trip_pos]
