@@ -375,6 +375,7 @@ mod tests {
                     no_pickup_at: vec![],
                     no_drop_off_at: vec![],
                 }],
+                fare: 0,
             }],
             footpaths: vec![],
             inaccessible_stops: BTreeSet::new(),
@@ -431,6 +432,7 @@ mod tests {
                     no_pickup_at: vec![],
                     no_drop_off_at: vec![],
                 }],
+                fare: 0,
             }],
             footpaths: vec![FootpathSpec {
                 from: 0,
@@ -467,6 +469,7 @@ mod tests {
                         no_pickup_at: vec![],
                         no_drop_off_at: vec![],
                     }],
+                    fare: 0,
                 },
                 RouteSpec {
                     stop_sequence: vec![0, 1],
@@ -478,6 +481,7 @@ mod tests {
                         no_pickup_at: vec![],
                         no_drop_off_at: vec![],
                     }],
+                    fare: 0,
                 },
             ],
             footpaths: vec![],
@@ -508,6 +512,7 @@ mod tests {
                     no_pickup_at: vec![],
                     no_drop_off_at: vec![],
                 }],
+                fare: 0,
             }],
             footpaths: vec![FootpathSpec {
                 from: 1,

@@ -28,6 +28,11 @@ pub struct RouteSpec {
     pub stop_sequence: Vec<u8>,
     /// Trips ordered by `first_dep`. `len() ∈ [1, 3]`.
     pub trips: Vec<TripSpec>,
+    /// Per-route fare for the [`ArrivalAndFare`](vulture::labels::ArrivalAndFare)
+    /// proptest. `0` for layers without fare pressure; layer 3 picks a
+    /// random small u32. The spec carries it on the route rather than
+    /// the trip because vulture's `FareTable` is keyed on `RouteIdx`.
+    pub fare: u32,
 }
 
 /// One trip on a route. The renderer reconstructs `(arrival, departure)`
@@ -307,6 +312,7 @@ fn render_single_route_two_stops_one_trip() {
                 no_pickup_at: vec![],
                 no_drop_off_at: vec![],
             }],
+            fare: 0,
         }],
         footpaths: vec![],
         inaccessible_stops: BTreeSet::new(),
@@ -547,9 +553,19 @@ fn route_spec(tc: hegel::TestCase, n_stops: u8, bounds: LayerBounds) -> RouteSpe
         last_dep = next_dep;
     }
 
+    // Per-route fare for the ArrivalAndFare property: random in
+    // 0..=200 on layer 3 (where accessibility flags are also live),
+    // zero on simpler layers so existing properties stay unaffected.
+    let fare = if bounds.accessibility_flags {
+        tc.draw(generators::integers::<u32>().min_value(0).max_value(200))
+    } else {
+        0
+    };
+
     RouteSpec {
         stop_sequence,
         trips,
+        fare,
     }
 }
 

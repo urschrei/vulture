@@ -205,6 +205,105 @@ fn parallel_naive_matches_serial_rrap(tc: hegel::TestCase) {
     }
 }
 
+/// Property check for the [`ArrivalAndFare`] label: every journey
+/// vulture returns must have a `label.fare` equal to the manual sum
+/// of per-route fares across its plan. Validates that the new
+/// `Label::Ctx`-threaded `extend_by_trip` plumbing keeps fare state
+/// in sync with the journey it describes.
+///
+/// Stays on `layer3_bounds` because that's the only layer that
+/// generates non-zero per-route fares.
+///
+/// Two specific things this catches:
+///
+/// 1. Missed `extend_by_trip` calls: if the algorithm forgot to
+///    extend the label on some boarding/alighting, the journey's
+///    `fare` would diverge from the manual sum across `plan`.
+/// 2. Wrong `RouteIdx` threaded to `extend_by_trip`: if the
+///    algorithm passes a wrong route to the label, the fare lookup
+///    in `FareTable` would miss or pick the wrong route's fare.
+#[hegel::test]
+fn fare_label_matches_per_leg_sum(tc: hegel::TestCase) {
+    use vulture::labels::{ArrivalAndFare, FareTable};
+
+    let spec = tc.draw(spec::network_spec(spec::layer3_bounds()));
+    let timetable = spec::render(&spec);
+
+    // Build a FareTable mapping each rendered RouteIdx to the spec's
+    // route fare. Spec routes are emitted in the order produced by
+    // the renderer's `for ((route_id, ..), trips) in groups` loop —
+    // route_idx_of(route_id) is the algorithm-side handle.
+    let mut per_route: std::collections::HashMap<vulture::RouteIdx, u32> =
+        std::collections::HashMap::new();
+    for (route_id_u8, route) in spec.routes.iter().enumerate() {
+        let route_id = u8::try_from(route_id_u8).expect("layer3 route count fits in u8");
+        // Some routes may not be registered if the renderer dropped them
+        // (e.g. zero-stop sequences) — guard with the lookup.
+        if let Some(fares_route_idx) = timetable_route_idx(&timetable, route_id) {
+            per_route.insert(fares_route_idx, route.fare);
+        }
+    }
+    let fares = FareTable { per_route };
+
+    let origins: Vec<(vulture::StopIdx, Duration)> = spec
+        .query
+        .origins
+        .iter()
+        .map(|&(s, w)| (timetable.stop_idx_of(&s), Duration(u32::from(w))))
+        .collect();
+    let targets: Vec<(vulture::StopIdx, Duration)> = spec
+        .query
+        .targets
+        .iter()
+        .map(|&(s, w)| (timetable.stop_idx_of(&s), Duration(u32::from(w))))
+        .collect();
+
+    let mut q = timetable
+        .query_with_label::<ArrivalAndFare>()
+        .with_context(fares.clone())
+        .from(origins.as_slice())
+        .to(targets.as_slice())
+        .max_transfers(spec.query.max_transfers as usize as u8);
+    if spec.query.require_wheelchair_accessible {
+        q = q.require_wheelchair_accessible();
+    }
+    let journeys = q.depart_at(SecondOfDay(spec.query.tau as u32)).run();
+
+    for j in &journeys {
+        // Sum fares across every (route, _stop) leg in the plan. The
+        // algorithm should have computed exactly this.
+        let manual_fare: u32 = j.plan.iter().map(|(route, _)| fares.fare_for(*route)).sum();
+        if manual_fare != j.label.fare {
+            tc.note(&format!("spec: {:#?}", spec));
+            tc.note(&format!("fares: {:?}", fares.per_route));
+            tc.note(&format!("journey plan: {:?}", j.plan));
+            tc.note(&format!("label.fare: {}", j.label.fare));
+            tc.note(&format!("manual_fare: {}", manual_fare));
+        }
+        assert_eq!(
+            manual_fare, j.label.fare,
+            "label fare must equal sum over plan",
+        );
+    }
+}
+
+#[cfg(test)]
+fn timetable_route_idx<TT>(tt: &TT, route_id: u8) -> Option<vulture::RouteIdx>
+where
+    TT: vulture::Timetable + ?Sized,
+    // Best-effort: in practice the renderer uses SimpleTimetable<u8, u8, u16>
+    // so we have its own `route_idx_of`. The trait surface doesn't expose a
+    // string→idx lookup, so we live with concrete-type access here.
+{
+    let _ = (tt, route_id);
+    // Fallback: every route_id from 0..n_routes is interned, in order.
+    if usize::from(route_id) < tt.n_routes() {
+        Some(vulture::RouteIdx::new(u32::from(route_id)))
+    } else {
+        None
+    }
+}
+
 /// Range-query algorithm correctness against the brute-force
 /// reference solver. Where `parallel_naive_matches_serial_rrap`
 /// only checks rRAPTOR vs the parallel naïve batch (a self-
