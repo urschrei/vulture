@@ -262,6 +262,58 @@ pub fn reference_solve(
     pareto.into_iter().filter(|&(_, k)| k > 0).collect()
 }
 
+/// Range-query reference: runs `reference_solve` once per departure
+/// and applies the same 3-D Pareto filter vulture's
+/// `filter_range_pareto_front` uses — drop any `(depart, arrival, k)`
+/// triple weakly dominated by another on `(later depart, fewer
+/// transfers, earlier arrival)`.
+///
+/// Output is a `BTreeSet<(depart, arrival, k)>` so the proptest can
+/// compare order-independently against vulture's `Vec<RangeJourney>`.
+pub fn reference_range_solve(
+    spec: &NetworkSpec,
+    origins: &[(u8, u16)],
+    targets: &[(u8, u16)],
+    departures: &[u16],
+    max_trips: u8,
+    require_wheelchair_accessible: bool,
+) -> BTreeSet<(u16, u16, u8)> {
+    let mut all: Vec<(u16, u16, u8)> = Vec::new();
+    for &tau in departures {
+        let front = reference_solve(
+            spec,
+            origins,
+            targets,
+            tau,
+            max_trips,
+            require_wheelchair_accessible,
+        );
+        for (arrival, k) in front {
+            all.push((tau, arrival, k));
+        }
+    }
+
+    // Sort matching vulture's filter_range_pareto_front: descending
+    // depart, ascending plan_len (= k), ascending arrival. Earlier
+    // entries are preferred so equal-on-all-three duplicates resolve
+    // to the first one in.
+    all.sort_by(|a, b| b.0.cmp(&a.0).then(a.2.cmp(&b.2)).then(a.1.cmp(&b.1)));
+
+    let mut front: Vec<(u16, u16, u8)> = Vec::with_capacity(all.len());
+    'outer: for r in all {
+        let (rd, ra, rk) = r;
+        for &(fd, fa, fk) in &front {
+            if fd >= rd && fk <= rk && fa <= ra {
+                continue 'outer;
+            }
+        }
+        front.retain(|&(fd, fa, fk)| !(rd >= fd && rk <= fk && ra <= fa));
+        front.push(r);
+    }
+
+    front.into_iter().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

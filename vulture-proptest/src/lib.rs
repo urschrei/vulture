@@ -205,6 +205,84 @@ fn parallel_naive_matches_serial_rrap(tc: hegel::TestCase) {
     }
 }
 
+/// Range-query algorithm correctness against the brute-force
+/// reference solver. Where `parallel_naive_matches_serial_rrap`
+/// only checks rRAPTOR vs the parallel naïve batch (a self-
+/// consistency check), this test gives both an independent ground
+/// truth.
+///
+/// Stays on `layer1_bounds` for the same per-case-cost reason: a
+/// 3-departure window plus per-departure brute force is `3 ×
+/// reference_solve`, which is comfortable on small networks but
+/// would dominate the run on layer 3.
+#[hegel::test]
+fn range_query_matches_reference(tc: hegel::TestCase) {
+    let spec = tc.draw(spec::network_spec(spec::layer1_bounds()));
+    let timetable = spec::render(&spec);
+    let origins: Vec<(vulture::StopIdx, Duration)> = spec
+        .query
+        .origins
+        .iter()
+        .map(|&(s, w)| (timetable.stop_idx_of(&s), Duration(u32::from(w))))
+        .collect();
+    let targets: Vec<(vulture::StopIdx, Duration)> = spec
+        .query
+        .targets
+        .iter()
+        .map(|&(s, w)| (timetable.stop_idx_of(&s), Duration(u32::from(w))))
+        .collect();
+
+    // Three-departure window around tau, with the first entry pinned
+    // at tau itself so the reference and vulture agree on at least
+    // one anchor.
+    let tau = spec.query.tau as u32;
+    let step: u32 = 5;
+    let raw_departures: Vec<u32> = (0..3).map(|i| tau.saturating_sub(i * step)).collect();
+    let departures_secondofday: Vec<SecondOfDay> =
+        raw_departures.iter().copied().map(SecondOfDay).collect();
+    let departures_u16: Vec<u16> = raw_departures
+        .iter()
+        .map(|&d| u16::try_from(d).unwrap_or(u16::MAX))
+        .collect();
+
+    let ours: Vec<vulture::RangeJourney> = timetable
+        .query()
+        .from(origins.as_slice())
+        .to(targets.as_slice())
+        .max_transfers(spec.query.max_transfers as usize as u8)
+        .depart_in_window(departures_secondofday.iter().copied())
+        .run();
+
+    let our_set: std::collections::BTreeSet<(u16, u16, u8)> = ours
+        .iter()
+        .map(|rj| {
+            (
+                u16::try_from(rj.depart.0).unwrap_or(u16::MAX),
+                u16::try_from(rj.journey.arrival().0).unwrap_or(u16::MAX),
+                u8::try_from(rj.journey.plan.len()).unwrap_or(u8::MAX),
+            )
+        })
+        .collect();
+
+    let theirs = reference::reference_range_solve(
+        &spec,
+        &spec.query.origins,
+        &spec.query.targets,
+        &departures_u16,
+        spec.query.max_transfers,
+        spec.query.require_wheelchair_accessible,
+    );
+
+    if our_set != theirs {
+        tc.note(&format!("spec: {:#?}", spec));
+        tc.note(&format!("departures: {:?}", raw_departures));
+        tc.note(&format!("raptor:     {:?}", ours));
+        tc.note(&format!("ours_set:   {:?}", our_set));
+        tc.note(&format!("theirs:     {:?}", theirs));
+    }
+    assert_eq!(our_set, theirs);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
