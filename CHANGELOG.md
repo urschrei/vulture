@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.17.0] – 2026-05-06
+
+GtfsError variants now carry the offending trip's `route_id` and the
+route's `agency_id` (when set), so a failed construction names the
+operator instead of just the trip ID.
+
+### Breaking changes
+
+- The unused `GtfsError::MissingTrip` variant is removed.
+- `GtfsError::MissingStop`, `MissingStopTimes`, and
+  `MissingDepartureTime` are restructured from tuple/2-field variants
+  into struct variants with `trip`, `route`, and `agency: Option<String>`
+  fields (`MissingStop` and `MissingDepartureTime` keep their `stop`
+  field as well). Display strings now include the route + agency:
+  - `"trip {trip} on route {route} (agency ?) has no stop_times"`
+  - `"stop {stop} (referenced by trip {trip} on route {route}, agency ?) not found"`
+  - `"stop_time has no departure_time: trip {trip} on route {route} (agency ?), stop {stop}"`
+
+  When the route's `agency_id` is unset, the message renders `?` in
+  its place.
+
+Constructor sites in `GtfsTimetable::new` were updated to look up
+the route's agency once per trip and plumb it through. Pre-existing
+behaviour (which trips fail, in what order) is unchanged; only the
+shape and content of the error value changes.
+
 Wheelchair-accessibility filter on the query builder. Honours GTFS
 `stops.wheelchair_boarding` and `trips.wheelchair_accessible` when
 opted into; default behaviour unchanged.

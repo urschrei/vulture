@@ -100,23 +100,54 @@ const TYPICAL_TRANSFERS_PER_STOP: usize = 4;
 const DEFAULT_TRANSFER_TIME: Duration = Duration(300);
 
 /// Errors that can occur when constructing a [`GtfsTimetable`].
+///
+/// Every variant carries the offending trip's GTFS `route_id` (and the
+/// route's `agency_id` when one is set) so a feed-validation report can
+/// be filed against the right operator without further lookup.
 #[derive(thiserror::Error, Debug)]
 pub enum GtfsError {
-    /// A trip referenced in the feed was not found.
-    #[error("trip not found: {0}")]
-    MissingTrip(String),
-    /// A stop referenced by a trip was not found.
-    #[error("stop not found: {0}")]
-    MissingStop(String),
+    /// A stop referenced by a trip was not found in the feed's
+    /// `stops.txt`.
+    #[error(
+        "stop {stop} (referenced by trip {trip} on route {route}, agency {}) not found",
+        agency.as_deref().unwrap_or("?"),
+    )]
+    MissingStop {
+        /// The unresolved stop ID.
+        stop: String,
+        /// The trip that referenced the stop.
+        trip: String,
+        /// The trip's GTFS `route_id`.
+        route: String,
+        /// The route's `agency_id`, when set.
+        agency: Option<String>,
+    },
     /// A trip has no stop times defined.
-    #[error("trip has no stop_times: {0}")]
-    MissingStopTimes(String),
+    #[error(
+        "trip {trip} on route {route} (agency {}) has no stop_times",
+        agency.as_deref().unwrap_or("?"),
+    )]
+    MissingStopTimes {
+        /// The trip with no stop_times.
+        trip: String,
+        /// The trip's GTFS `route_id`.
+        route: String,
+        /// The route's `agency_id`, when set.
+        agency: Option<String>,
+    },
     /// A trip has a stop_time without a departure time, which the algorithm
     /// needs for binary-search ordering.
-    #[error("stop_time has no departure_time: trip {trip}, stop {stop}")]
+    #[error(
+        "stop_time has no departure_time: trip {trip} on route {route} (agency {}), stop {stop}",
+        agency.as_deref().unwrap_or("?"),
+    )]
     MissingDepartureTime {
         /// The trip the stop_time belongs to.
         trip: String,
+        /// The trip's GTFS `route_id`.
+        route: String,
+        /// The route's `agency_id`, when set.
+        agency: Option<String>,
         /// The stop the stop_time refers to.
         stop: String,
     },
@@ -272,18 +303,36 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             if !is_service_active(gtfs, &trip.service_id, date_chrono) {
                 continue;
             }
+            // Lift route + agency once per trip so the per-stop error
+            // paths don't re-look-up under every stop_time.
+            let route_id = trip.route_id.clone();
+            let agency_id = gtfs
+                .routes
+                .get(&trip.route_id)
+                .and_then(|r| r.agency_id.clone());
             if trip.stop_times.is_empty() {
-                return Err(GtfsError::MissingStopTimes(trip_id.clone()));
+                return Err(GtfsError::MissingStopTimes {
+                    trip: trip_id.clone(),
+                    route: route_id,
+                    agency: agency_id,
+                });
             }
             let mut stop_seq: Vec<StopIdx> = Vec::with_capacity(trip.stop_times.len());
             for st in &trip.stop_times {
                 let raw_id = st.stop.id.as_str();
                 let stop_idx = *stop_by_id
                     .get(raw_id)
-                    .ok_or_else(|| GtfsError::MissingStop(raw_id.to_owned()))?;
+                    .ok_or_else(|| GtfsError::MissingStop {
+                        stop: raw_id.to_owned(),
+                        trip: trip_id.clone(),
+                        route: route_id.clone(),
+                        agency: agency_id.clone(),
+                    })?;
                 if st.departure_time.is_none() {
                     return Err(GtfsError::MissingDepartureTime {
                         trip: trip_id.clone(),
+                        route: route_id.clone(),
+                        agency: agency_id.clone(),
                         stop: raw_id.to_owned(),
                     });
                 }
@@ -923,5 +972,33 @@ mod tests {
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0], vec!["t1", "t3"]);
         assert_eq!(groups[1], vec!["t2"]);
+    }
+
+    #[test]
+    fn gtfs_error_messages_carry_route_and_agency() {
+        let with_agency = GtfsError::MissingStopTimes {
+            trip: "t-42".into(),
+            route: "r-7".into(),
+            agency: Some("a-99".into()),
+        };
+        let msg = with_agency.to_string();
+        assert!(msg.contains("t-42"), "missing trip id in {msg}");
+        assert!(msg.contains("r-7"), "missing route id in {msg}");
+        assert!(msg.contains("a-99"), "missing agency id in {msg}");
+
+        let without_agency = GtfsError::MissingStop {
+            stop: "s-1".into(),
+            trip: "t-42".into(),
+            route: "r-7".into(),
+            agency: None,
+        };
+        let msg = without_agency.to_string();
+        assert!(msg.contains("s-1"));
+        assert!(msg.contains("t-42"));
+        assert!(msg.contains("r-7"));
+        assert!(
+            msg.contains("agency ?"),
+            "missing agency placeholder in {msg}"
+        );
     }
 }
