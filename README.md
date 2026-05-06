@@ -81,7 +81,7 @@ let journeys = tt
 
 `with_walking_footpaths` uses an R-tree over an equirectangular projection (~0.5% accurate at city scale) and preserves any pre-existing `transfers.txt` entries.
 
-### Paris IDFM: the expensive case
+### Paris IDFM: expensive case
 
 Châtelet → Versailles Rive Droite crosses the IDFM region: the expanded RER feed has ~54k stops, ~146k active trips per weekday, and the optimal journey involves the RER C from Saint-Michel-Notre-Dame:
 
