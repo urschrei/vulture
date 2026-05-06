@@ -229,37 +229,80 @@ pub fn reference_solve(
         }
     }
 
-    // For each target, take all (trips, time) entries at that stop and
-    // shift the time by the target's walk_offset. Then merge across
-    // targets and Pareto-filter the union.
-    let mut at_pt: Vec<(u16, u8)> = Vec::new();
-    for &(target_stop, target_walk) in targets {
-        for (&(stop, t), &k) in min_trips.iter() {
-            if stop != target_stop || k > max_trips {
-                continue;
+    // Build `best_t_at[stop][k]` mirroring vulture's per-`(round, stop)`
+    // label bag with single-criterion ArrivalTime: the best arrival at
+    // `stop` reachable in *at most* `k` trips. Carry-forward semantics
+    // (best in ≤k trips is at most best in ≤k-1 trips) collapses any
+    // loop-back-with-more-trips that arrives later than a fewer-trips
+    // path to the same stop, matching vulture's bag domination —
+    // labels[k][stop] inherits from labels[k-1][stop], so a worse
+    // arrival at higher k is dropped at insert time.
+    let n_stops = prep.n_stops as usize;
+    let max_k = usize::from(max_trips);
+    let mut best_t_at: Vec<Vec<u16>> = vec![vec![u16::MAX; max_k + 1]; n_stops];
+    for (&(stop, t), &k) in min_trips.iter() {
+        if k as usize > max_k {
+            continue;
+        }
+        let cell = &mut best_t_at[stop as usize][k as usize];
+        if t < *cell {
+            *cell = t;
+        }
+    }
+    for row in best_t_at.iter_mut() {
+        for k in 1..=max_k {
+            if row[k - 1] < row[k] {
+                row[k] = row[k - 1];
             }
-            at_pt.push((t.saturating_add(target_walk), k));
         }
     }
 
-    // Pareto filter: sort by trip count ascending, keep strictly-decreasing
-    // arrival. Walk-only journeys (k == 0) are kept here so that they can
-    // dominate higher-k journeys – RAPTOR's local/target pruning has the
-    // same effect, dropping any route-based journey that doesn't improve
-    // on the walk-only τ\*(pt).
-    at_pt.sort_by_key(|&(t, k)| (k, t));
+    // RAPTOR's pt_threshold = min over targets of (walk-only arrival at
+    // target_stop + target_walk). Mirrors the algorithm's local/target
+    // pruning, which uses strict inequality on raw arrival vs threshold:
+    // a trip-based journey is dropped if its raw arrival at the target
+    // stop is ≥ τ*. Computed in raw-arrival space (not effective).
+    let walk_only_tau_star: u16 = targets
+        .iter()
+        .map(|&(target_stop, target_walk)| {
+            best_t_at[target_stop as usize][0].saturating_add(target_walk)
+        })
+        .min()
+        .unwrap_or(u16::MAX);
+
+    // For each target × k, emit a journey iff:
+    // 1. `best_t_at[target][k]` strictly improves on
+    //    `best_t_at[target][k-1]` — vulture's bag carries forward, so
+    //    no improvement at this k means no boarding-tree step at
+    //    (k, target, raw_arr) and reconstruction yields nothing.
+    // 2. The raw arrival is strictly less than the walk-only τ*, the
+    //    algorithm's local-pruning threshold.
+    // Walk-only journeys (k = 0) are never emitted: RAPTOR cannot
+    // produce empty plans.
+    let mut out: BTreeSet<(u16, u8)> = BTreeSet::new();
+    for &(target_stop, target_walk) in targets {
+        let row = &best_t_at[target_stop as usize];
+        for k in 1..=max_k {
+            if row[k] < row[k - 1] && row[k] < walk_only_tau_star {
+                let eff = row[k].saturating_add(target_walk);
+                out.insert((eff, k as u8));
+            }
+        }
+    }
+
+    // Pareto-filter across the union of (target, k) emissions: sort by
+    // (k, t), keep strictly-decreasing arrival.
+    let mut entries: Vec<(u16, u8)> = out.into_iter().collect();
+    entries.sort_by_key(|&(t, k)| (k, t));
     let mut best = u16::MAX;
-    let mut pareto: Vec<(u16, u8)> = Vec::new();
-    for (t, k) in at_pt {
+    let mut pareto: BTreeSet<(u16, u8)> = BTreeSet::new();
+    for (t, k) in entries {
         if t < best {
             best = t;
-            pareto.push((t, k));
+            pareto.insert((t, k));
         }
     }
-
-    // Drop walk-only (k == 0) entries from the *output*: RAPTOR cannot
-    // emit empty plans, so the harness must match that convention.
-    pareto.into_iter().filter(|&(_, k)| k > 0).collect()
+    pareto
 }
 
 /// Range-query reference: runs `reference_solve` once per departure
