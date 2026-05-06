@@ -219,17 +219,19 @@ type GtfsResult<T> = std::result::Result<T, GtfsError>;
 /// - [`GtfsTimetable::routes_for_gtfs_id`] – enumerate the synthetic
 ///   [`RouteIdx`]s produced from a single GTFS `route_id` (one per
 ///   distinct, non-overtaking stop-pattern equivalence class).
-pub struct GtfsTimetable<'gtfs> {
-    // Forward tables: idx -> &'gtfs str (original GTFS IDs).
-    stop_ids: Vec<&'gtfs str>,
-    route_ids: Vec<&'gtfs str>,
-    trip_ids: Vec<&'gtfs str>,
+pub struct GtfsTimetable {
+    // Forward tables: idx -> owned String (original GTFS IDs cloned at
+    // construction so the timetable doesn't borrow from the source
+    // `Gtfs` — callers can drop the parsed feed after building).
+    stop_ids: Vec<String>,
+    route_ids: Vec<String>,
+    trip_ids: Vec<String>,
 
     // Reverse tables.
-    stop_by_id: HashMap<&'gtfs str, StopIdx>,
-    route_by_id: HashMap<&'gtfs str, RouteIdx>,
-    routes_by_gtfs_id: HashMap<&'gtfs str, SmallVec<[RouteIdx; 2]>>,
-    trip_by_id: HashMap<&'gtfs str, TripIdx>,
+    stop_by_id: HashMap<String, StopIdx>,
+    route_by_id: HashMap<String, RouteIdx>,
+    routes_by_gtfs_id: HashMap<String, SmallVec<[RouteIdx; 2]>>,
+    trip_by_id: HashMap<String, TripIdx>,
 
     // For each stop, the routes serving it paired with the *earliest*
     // position of the stop on that route. Each route appears at most once
@@ -282,10 +284,10 @@ pub struct GtfsTimetable<'gtfs> {
     /// For each parent-station GTFS id, the child platform `StopIdx`es
     /// (each paired with a default zero walk time, ready to pass to
     /// `Query::from` / `Query::to` as a multi-source/multi-target query).
-    station_children: HashMap<&'gtfs str, Vec<(StopIdx, Duration)>>,
+    station_children: HashMap<String, Vec<(StopIdx, Duration)>>,
 }
 
-impl<'gtfs> GtfsTimetable<'gtfs> {
+impl GtfsTimetable {
     /// Creates a new timetable from a parsed GTFS feed for a specific
     /// service date.
     ///
@@ -306,7 +308,7 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
     /// the transitive closure. The [`Timetable`] trait requires the
     /// footpath relation to be transitively closed (see the trait-level
     /// docs).
-    pub fn new(gtfs: &'gtfs Gtfs, service_date: Date) -> GtfsResult<Self> {
+    pub fn new(gtfs: &Gtfs, service_date: Date) -> GtfsResult<Self> {
         Self::build(gtfs, service_date, 0)
     }
 
@@ -336,14 +338,14 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
     /// [`Journey::with_timing`](crate::Journey::with_timing)'s
     /// [`TimedLeg`](crate::TimedLeg) entries carry the same shifted
     /// times.
-    pub fn with_overnight_days(self, gtfs: &'gtfs Gtfs, n: u8) -> GtfsResult<Self> {
+    pub fn with_overnight_days(self, gtfs: &Gtfs, n: u8) -> GtfsResult<Self> {
         if n == self.n_overnight_days {
             return Ok(self);
         }
         Self::build(gtfs, self.base_date, n)
     }
 
-    fn build(gtfs: &'gtfs Gtfs, base_date: Date, n_overnight_days: u8) -> GtfsResult<Self> {
+    fn build(gtfs: &Gtfs, base_date: Date, n_overnight_days: u8) -> GtfsResult<Self> {
         // Build a small lookup of day_offset -> NaiveDate so the
         // service-day check is one cheap call per (trip, day) pair.
         let mut day_dates: Vec<NaiveDate> = Vec::with_capacity(usize::from(n_overnight_days) + 1);
@@ -358,13 +360,13 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
         }
 
         // 1. Intern stops in iteration order.
-        let mut stop_ids: Vec<&'gtfs str> = Vec::with_capacity(gtfs.stops.len());
-        let mut stop_by_id: HashMap<&'gtfs str, StopIdx> = HashMap::with_capacity(gtfs.stops.len());
+        let mut stop_ids: Vec<String> = Vec::with_capacity(gtfs.stops.len());
+        let mut stop_by_id: HashMap<String, StopIdx> = HashMap::with_capacity(gtfs.stops.len());
         let mut inaccessible_stops: HashSet<StopIdx> = HashSet::new();
         for (stop_id, stop) in &gtfs.stops {
             let idx = StopIdx::new(stop_ids.len() as u32);
-            stop_ids.push(stop_id.as_str());
-            stop_by_id.insert(stop_id.as_str(), idx);
+            stop_ids.push(stop_id.clone());
+            stop_by_id.insert(stop_id.clone(), idx);
             if matches!(stop.wheelchair_boarding, Availability::NotAvailable) {
                 inaccessible_stops.insert(idx);
             }
@@ -378,7 +380,7 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
         //    sit strictly after all day-(d-1) trips on the same route.
         type GroupKey<'g> = (&'g str, Vec<StopIdx>);
         type GroupEntries<'g> = Vec<(&'g str, u8)>;
-        let mut groups: std::collections::BTreeMap<GroupKey<'gtfs>, GroupEntries<'gtfs>> =
+        let mut groups: std::collections::BTreeMap<GroupKey<'_>, GroupEntries<'_>> =
             std::collections::BTreeMap::new();
         for (day_offset, &day_chrono) in day_dates.iter().enumerate() {
             let day_offset = day_offset as u8;
@@ -433,7 +435,7 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
         //    departure and split into non-overtaking sub-groups. Each
         //    sub-group becomes a synthetic RouteIdx; trips become TripIdxs
         //    in synthetic-route order.
-        let mut route_ids: Vec<&'gtfs str> = Vec::new();
+        let mut route_ids: Vec<String> = Vec::new();
         let mut stops_for_route: Vec<Vec<StopIdx>> = Vec::new();
         let mut trips_for_route: Vec<Vec<TripIdx>> = Vec::new();
         let mut arrival_times: Vec<Vec<Vec<SecondOfDay>>> = Vec::new();
@@ -442,10 +444,10 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
         let mut no_pickup: HashSet<(TripIdx, u32)> = HashSet::new();
         let mut no_drop_off: HashSet<(TripIdx, u32)> = HashSet::new();
         let mut inaccessible_trips: HashSet<TripIdx> = HashSet::new();
-        let mut trip_ids: Vec<&'gtfs str> = Vec::new();
-        let mut trip_by_id: HashMap<&'gtfs str, TripIdx> = HashMap::new();
-        let mut route_by_id: HashMap<&'gtfs str, RouteIdx> = HashMap::new();
-        let mut routes_by_gtfs_id: HashMap<&'gtfs str, SmallVec<[RouteIdx; 2]>> = HashMap::new();
+        let mut trip_ids: Vec<String> = Vec::new();
+        let mut trip_by_id: HashMap<String, TripIdx> = HashMap::new();
+        let mut route_by_id: HashMap<String, RouteIdx> = HashMap::new();
+        let mut routes_by_gtfs_id: HashMap<String, SmallVec<[RouteIdx; 2]>> = HashMap::new();
         let mut routes_for_stop: Vec<SmallVec<[(RouteIdx, u32); TYPICAL_ROUTES_PER_STOP]>> =
             vec![SmallVec::new(); stop_ids.len()];
 
@@ -454,7 +456,7 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             // Sort first by shifted first-stop departure (= day_offset *
             // 86400 + raw departure) so day-d trips appear strictly after
             // day-(d-1) trips on the same route.
-            let mut trips_with_schedules: Vec<(&'gtfs str, u8, &'gtfs [gtfs_structures::StopTime])> =
+            let mut trips_with_schedules: Vec<(&str, u8, &[gtfs_structures::StopTime])> =
                 trips
                     .into_iter()
                     .map(|(trip_id, day_offset)| {
@@ -473,19 +475,19 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
 
             for sub_group in split_non_overtaking(&trips_with_schedules) {
                 let route_idx = RouteIdx::new(route_ids.len() as u32);
-                route_ids.push(gtfs_route_id);
+                route_ids.push(gtfs_route_id.to_owned());
                 stops_for_route.push(stop_seq.clone());
 
                 let mut sub_trip_idxs: Vec<TripIdx> = Vec::with_capacity(sub_group.len());
                 for (trip_id, _day_offset) in &sub_group {
                     let trip_idx = TripIdx::new(trip_ids.len() as u32);
-                    trip_ids.push(trip_id);
+                    trip_ids.push((*trip_id).to_owned());
                     // trip_by_id maps to the FIRST occurrence (lowest
                     // day_offset) so external `tt.trip_idx(id)` lookups
                     // are deterministic when a trip is active on
                     // multiple days. Subsequent days' instances are
                     // reachable via `route_for_trip` / `trips_for_route`.
-                    trip_by_id.entry(trip_id).or_insert(trip_idx);
+                    trip_by_id.entry((*trip_id).to_owned()).or_insert(trip_idx);
                     sub_trip_idxs.push(trip_idx);
                     debug_assert_eq!(route_for_trip.len(), trip_idx.idx());
                     route_for_trip.push((route_idx, sub_trip_idxs.len() - 1));
@@ -528,9 +530,11 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
                 departure_times.push(dep_table);
                 trips_for_route.push(sub_trip_idxs);
 
-                route_by_id.entry(gtfs_route_id).or_insert(route_idx);
+                route_by_id
+                    .entry(gtfs_route_id.to_owned())
+                    .or_insert(route_idx);
                 routes_by_gtfs_id
-                    .entry(gtfs_route_id)
+                    .entry(gtfs_route_id.to_owned())
                     .or_default()
                     .push(route_idx);
 
@@ -567,19 +571,16 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
 
         // 5. Group child stops by their parent_station, so that callers
         //    can later query "all platforms of station X" with one lookup.
-        let mut station_children: HashMap<&'gtfs str, Vec<(StopIdx, Duration)>> = HashMap::new();
+        let mut station_children: HashMap<String, Vec<(StopIdx, Duration)>> = HashMap::new();
         for (stop_id, stop) in &gtfs.stops {
             if let Some(parent) = stop.parent_station.as_deref()
                 && let Some(&child_idx) = stop_by_id.get(stop_id.as_str())
+                && gtfs.stops.contains_key(parent)
             {
-                // Resolve `parent` against gtfs.stops to find its &'gtfs str
-                // key (so the map's key has the right lifetime).
-                if let Some((parent_key, _)) = gtfs.stops.get_key_value(parent) {
-                    station_children
-                        .entry(parent_key.as_str())
-                        .or_default()
-                        .push((child_idx, Duration::ZERO));
-                }
+                station_children
+                    .entry(parent.to_owned())
+                    .or_default()
+                    .push((child_idx, Duration::ZERO));
             }
         }
 
@@ -675,7 +676,7 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
     /// after [`GtfsTimetable::new`].
     pub fn with_walking_footpaths(
         mut self,
-        gtfs: &'gtfs Gtfs,
+        gtfs: &Gtfs,
         max_distance_m: f64,
         walking_speed_m_per_s: f64,
     ) -> Self {
@@ -743,19 +744,19 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
     }
 
     /// Returns the original GTFS `stop_id` for the given index.
-    pub fn stop_id(&self, stop: StopIdx) -> &'gtfs str {
-        self.stop_ids[stop.idx()]
+    pub fn stop_id(&self, stop: StopIdx) -> &str {
+        &self.stop_ids[stop.idx()]
     }
 
     /// Returns the original GTFS `route_id` for the given synthetic route.
     /// Several `RouteIdx`s may map to the same GTFS `route_id`.
-    pub fn route_id(&self, route: RouteIdx) -> &'gtfs str {
-        self.route_ids[route.idx()]
+    pub fn route_id(&self, route: RouteIdx) -> &str {
+        &self.route_ids[route.idx()]
     }
 
     /// Returns the original GTFS `trip_id` for the given index.
-    pub fn trip_id(&self, trip: TripIdx) -> &'gtfs str {
-        self.trip_ids[trip.idx()]
+    pub fn trip_id(&self, trip: TripIdx) -> &str {
+        &self.trip_ids[trip.idx()]
     }
 
     /// Looks up the index of a stop by its GTFS `stop_id`.
@@ -861,7 +862,7 @@ fn overtakes(
     })
 }
 
-impl<'gtfs> Timetable for GtfsTimetable<'gtfs> {
+impl Timetable for GtfsTimetable {
     fn n_stops(&self) -> usize {
         self.stop_ids.len()
     }

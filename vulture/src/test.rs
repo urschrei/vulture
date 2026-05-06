@@ -3063,3 +3063,74 @@ fn wheelchair_query_finds_accessible_sibling_at_same_departure() {
     assert_eq!(journeys.len(), 1, "expected one journey, got {journeys:#?}");
     assert_eq!(journeys[0].label.0.0, 51);
 }
+
+/// FFI entry points must work both with a concrete `&T: Timetable`
+/// (the in-Rust use) and with `&dyn Timetable` (the FFI use, where
+/// the binding holds a `Box<dyn Timetable>`). The trait's
+/// `query()` / `query_with_label()` methods are gated by
+/// `Self: Sized` so they're unavailable on trait objects; the ffi
+/// module exists precisely so FFI consumers don't need them.
+#[test]
+fn ffi_entry_points_accept_dyn_timetable() {
+    use crate::ffi;
+    use crate::labels::FareTable;
+
+    const A: u8 = 0;
+    const B: u8 = 1;
+    let tt = SimpleTimetable::new().route(
+        0u8,
+        &[A, B],
+        &[(
+            0u16,
+            &[
+                (SecondOfDay(0), SecondOfDay(0)),
+                (SecondOfDay(60), SecondOfDay(60)),
+            ],
+        )],
+    );
+
+    let s_a = tt.stop_idx_of(&A);
+    let s_b = tt.stop_idx_of(&B);
+    let origins = [(s_a, Duration::ZERO)];
+    let targets = [(s_b, Duration::ZERO)];
+
+    // Concrete &T path.
+    let arrival_concrete = ffi::run_arrival(&tt, &origins, &targets, 1, SecondOfDay(0), false);
+    let walk_concrete = ffi::run_walk(&tt, &origins, &targets, 1, SecondOfDay(0), false);
+    let fare_concrete = ffi::run_fare(
+        &tt,
+        &FareTable::default(),
+        &origins,
+        &targets,
+        1,
+        SecondOfDay(0),
+        false,
+    );
+
+    // &dyn Timetable path — the actual FFI shape.
+    let dyn_tt: &dyn crate::Timetable = &tt;
+    let arrival_dyn = ffi::run_arrival(dyn_tt, &origins, &targets, 1, SecondOfDay(0), false);
+    let walk_dyn = ffi::run_walk(dyn_tt, &origins, &targets, 1, SecondOfDay(0), false);
+    let fare_dyn = ffi::run_fare(
+        dyn_tt,
+        &FareTable::default(),
+        &origins,
+        &targets,
+        1,
+        SecondOfDay(0),
+        false,
+    );
+
+    assert_eq!(arrival_concrete.len(), 1);
+    assert_eq!(arrival_concrete[0].label.0.0, 60);
+    assert_eq!(arrival_dyn.len(), 1);
+    assert_eq!(arrival_dyn[0].label.0.0, 60);
+
+    assert_eq!(walk_concrete.len(), 1);
+    assert_eq!(walk_concrete[0].label.arrival.0, 60);
+    assert_eq!(walk_dyn.len(), 1);
+
+    assert_eq!(fare_concrete.len(), 1);
+    assert_eq!(fare_concrete[0].label.fare, 0);
+    assert_eq!(fare_dyn.len(), 1);
+}
