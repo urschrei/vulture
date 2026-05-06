@@ -123,6 +123,9 @@ pub(crate) fn raptor_range_rrap_arrival<T: Timetable + ?Sized>(
     targets: Endpoints,
     require_wheelchair_accessible: bool,
 ) -> Vec<RangeJourney<ArrivalTime>> {
+    // ArrivalTime's Ctx is `()`; the serial rRAPTOR specialisation
+    // doesn't expose ctx in its public signature.
+    let ctx: &<ArrivalTime as Label>::Ctx = &();
     let origins = origins.as_slice();
     let targets = targets.as_slice();
 
@@ -178,6 +181,7 @@ pub(crate) fn raptor_range_rrap_arrival<T: Timetable + ?Sized>(
         // labels with previous scans.
         run_raptor_rounds(
             tt,
+            ctx,
             labels,
             best_arrival,
             board_detail,
@@ -194,7 +198,7 @@ pub(crate) fn raptor_range_rrap_arrival<T: Timetable + ?Sized>(
 
         // (d) Snapshot per-target journeys for this τ.
         let snapshot =
-            extract_target_journeys(labels, board_detail, origin_set, targets, transfers);
+            extract_target_journeys(ctx, labels, board_detail, origin_set, targets, transfers);
         for journey in snapshot {
             output.push(RangeJourney {
                 depart: tau,

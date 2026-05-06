@@ -30,6 +30,7 @@ use crate::time::SecondOfDay;
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn relax_footpaths_round_closed<T: Timetable + ?Sized, L: Label>(
     timetable: &T,
+    ctx: &L::Ctx,
     k: K,
     labels: &mut [Vec<LabelBag<L>>],
     best_arrival: &mut [LabelBag<L>],
@@ -56,7 +57,7 @@ pub(crate) fn relax_footpaths_round_closed<T: Timetable + ?Sized, L: Label>(
         for &p_dash in timetable.get_footpaths_from(stop) {
             let walk = timetable.get_transfer_time(stop, p_dash);
             for source_label in &staged {
-                let via_walk = source_label.extend_by_footpath(walk);
+                let via_walk = source_label.extend_by_footpath(ctx, stop, p_dash, walk);
                 insert_into_bag(
                     labels,
                     best_arrival,
@@ -96,6 +97,7 @@ pub(crate) fn relax_footpaths_round_closed<T: Timetable + ?Sized, L: Label>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn relax_footpaths_round<T: Timetable + ?Sized, L: Label>(
     timetable: &T,
+    ctx: &L::Ctx,
     k: K,
     labels: &mut [Vec<LabelBag<L>>],
     best_arrival: &mut [LabelBag<L>],
@@ -140,7 +142,7 @@ pub(crate) fn relax_footpaths_round<T: Timetable + ?Sized, L: Label>(
             let walk = timetable.get_transfer_time(stop, p_dash);
             let mut any_added = false;
             for source_label in &staged {
-                let via_walk = source_label.extend_by_footpath(walk);
+                let via_walk = source_label.extend_by_footpath(ctx, stop, p_dash, walk);
                 if insert_into_bag(
                     labels,
                     best_arrival,

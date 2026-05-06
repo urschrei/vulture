@@ -73,6 +73,7 @@ pub(crate) fn earliest_accessible_trip<T: Timetable + ?Sized>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
     tt: &T,
+    ctx: &L::Ctx,
     labels: &mut [Vec<LabelBag<L>>],
     best_arrival: &mut [LabelBag<L>],
     board_detail: &mut BoardingTree,
@@ -96,6 +97,7 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
     if footpaths_closed {
         relax_footpaths_round_closed(
             tt,
+            ctx,
             0,
             labels,
             best_arrival,
@@ -108,6 +110,7 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
     } else {
         relax_footpaths_round(
             tt,
+            ctx,
             0,
             labels,
             best_arrival,
@@ -162,11 +165,13 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
         marked_stops.clear();
 
         // Per-route Pareto bag of riding entries. Each entry =
-        // (boarding_label, current_trip, boarding_stop); a single
-        // entry suffices for `ArrivalTime` (size-1 stop bags) but
-        // multi-criterion impls may carry multiple Pareto-optimal
-        // entries that boarded different trips.
-        let mut route_bag: SmallVec<[(L, TripIdx, StopIdx); 8]> = SmallVec::new();
+        // (boarding_label, current_trip, boarding_stop, board_pos); a
+        // single entry suffices for `ArrivalTime` (size-1 stop bags)
+        // but multi-criterion impls may carry multiple Pareto-optimal
+        // entries that boarded different trips. `board_pos` is
+        // threaded through so labels with per-trip context (e.g. fares)
+        // can know where the rider got on.
+        let mut route_bag: SmallVec<[(L, TripIdx, StopIdx, u32); 8]> = SmallVec::new();
         let mut staged: SmallVec<[L; 8]> = SmallVec::new();
 
         for &route in q_routes.iter() {
@@ -179,7 +184,7 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
                 // 1. Alight every active riding entry at pi.
                 let stop_accessible_ok =
                     !require_wheelchair_accessible || tt.stop_wheelchair_accessible(pi);
-                for &(boarding_label, trip, boarding_stop) in route_bag.iter() {
+                for &(boarding_label, trip, boarding_stop, board_pos) in route_bag.iter() {
                     // Skip stops where this trip doesn't allow drop-off
                     // (GTFS drop_off_type = 1). The trip still passes
                     // through `pi`, but the rider cannot disembark, so
@@ -198,7 +203,16 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
                     if arr >= time_to_beat {
                         continue;
                     }
-                    let new_label = boarding_label.extend_by_trip(arr);
+                    let new_label = boarding_label.extend_by_trip(
+                        ctx,
+                        trip,
+                        route,
+                        boarding_stop,
+                        board_pos,
+                        pi,
+                        pos,
+                        arr,
+                    );
                     if labels[k][pi.idx()].insert(new_label) {
                         best_arrival[pi.idx()].insert(new_label);
                         board_detail.insert(
@@ -237,7 +251,7 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
                     // dominates candidate AND boards an at-or-earlier
                     // trip at pi → candidate is redundant.
                     let mut redundant = false;
-                    for &(l_existing, t_existing, _) in route_bag.iter() {
+                    for &(l_existing, t_existing, _, _) in route_bag.iter() {
                         let existing_dep = tt.get_departure_time(t_existing, pos);
                         if l_existing.dominates(candidate) && existing_dep <= trip_dep {
                             redundant = true;
@@ -249,11 +263,11 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
                     }
 
                     // Remove entries strictly dominated by candidate.
-                    route_bag.retain(|&mut (l_existing, t_existing, _)| {
+                    route_bag.retain(|&mut (l_existing, t_existing, _, _)| {
                         let existing_dep = tt.get_departure_time(t_existing, pos);
                         !(candidate.dominates(&l_existing) && trip_dep <= existing_dep)
                     });
-                    route_bag.push((*candidate, trip, pi));
+                    route_bag.push((*candidate, trip, pi, pos));
                 }
             }
         }
@@ -270,6 +284,7 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
         if footpaths_closed {
             relax_footpaths_round_closed(
                 tt,
+                ctx,
                 k,
                 labels,
                 best_arrival,
@@ -282,6 +297,7 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
         } else {
             relax_footpaths_round(
                 tt,
+                ctx,
                 k,
                 labels,
                 best_arrival,
@@ -312,6 +328,7 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
     tt: &T,
+    ctx: &L::Ctx,
     cache: &mut RaptorCache<L>,
     transfers: usize,
     depart: SecondOfDay,
@@ -349,7 +366,7 @@ pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
     // (origin_set bit is set), so origins don't need a Step entry.
     for &(o, walk) in origins {
         let t = depart + walk;
-        let seed = L::from_departure(t);
+        let seed = L::from_departure(ctx, t);
         if labels[0][o.idx()].insert(seed) {
             best_arrival[o.idx()].insert(seed);
             marked_stops.insert(o.idx());
@@ -359,6 +376,7 @@ pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
 
     run_raptor_rounds(
         tt,
+        ctx,
         labels,
         best_arrival,
         board_detail,
@@ -378,7 +396,7 @@ pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
     // Effective label = bag label extended by the target's walk
     // time offset.
     let mut journeys =
-        extract_target_journeys(labels, board_detail, origin_set, targets, transfers);
+        extract_target_journeys(ctx, labels, board_detail, origin_set, targets, transfers);
 
     // Output-side Pareto filter on (trip count, label). For any two
     // returned journeys neither weakly dominates the other on the

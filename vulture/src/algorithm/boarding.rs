@@ -133,6 +133,7 @@ pub(crate) fn reconstruct_journey(
 /// `reconstruct_journey`, and applies the target's walk-time offset.
 /// Output is unfiltered (caller applies any Pareto front filtering).
 pub(crate) fn extract_target_journeys<L: Label>(
+    ctx: &L::Ctx,
     labels: &[Vec<LabelBag<L>>],
     board_detail: &BoardingTree,
     origin_set: &FixedBitSet,
@@ -153,7 +154,14 @@ pub(crate) fn extract_target_journeys<L: Label>(
                 else {
                     continue;
                 };
-                let label = raw_label.extend_by_footpath(walk);
+                // The user's target walk-offset is conceptually "walk
+                // from the algorithm's target stop to the rider's
+                // effective destination." We don't have a distinct
+                // StopIdx for the destination, so pass `(target,
+                // target)` — labels carrying spatial criteria treat
+                // it as no-op, labels carrying time-only criteria add
+                // `walk` to their arrival.
+                let label = raw_label.extend_by_footpath(ctx, target, target, walk);
                 journeys.push(Journey {
                     origin,
                     target,

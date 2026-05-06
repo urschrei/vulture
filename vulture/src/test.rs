@@ -1,4 +1,5 @@
 use crate::Duration;
+use crate::Journey;
 use crate::RaptorCache;
 use crate::RaptorCachePool;
 use crate::SecondOfDay;
@@ -2741,4 +2742,225 @@ fn require_wheelchair_returns_no_journey_when_only_trip_is_inaccessible() {
         filtered.iter().all(|j| j.plan.is_empty()),
         "no transit journey should exist when the only trip is inaccessible, got {filtered:?}"
     );
+}
+
+// ── ArrivalAndFare label tests ────────────────────────────────────
+
+#[test]
+fn arrival_and_fare_returns_pareto_front() {
+    // Mirrors the shape of `arrival_and_walk_returns_pareto_front`:
+    // two routes reach two intermediate stops X and Y, both walking
+    // to the target T. Path via X is faster (arr 15) but uses the
+    // expensive route (fare 500); path via Y is slower (arr 21) but
+    // free. Neither dominates the other on (arrival, fare).
+    //
+    // Note on shape: putting the divergence at intermediate stops
+    // rather than at the target stop sidesteps the algorithm's
+    // single-criterion arrival-time pruning in the route-scan
+    // alighting block (footpath relaxation is Pareto-aware while
+    // route-scan alighting is not). This is a pre-existing
+    // algorithm property, not specific to ArrivalAndFare.
+    use crate::labels::{ArrivalAndFare, FareTable};
+    use std::collections::HashMap;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum S {
+        A,
+        X,
+        Y,
+        T,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum R {
+        Fast,
+        Slow,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Tr {
+        T1,
+        T2,
+    }
+
+    // Fast route arrives X at 10, walk X->T 5s -> (arr 15, fare 500).
+    // Slow route arrives Y at 20, walk Y->T 1s -> (arr 21, fare 0).
+    let tt = SimpleTimetable::new()
+        .route(
+            R::Fast,
+            &[S::A, S::X],
+            &[(
+                Tr::T1,
+                &[
+                    (SecondOfDay(0), SecondOfDay(0)),
+                    (SecondOfDay(10), SecondOfDay(10)),
+                ],
+            )],
+        )
+        .route(
+            R::Slow,
+            &[S::A, S::Y],
+            &[(
+                Tr::T2,
+                &[
+                    (SecondOfDay(0), SecondOfDay(0)),
+                    (SecondOfDay(20), SecondOfDay(20)),
+                ],
+            )],
+        )
+        .footpath(S::X, S::T)
+        .transfer_time(S::X, S::T, Duration(5))
+        .footpath(S::Y, S::T)
+        .transfer_time(S::Y, S::T, Duration(1));
+
+    let fast_route = tt.route_idx_of(&R::Fast);
+    let mut per_route = HashMap::new();
+    per_route.insert(fast_route, 500u32);
+    let fares = FareTable { per_route };
+
+    let journeys: Vec<Journey<ArrivalAndFare>> = tt
+        .query_with_label::<ArrivalAndFare>()
+        .with_context(fares)
+        .from(&[(tt.stop_idx_of(&S::A), Duration::ZERO)])
+        .to(&[(tt.stop_idx_of(&S::T), Duration::ZERO)])
+        .max_transfers(3)
+        .depart_at(SecondOfDay(0))
+        .run();
+
+    let by_arrival: std::collections::BTreeMap<u32, u32> = journeys
+        .iter()
+        .filter(|j| !j.plan.is_empty())
+        .map(|j| (j.label.arrival.0, j.label.fare))
+        .collect();
+    assert!(
+        by_arrival.contains_key(&15),
+        "fast+expensive journey missing: {by_arrival:?}",
+    );
+    assert!(
+        by_arrival.contains_key(&21),
+        "slow+free journey missing: {by_arrival:?}",
+    );
+    assert_eq!(by_arrival[&15], 500);
+    assert_eq!(by_arrival[&21], 0);
+}
+
+#[test]
+fn arrival_and_fare_dominated_route_dropped() {
+    // R1 dominates R2 on both criteria (faster AND cheaper). R2's
+    // journey should be filtered out at the round-1 Pareto bag.
+    use crate::labels::{ArrivalAndFare, FareTable};
+    use std::collections::HashMap;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Stop {
+        A,
+        B,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Route {
+        R1,
+        R2,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Trip {
+        T1,
+        T2,
+    }
+    use Route::*;
+    use Stop::*;
+    use Trip::*;
+
+    let tt = SimpleTimetable::new()
+        .route(
+            R1,
+            &[A, B],
+            &[(
+                T1,
+                &[
+                    (SecondOfDay(0), SecondOfDay(0)),
+                    (SecondOfDay(100), SecondOfDay(100)),
+                ],
+            )],
+        )
+        .route(
+            R2,
+            &[A, B],
+            &[(
+                T2,
+                &[
+                    (SecondOfDay(0), SecondOfDay(0)),
+                    (SecondOfDay(150), SecondOfDay(150)),
+                ],
+            )],
+        );
+
+    let r2_route = tt.route_idx_of(&R2);
+    let mut per_route = HashMap::new();
+    per_route.insert(r2_route, 100u32);
+    let fares = FareTable { per_route };
+
+    let journeys = tt
+        .query_with_label::<ArrivalAndFare>()
+        .with_context(fares)
+        .from(&[(tt.stop_idx_of(&A), Duration::ZERO)])
+        .to(&[(tt.stop_idx_of(&B), Duration::ZERO)])
+        .max_transfers(1)
+        .depart_at(SecondOfDay(0))
+        .run();
+
+    let by_trips: Vec<&Journey<ArrivalAndFare>> =
+        journeys.iter().filter(|j| j.plan.len() == 1).collect();
+    assert_eq!(by_trips.len(), 1, "R2 should be dominated and dropped");
+    let kept = by_trips[0];
+    assert_eq!(kept.label.arrival.0, 100);
+    assert_eq!(kept.label.fare, 0);
+}
+
+#[test]
+fn arrival_and_fare_default_ctx_is_zero_fare() {
+    // Without `.with_context(...)` the default FareTable is empty,
+    // so every journey runs at fare = 0 and ArrivalAndFare reduces
+    // to ArrivalTime semantics on a single route.
+    use crate::labels::ArrivalAndFare;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Stop {
+        A,
+        B,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Route {
+        R,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Trip {
+        T,
+    }
+    use Route::*;
+    use Stop::*;
+    use Trip::*;
+
+    let tt = SimpleTimetable::new().route(
+        R,
+        &[A, B],
+        &[(
+            T,
+            &[
+                (SecondOfDay(0), SecondOfDay(0)),
+                (SecondOfDay(100), SecondOfDay(100)),
+            ],
+        )],
+    );
+
+    let journeys = tt
+        .query_with_label::<ArrivalAndFare>()
+        .from(&[(tt.stop_idx_of(&A), Duration::ZERO)])
+        .to(&[(tt.stop_idx_of(&B), Duration::ZERO)])
+        .max_transfers(1)
+        .depart_at(SecondOfDay(0))
+        .run();
+    let kept = journeys
+        .iter()
+        .find(|j| j.plan.len() == 1)
+        .expect("a one-trip journey should exist");
+    assert_eq!(kept.label.arrival.0, 100);
+    assert_eq!(kept.label.fare, 0, "no FareTable -> fare should be zero");
 }

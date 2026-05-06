@@ -246,6 +246,7 @@ pub trait Timetable {
             targets: Endpoints::new(),
             max_transfers: Transfers(10),
             require_wheelchair_accessible: false,
+            ctx: Default::default(),
             mode: NeedsDeparture,
             _label: PhantomData,
         }
@@ -285,6 +286,7 @@ pub trait Timetable {
             targets: Endpoints::new(),
             max_transfers: Transfers(10),
             require_wheelchair_accessible: false,
+            ctx: Default::default(),
             mode: NeedsDeparture,
             _label: PhantomData,
         }

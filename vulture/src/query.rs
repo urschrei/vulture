@@ -99,6 +99,13 @@ where
     /// stops for which [`Timetable::stop_wheelchair_accessible`] returns
     /// `false`. Defaults to `false` (no filtering).
     pub(crate) require_wheelchair_accessible: bool,
+    /// Sidecar data threaded into every [`Label`] call. For
+    /// `L::Ctx = ()` (the default for `ArrivalTime` and
+    /// `ArrivalAndWalk`) this is zero-sized and free; custom labels
+    /// like a fare-aware `ArrivalAndFare` use it to carry per-route
+    /// fare tables, stop → zone maps, etc. Replace via
+    /// [`Query::with_context`].
+    pub(crate) ctx: L::Ctx,
     pub(crate) mode: M,
     pub(crate) _label: PhantomData<L>,
 }
@@ -140,6 +147,7 @@ where
             targets: self.targets,
             max_transfers: self.max_transfers,
             require_wheelchair_accessible: self.require_wheelchair_accessible,
+            ctx: self.ctx,
             mode: SingleDeparture { at: t.into() },
             _label: PhantomData,
         }
@@ -167,9 +175,22 @@ where
             targets: self.targets,
             max_transfers: self.max_transfers,
             require_wheelchair_accessible: self.require_wheelchair_accessible,
+            ctx: self.ctx,
             mode: RangeDeparture { departures },
             _label: PhantomData,
         }
+    }
+
+    /// Replace the per-`Label` sidecar context. The default is
+    /// [`Default::default`] for `L::Ctx`, which is `()` for
+    /// [`ArrivalTime`](crate::ArrivalTime) and
+    /// [`ArrivalAndWalk`](crate::labels::ArrivalAndWalk). Custom
+    /// labels with non-trivial context (e.g. a fare-aware
+    /// `ArrivalAndFare` carrying a per-route fare table) need to
+    /// chain this before `.depart_at(...)`.
+    pub fn with_context(mut self, ctx: L::Ctx) -> Self {
+        self.ctx = ctx;
+        self
     }
 
     /// Restrict the algorithm to wheelchair-accessible trips and stops.
@@ -217,6 +238,7 @@ where
     pub fn run_with_cache(self, cache: &mut RaptorCache<L>) -> Vec<Journey<L>> {
         run_per_call_query(
             self.tt,
+            &self.ctx,
             cache,
             self.max_transfers.0 as usize,
             self.mode.at,
@@ -268,6 +290,7 @@ impl<'tt, T, L> Query<'tt, T, L, RangeDeparture>
 where
     T: Timetable + Sized + Sync,
     L: Label + Send + Sync,
+    L::Ctx: Sync,
 {
     /// Execute the range query in parallel, allocating a fresh
     /// [`RaptorCachePool`]. Per-departure work fans out across Rayon's
@@ -297,6 +320,7 @@ where
         let tt = self.tt;
         let departures = self.mode.departures;
         let require_accessible = self.require_wheelchair_accessible;
+        let ctx = self.ctx;
 
         let all: Vec<RangeJourney<L>> = departures
             .par_iter()
@@ -304,6 +328,7 @@ where
                 let mut cache = pool.checkout();
                 let journeys = run_per_call_query(
                     tt,
+                    &ctx,
                     &mut *cache,
                     transfers,
                     depart,
