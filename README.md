@@ -197,6 +197,25 @@ For range-query latencies (serial rRAPTOR vs parallel naïve batch), see the [be
 
 For an issue-by-issue walk through the algorithmic correctness of the implementation against the paper – including the historical record of bugs found and fixed – see [`docs/soundness.md`](docs/soundness.md). The [`vulture-proptest`](vulture-proptest/) harness runs the algorithm against a brute-force reference solver on every test invocation as live validation.
 
+## How Vulture is tested
+
+Three overlapping layers, all run by `cargo nextest r` on every PR:
+
+- **Unit tests** in `vulture/src/test.rs` cover the algorithm (single-source, multi-source, range queries, footpath relaxation, wheelchair filtering, multi-day overnight) and the GTFS adapter against hand-built `SimpleTimetable` fixtures and the bundled Delhi Metro feed.
+- **Doctests** on every public type with a non-trivial contract (`Label`, `Query`, `Journey`, `RaptorCache`, `GtfsTimetable::station_stops`, etc.)
+- **Property-based tests** in [`vulture-proptest`](vulture-proptest/) generate random transit networks and check the algorithm against a brute-force reference solver. Powered by [Hegel](https://github.com/hegeldev/hegel-rust).
+
+The proptest harness ships three generator layers – Layer 1 (1–2 routes, 2–4 stops, no footpaths), Layer 2 (adds 1–4 footpaths), Layer 3 (1–4 routes, up to 6 stops, optional footpaths, multi-source/multi-target queries with walk offsets, per-route fares for fare-label tests) — and six properties:
+
+| Property | What it checks |
+| --- | --- |
+| `layer{1,2,3}_matches_reference` | Algorithm output equals the brute-force reference solver's Pareto front of `(arrival, trip_count)` for randomly generated networks at each layer. |
+| `parallel_naive_matches_serial_rrap` | The serial rRAPTOR range path and the parallel naïve batch return the same Pareto profile. |
+| `range_query_matches_reference` | Range-query output equals an independent brute-force reference: per-`τ` solve plus the same 3-D Pareto filter (later depart, fewer transfers, earlier arrival) vulture's `filter_range_pareto_front` uses. |
+| `fare_label_matches_per_leg_sum` | The `ArrivalAndFare` label's accumulated fare equals the per-leg sum of fares on every returned journey. |
+
+Hegel persists shrunk failing seeds to `.hegel/` so failures are deterministically reproducible. See [`vulture-proptest/README.md`](vulture-proptest/README.md) for the layer/issue map and instructions for adding a new layer or property.
+
 ## Cargo features
 
 - `parallel` (default-on) – pulls in `rayon`, enables `Query::run_par` / `Query::run_with_pool`. Opt out with `default-features = false` for wasm or minimal builds; `RaptorCachePool` itself stays available.
