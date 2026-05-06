@@ -131,10 +131,12 @@ where
     }
 
     /// Cap the number of transit boardings the algorithm explores.
-    /// The default is 10. Pass an integer literal – `.max_transfers(10)`
-    /// works directly, no suffix needed.
-    pub fn max_transfers(mut self, n: u8) -> Self {
-        self.max_transfers = Transfers(n);
+    /// The default is 10. Accepts any [`Into<Transfers>`] —
+    /// `.max_transfers(10)` works directly via the
+    /// [`From<u8>`](Transfers#impl-From<u8>-for-Transfers) impl, and
+    /// you can pass an existing [`Transfers`] value too.
+    pub fn max_transfers(mut self, n: impl Into<Transfers>) -> Self {
+        self.max_transfers = n.into();
         self
     }
 
