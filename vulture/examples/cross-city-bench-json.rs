@@ -124,7 +124,7 @@ fn main() -> Result<()> {
 
         let load_start = Instant::now();
         let gtfs = Gtfs::new(&feed.path)?;
-        let mut tt = GtfsTimetable::new(&gtfs, date, 0)?;
+        let mut tt = GtfsTimetable::new(&gtfs, date)?;
         if let Some(d) = feed.walking_footpaths_m {
             tt = tt.with_walking_footpaths(&gtfs, d, 1.4);
         } else {

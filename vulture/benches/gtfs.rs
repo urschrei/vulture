@@ -39,7 +39,7 @@ fn bench_gtfs_load(c: &mut Criterion) {
     c.bench_function("gtfs_load", |b| {
         b.iter(|| {
             let gtfs = Gtfs::new(GTFS_PATH).unwrap();
-            let timetable = GtfsTimetable::new(&gtfs, service_date(), 0).unwrap();
+            let timetable = GtfsTimetable::new(&gtfs, service_date()).unwrap();
             black_box(&timetable);
         });
     });
@@ -47,7 +47,7 @@ fn bench_gtfs_load(c: &mut Criterion) {
 
 fn bench_gtfs_query(c: &mut Criterion) {
     let gtfs = Gtfs::new(GTFS_PATH).unwrap();
-    let timetable = GtfsTimetable::new(&gtfs, service_date(), 0).unwrap();
+    let timetable = GtfsTimetable::new(&gtfs, service_date()).unwrap();
     let mut cache = RaptorCache::for_timetable(&timetable);
 
     let mut group = c.benchmark_group("gtfs_query");
@@ -88,7 +88,7 @@ fn bench_gtfs_query(c: &mut Criterion) {
 /// single-core or narrow windows rRAPTOR wins.
 fn bench_gtfs_range_query(c: &mut Criterion) {
     let gtfs = Gtfs::new(GTFS_PATH).unwrap();
-    let timetable = GtfsTimetable::new(&gtfs, service_date(), 0).unwrap();
+    let timetable = GtfsTimetable::new(&gtfs, service_date()).unwrap();
     let mut cache = RaptorCache::for_timetable(&timetable);
     let pool = RaptorCachePool::for_timetable(&timetable);
 

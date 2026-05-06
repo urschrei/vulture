@@ -13,7 +13,7 @@ use vulture::{SecondOfDay, Timetable};
 use vulture::gtfs::GtfsTimetable;
 
 let gtfs = Gtfs::new("aux/dmrc_gtfs.zip")?;
-let tt = GtfsTimetable::new(&gtfs, date(2024, 1, 15), 0)?;
+let tt = GtfsTimetable::new(&gtfs, date(2024, 1, 15))?;
 
 let start = tt.stop_idx("1").expect("Dilshad Garden");
 let target = tt.stop_idx("44").expect("Vishwavidyalaya");
@@ -39,7 +39,7 @@ A returned `Journey` has `plan: Vec<(RouteIdx, StopIdx)>` ("take this route, get
 
 ```rust,ignore
 let gtfs = Gtfs::from_url("https://example.org/feed/gtfs.zip")?;
-let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4), 0)?;
+let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?;
 ```
 
 ## Worked examples
@@ -49,7 +49,7 @@ let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4), 0)?;
 A station like Berlin Hbf has hundreds of platforms; you don't usually care which one. `GtfsTimetable::station_stops(parent_id)` expands a parent station to its child platforms and the multi-source/multi-target search picks the best combination:
 
 ```rust,ignore
-let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4), 0)?;
+let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?;
 
 let journeys = tt
     .query()
@@ -162,7 +162,7 @@ The `vulture/examples/` directory has four self-contained, synthetic-network exa
 - **`RaptorCache`** – reusable scratch allocations across queries against one timetable. **`RaptorCachePool`** is the `Sync` variant for thread pools.
 - **Per-leg timing** – [`journey.with_timing(&tt, depart, origin_walk)`](https://docs.rs/vulture/latest/vulture/struct.Journey.html#method.with_timing) reconstructs trip IDs and per-leg depart/arrive times. `Journey.plan` alone is just topology.
 - **Wheelchair-accessibility filter** – chain [`require_wheelchair_accessible()`](https://docs.rs/vulture/latest/vulture/struct.Query.html#method.require_wheelchair_accessible) on the query builder to skip trips where `trips.wheelchair_accessible = 2` and stops where `stops.wheelchair_boarding = 2`. Default behaviour is unchanged.
-- **Multi-day search** – pass `n_overnight_days` to [`GtfsTimetable::new(&gtfs, date, n)`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html#method.new) to load `n` additional service days after the base date, shifting day-`d` trips into a single time axis so a 23:00 query can catch tomorrow morning's first train.
+- **Multi-day search** – [`GtfsTimetable::new_with_overnight_days(&gtfs, date, OvernightDays(n))`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html#method.new_with_overnight_days) loads `n` additional service days after the base date, shifting day-`d` trips into a single time axis so a 23:00 query can catch tomorrow morning's first train.
 
 ## When To Use What
 
@@ -175,7 +175,7 @@ The `vulture/examples/` directory has four self-contained, synthetic-network exa
 | "Slower route with less walking" | `tt.query_with_label::<ArrivalAndWalk>()...run()` |
 | "Cheapest vs. fastest journey" | `tt.query_with_label::<ArrivalAndFare>().with_context(fares)...run()` |
 | Wheelchair-only routing | `tt.query()....require_wheelchair_accessible()....run()` |
-| "Last train home" / overnight queries | `GtfsTimetable::new(&gtfs, date, 1)?` |
+| "Last train home" / overnight queries | `GtfsTimetable::new_with_overnight_days(&gtfs, date, OvernightDays(1))?` |
 | Any platform of a station | `tt.station_stops(parent_id)` into `.from(...)` / `.to(...)` |
 | Sparse `transfers.txt` | `.with_walking_footpaths(&gtfs, max_dist_m, speed_m_per_s)` at construction |
 | Trip IDs and per-leg times in output | `journey.with_timing(&tt, depart, origin_walk)` |
