@@ -166,6 +166,7 @@ mod query;
 mod time;
 mod timetable;
 
+pub mod ffi;
 pub mod gtfs;
 pub mod labels;
 /// In-memory `Timetable` adapter you build by hand with `.route(...)` /

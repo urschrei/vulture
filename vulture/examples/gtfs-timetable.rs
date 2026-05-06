@@ -63,12 +63,7 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_journey<'gtfs>(
-    gtfs: &'gtfs Gtfs,
-    timetable: &GtfsTimetable<'gtfs>,
-    journey: &Journey,
-    start: &'gtfs str,
-) {
+fn print_journey(gtfs: &Gtfs, timetable: &GtfsTimetable, journey: &Journey, start: &str) {
     let start_name = gtfs
         .stops
         .get(start)
