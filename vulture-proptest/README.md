@@ -91,11 +91,3 @@ To add a Layer 4 (e.g., for McRAPTOR in roadmap Phase 2):
 3. If the new layer requires multi-criterion comparison, the property
    helper (`run_property`) and `raptor_front` will need to be generalised.
    That's a Phase 2 concern.
-
-## Wall-clock budget
-
-Target: full property-test suite under 10 seconds on a developer laptop at
-default case counts. If the budget blows out, the most likely culprit is
-over-generation in the reference solver's node set; the
-adjacent-timepoint-only wait-edge model already caps this. Drop Layer 3's
-`test_cases` first.
