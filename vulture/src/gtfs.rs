@@ -92,7 +92,7 @@ fn is_service_active(gtfs: &Gtfs, service_id: &str, date: NaiveDate) -> bool {
 /// rest of this crate uses `jiff` so users only see one date type.
 fn jiff_to_chrono(d: Date) -> NaiveDate {
     NaiveDate::from_ymd_opt(d.year() as i32, d.month() as u32, d.day() as u32)
-        .expect("jiff date is a valid civil date")
+        .expect("jiff::civil::Date guarantees a valid (year, month, day) triple")
 }
 
 const TYPICAL_ROUTES_PER_STOP: usize = 8;
@@ -369,12 +369,17 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
                 trips
                     .into_iter()
                     .map(|trip_id| {
-                        let trip = gtfs.get_trip(trip_id).expect("just inserted");
+                        let trip = gtfs.get_trip(trip_id).expect(
+                            "trip_id is a key in gtfs.trips (groups was built by iterating gtfs.trips earlier in new())",
+                        );
                         (trip_id, trip.stop_times.as_slice())
                     })
                     .collect();
-            trips_with_schedules
-                .sort_by_key(|(_, st)| st[0].departure_time.expect("validated above"));
+            trips_with_schedules.sort_by_key(|(_, st)| {
+                st[0].departure_time.expect(
+                    "first stop_time.departure_time is required by the GtfsError::MissingDepartureTime check earlier in new()",
+                )
+            });
 
             for sub_group in split_non_overtaking(&trips_with_schedules) {
                 let route_idx = RouteIdx::new(route_ids.len() as u32);
@@ -389,13 +394,11 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
                     sub_trip_idxs.push(trip_idx);
                     debug_assert_eq!(route_for_trip.len(), trip_idx.idx());
                     route_for_trip.push((route_idx, sub_trip_idxs.len() - 1));
-                    let trip = gtfs.get_trip(trip_id).expect("validated above");
-                    if matches!(trip.wheelchair_accessible, Availability::NotAvailable) {
-                        inaccessible_trips.insert(trip_idx);
-                    }
                 }
 
                 // Per-route arrival/departure tables: shape [stop_pos][trip_pos].
+                // Single per-trip pass that also captures pickup/drop-off
+                // and wheelchair flags, so we look up each trip once.
                 let n_stops_in_route = stop_seq.len();
                 let n_trips_in_route = sub_group.len();
                 let mut arr_table: Vec<Vec<SecondOfDay>> =
@@ -403,13 +406,20 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
                 let mut dep_table: Vec<Vec<SecondOfDay>> =
                     vec![vec![SecondOfDay::MAX; n_trips_in_route]; n_stops_in_route];
                 for (trip_pos, trip_id) in sub_group.iter().enumerate() {
-                    let trip = gtfs.get_trip(trip_id).expect("validated above");
+                    let trip = gtfs.get_trip(trip_id).expect(
+                        "trip_id originated from gtfs.trips and survived service-day filtering",
+                    );
                     let trip_idx = sub_trip_idxs[trip_pos];
+                    if matches!(trip.wheelchair_accessible, Availability::NotAvailable) {
+                        inaccessible_trips.insert(trip_idx);
+                    }
                     for (stop_pos, st) in trip.stop_times.iter().enumerate() {
                         if let Some(a) = st.arrival_time {
                             arr_table[stop_pos][trip_pos] = SecondOfDay(a);
                         }
-                        let d = st.departure_time.expect("validated at construction");
+                        let d = st.departure_time.expect(
+                            "stop_time.departure_time is required by the GtfsError::MissingDepartureTime check earlier in new()",
+                        );
                         dep_table[stop_pos][trip_pos] = SecondOfDay(d);
                         if matches!(st.pickup_type, PickupDropOffType::NotAvailable) {
                             no_pickup.insert((trip_idx, stop_pos as u32));
@@ -446,7 +456,9 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             if stop.transfers.is_empty() {
                 continue;
             }
-            let from_idx = *stop_by_id.get(stop_id.as_str()).expect("stop interned");
+            let from_idx = *stop_by_id
+                .get(stop_id.as_str())
+                .expect("every stop_id was interned by the stops loop at the start of new()");
             for t in &stop.transfers {
                 let Some(&to_idx) = stop_by_id.get(t.to_stop_id.as_str()) else {
                     continue;
@@ -690,7 +702,9 @@ fn split_non_overtaking<'gtfs>(
     let mut sub_groups: Vec<Vec<(&'gtfs str, &'gtfs [gtfs_structures::StopTime])>> = Vec::new();
     'outer: for &entry in trips {
         for sub_group in &mut sub_groups {
-            let (_, last_st) = *sub_group.last().expect("non-empty by construction");
+            let (_, last_st) = *sub_group
+                .last()
+                .expect("sub_groups are seeded with vec![entry] and only ever grown");
             if !overtakes(last_st, entry.1) {
                 sub_group.push(entry);
                 continue 'outer;
@@ -709,8 +723,12 @@ fn split_non_overtaking<'gtfs>(
 /// times at every stop (validated at construction).
 fn overtakes(earlier: &[gtfs_structures::StopTime], later: &[gtfs_structures::StopTime]) -> bool {
     earlier.iter().zip(later).any(|(es, ls)| {
-        let e_dep = es.departure_time.expect("validated at construction");
-        let l_dep = ls.departure_time.expect("validated at construction");
+        let e_dep = es.departure_time.expect(
+            "stop_time.departure_time is required by the GtfsError::MissingDepartureTime check earlier in GtfsTimetable::new()",
+        );
+        let l_dep = ls.departure_time.expect(
+            "stop_time.departure_time is required by the GtfsError::MissingDepartureTime check earlier in GtfsTimetable::new()",
+        );
         if l_dep < e_dep {
             return true;
         }

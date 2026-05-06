@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.17.0] – 2026-05-06
+## [0.16.0] – 2026-05-06
 
 GtfsError variants now carry the offending trip's `route_id` and the
 route's `agency_id` (when set), so a failed construction names the

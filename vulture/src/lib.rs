@@ -82,6 +82,11 @@
 //! - **Per-leg trip IDs and timing.** [`Journey::with_timing`] reconstructs
 //!   per-leg `(boarding stop, trip, depart, alight stop, arrive)` tuples.
 //!   `Journey.plan` on its own is just topology.
+//! - **Wheelchair-accessibility filter.** Chain
+//!   [`Query::require_wheelchair_accessible`] on the builder to skip
+//!   trips and stops marked `NotAvailable` in the GTFS
+//!   `wheelchair_accessible` / `wheelchair_boarding` fields. Default
+//!   behaviour is unchanged.
 //! - **Sparse `transfers.txt`.** [`gtfs::GtfsTimetable::with_walking_footpaths`]
 //!   builds bidirectional walking edges from stop coordinates using an R-tree.
 //!

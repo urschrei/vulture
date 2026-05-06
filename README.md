@@ -145,6 +145,7 @@ The pool's `checkout()` returns an RAII guard that returns the cache on drop; sa
 - **Closed-footpath fast path** – if your `transfers.txt` is the entire intended relation, [`assert_footpaths_closed()`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html#method.assert_footpaths_closed) opts into a single-pass O(E) relaxation instead of Dijkstra.
 - **`RaptorCache`** – reusable scratch allocations across queries against one timetable. **`RaptorCachePool`** is the `Sync` variant for thread pools.
 - **Per-leg timing** – [`journey.with_timing(&tt, depart, origin_walk)`](https://docs.rs/vulture/latest/vulture/struct.Journey.html#method.with_timing) reconstructs trip IDs and per-leg depart/arrive times. `Journey.plan` alone is just topology.
+- **Wheelchair-accessibility filter** – chain [`require_wheelchair_accessible()`](https://docs.rs/vulture/latest/vulture/struct.Query.html#method.require_wheelchair_accessible) on the query builder to skip trips where `trips.wheelchair_accessible = 2` and stops where `stops.wheelchair_boarding = 2`. Default behaviour is unchanged.
 
 ## When To Use What
 
@@ -155,6 +156,7 @@ The pool's `checkout()` returns an RAII guard that returns the cache on drop; sa
 | Same as above, multi-threaded | `RaptorCachePool::for_timetable(&tt)`, `pool.checkout()` per worker |
 | "Leave between X and Y" | `.depart_in_window(times).run()` (serial rRAPTOR), or `.run_par()` (multi-core wins on wide windows) |
 | "Slower route with less walking" | `tt.query_with_label::<ArrivalAndWalk>()...run()` |
+| Wheelchair-only routing | `tt.query()....require_wheelchair_accessible()....run()` |
 | Any platform of a station | `tt.station_stops(parent_id)` into `.from(...)` / `.to(...)` |
 | Sparse `transfers.txt` | `.with_walking_footpaths(&gtfs, max_dist_m, speed_m_per_s)` at construction |
 | Trip IDs and per-leg times in output | `journey.with_timing(&tt, depart, origin_walk)` |

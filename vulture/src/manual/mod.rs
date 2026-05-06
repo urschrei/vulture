@@ -312,12 +312,16 @@ where
     }
 
     fn get_arrival_time(&self, trip: TripIdx, pos: u32) -> SecondOfDay {
-        let (_route, times) = self.trips[trip.idx()].as_ref().expect("trip slot assigned");
+        let (_route, times) = self.trips[trip.idx()].as_ref().expect(
+            "trip slot must be filled by SimpleTimetable::route() before any algorithm call",
+        );
         times[pos as usize].0
     }
 
     fn get_departure_time(&self, trip: TripIdx, pos: u32) -> SecondOfDay {
-        let (_route, times) = self.trips[trip.idx()].as_ref().expect("trip slot assigned");
+        let (_route, times) = self.trips[trip.idx()].as_ref().expect(
+            "trip slot must be filled by SimpleTimetable::route() before any algorithm call",
+        );
         times[pos as usize].1
     }
 
