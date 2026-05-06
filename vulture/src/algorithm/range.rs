@@ -10,7 +10,6 @@ use crate::RangeJourney;
 use crate::RaptorCache;
 use crate::Timetable;
 use crate::algorithm::boarding::extract_target_journeys;
-use crate::algorithm::per_call::earliest_accessible_trip;
 use crate::algorithm::per_call::run_raptor_rounds;
 use crate::endpoints::Endpoints;
 use crate::ids::RouteIdx;
@@ -79,7 +78,7 @@ pub(crate) fn newly_active_stops_into<T: Timetable + ?Sized>(
         for (pos_offset, &stop) in stops.iter().enumerate() {
             let pos = pos_offset as u32;
             if let Some(trip) =
-                earliest_accessible_trip(tt, route, lo, pos, require_wheelchair_accessible)
+                tt.earliest_accessible_trip(route, lo, pos, require_wheelchair_accessible)
                 && tt.get_departure_time(trip, pos) < hi
             {
                 marked.insert(stop.idx());

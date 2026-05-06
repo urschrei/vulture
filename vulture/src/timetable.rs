@@ -186,6 +186,41 @@ pub trait Timetable {
         true
     }
 
+    /// Like [`get_earliest_trip`](Self::get_earliest_trip), but if
+    /// `require_wheelchair_accessible` is `true`, returns the earliest
+    /// trip at `pos` whose [`trip_wheelchair_accessible`](Self::trip_wheelchair_accessible)
+    /// is also true — walking *by trip index*, not by time, so trips
+    /// that share a departure time but differ in accessibility don't
+    /// get leapfrogged.
+    ///
+    /// The default implementation falls back to walking forward by
+    /// `departure_time + 1s` after each rejected trip; that's correct
+    /// for feeds where no two trips on the same route share a stop's
+    /// departure time, but loses simultaneously-departing trips that
+    /// differ in their wheelchair flag. Adapters with direct access to
+    /// the per-route trip list (such as [`crate::gtfs::GtfsTimetable`])
+    /// should override with a trip-index walk.
+    fn earliest_accessible_trip(
+        &self,
+        route: RouteIdx,
+        at: SecondOfDay,
+        pos: u32,
+        require_wheelchair_accessible: bool,
+    ) -> Option<TripIdx> {
+        if !require_wheelchair_accessible {
+            return self.get_earliest_trip(route, at, pos);
+        }
+        let mut probe = at;
+        loop {
+            let trip = self.get_earliest_trip(route, probe, pos)?;
+            if self.trip_wheelchair_accessible(trip) {
+                return Some(trip);
+            }
+            let dep = self.get_departure_time(trip, pos);
+            probe = dep + Duration::from_secs(1);
+        }
+    }
+
     /// Returns all stops directly reachable from the given stop via
     /// walking (footpaths).
     ///
