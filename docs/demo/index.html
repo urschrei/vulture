@@ -3,27 +3,79 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Vulture — RAPTOR transit routing in your browser</title>
+    <title>Vulture: RAPTOR transit routing in your browser</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,400..900,0..100;1,9..144,300..900,0..100&family=Bricolage+Grotesque:opsz,wght@12..96,200..800&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./style.css">
 </head>
 <body>
 <header>
-    <h1>Vulture</h1>
+    <div class="brand">
+        <h1><span class="word">Vulture</span></h1>
+        <p class="kicker">an in-browser RAPTOR demo</p>
+    </div>
     <p class="lede">
-        Round-bAsed Public Transit Routing —
-        <a href="https://www.microsoft.com/en-us/research/publication/round-based-public-transit-routing/">RAPTOR</a>
-        running entirely in your browser as WebAssembly. Loads a GTFS feed, queries it sub-millisecond.
-    </p>
-    <p class="meta">
-        Feed: <strong>Delhi Metro</strong> · service date <strong>2024-01-15</strong> · <span id="stats">loading…</span>
+        <em>R</em>ound-b<em>A</em>sed <em>P</em>ublic <em>T</em>ransit <em>R</em>outing —
+        running entirely in the browser as WebAssembly, compiled from
+        <a href="https://github.com/urschrei/vulture">Rust</a>, querying
+        <a href="https://gtfs.org">GTFS</a> feeds (quite quickly).
     </p>
 </header>
 
 <main>
+<section class="feed-loader">
+    <div class="feed-current">
+        <span class="label">Feed</span>
+        <strong id="feed-name">loading…</strong>
+        <span class="muted" id="feed-meta"></span>
+    </div>
+    <details id="feed-details">
+        <summary>Load a different GTFS feed</summary>
+        <form id="feed-form">
+            <label>Suggestion
+                <select id="feed-suggested">
+                    <option value="bundled:delhi" data-date="2024-01-15" data-name="Delhi Metro (bundled)">Delhi Metro – bundled with this page (1.1 MB, 262 stops)</option>
+                    <option value="https://files.mobilitydatabase.org/mdb-1010/mdb-1010-202605060054/mdb-1010-202605060054.zip" data-date="2026-05-04" data-name="Gmina Zaklad Komunalny, Giżycko (Poland)">Giżycko, Poland – small-town bus, fast first remote fetch (16 KB)</option>
+                    <option value="https://files.mobilitydatabase.org/mdb-22/mdb-22-202604220059/mdb-22-202604220059.zip" data-date="2026-04-22" data-name="Curry Public Transit, Oregon">Curry Public Transit (Oregon) – rural US service with fare data (168 KB)</option>
+                    <option value="https://files.mobilitydatabase.org/mdb-400/mdb-400-202605050051/mdb-400-202605050051.zip" data-date="2026-05-15" data-name="The Rapid, Grand Rapids MI">The Rapid (Grand Rapids, MI) – full mid-size US city bus (2.1 MB, 1,500+ stops)</option>
+                    <option value="https://files.mobilitydatabase.org/mdb-900/mdb-900-202604280104/mdb-900-202604280104.zip" data-date="2026-05-04" data-name="TBO Offenburg (Germany)">TBO Offenburg, Germany – regional bus + rail (38 MB, 3,300+ stops, 1,400+ routes)</option>
+                    <option value="" data-name="Custom URL">(paste a custom URL below)</option>
+                </select>
+            </label>
+            <label>URL
+                <input type="url" id="feed-url" placeholder="https://example.org/gtfs.zip" required>
+            </label>
+            <label>Service date
+                <input type="date" id="feed-date-input" required>
+            </label>
+            <button type="submit">Load feed</button>
+        </form>
+        <div id="feed-progress" class="feed-progress" hidden>
+            <div class="bar"><div class="fill"></div></div>
+            <div class="status">Connecting…</div>
+        </div>
+        <p class="cors-note">
+            Browsers block remote fetches unless the publisher sends
+            <code>Access-Control-Allow-Origin</code>. The
+            <a href="https://mobilitydatabase.org">Mobility Database</a>
+            CDN at <code>files.mobilitydatabase.org</code> mirrors over
+            6,000 GTFS feeds worldwide and serves them with permissive
+            CORS: every URL on a feed's
+            <code>/feeds/gtfs/mdb-…</code> page should work here.
+            <a href="https://transport.data.gouv.fr">transport.data.gouv.fr</a>
+            and GitHub-raw URLs are similarly CORS-friendly.
+            Direct transit-authority URLs (BART, TfL, etc.) usually
+            aren't; paste them here to find out, but expect a network
+            error in most cases.
+        </p>
+    </details>
+</section>
+
     <section class="demo" id="simple-demo">
-        <h2>1. Stop-to-stop</h2>
+        <h2>Stop-to-stop</h2>
         <p class="intro">
-            The bread-and-butter query: pick two stations, set a departure time, get the
+            A simple query: pick two stations, set a departure time, get the
             Pareto front of (transfers, arrival) journeys. Each row is one journey;
             vulture returns one per trip count between zero and the cap.
         </p>
@@ -31,19 +83,19 @@
             <label>From <input list="stops" id="simple-from" required placeholder="e.g. Dilshad Garden"></label>
             <label>To <input list="stops" id="simple-to" required placeholder="e.g. Vishwavidyalaya"></label>
             <label>Depart <input type="time" id="simple-depart" value="09:00" step="60"></label>
-            <label>Max transfers <input type="number" id="simple-max" value="5" min="0" max="20"></label>
+            <label class="narrow">Max transfers <input type="number" id="simple-max" value="5" min="0" max="20"></label>
             <button type="submit">Find route</button>
         </form>
         <div class="output" id="simple-output"></div>
     </section>
 
     <section class="demo" id="range-demo">
-        <h2>2. Departure window</h2>
+        <h2>Departure window</h2>
         <p class="intro">
-            "I want to leave between X and Y — what are my options?" rRAPTOR scans every
+            "I want to leave between X and Y: what are my options?" rRAPTOR scans every
             departure in a window in a single reverse-chronological pass and Pareto-filters on
-            <em>(later depart, fewer transfers, earlier arrival)</em> — entries that are
-            strictly worse than another departure get dropped. The output is the meaningful
+            <em>(later depart, fewer transfers, earlier arrival)</em>: entries that are
+            strictly worse than another departure are dropped. The output is the useful
             subset of choices for that window.
         </p>
         <form id="range-form">
@@ -51,28 +103,28 @@
             <label>To <input list="stops" id="range-to" required placeholder="e.g. Vishwavidyalaya"></label>
             <label>Window start <input type="time" id="range-start" value="09:00" step="60"></label>
             <label>Window end <input type="time" id="range-end" value="10:00" step="60"></label>
-            <label>Step <select id="range-step"><option value="60">1 min</option><option value="300" selected>5 min</option><option value="600">10 min</option><option value="900">15 min</option></select></label>
+            <label class="narrow">Step <select id="range-step"><option value="60">1 min</option><option value="300" selected>5 min</option><option value="600">10 min</option><option value="900">15 min</option></select></label>
             <button type="submit">Show options</button>
         </form>
         <div class="output" id="range-output"></div>
     </section>
 
     <section class="demo" id="walking-demo">
-        <h2>3. Walking footpaths</h2>
+        <h2>Walking footpaths</h2>
         <p class="intro">
             Many GTFS feeds ship a sparse or empty <code>transfers.txt</code>, so out of the
             box no walking transfers exist between physical stops. Vulture's
-            <code>with_walking_footpaths(max_distance_m, walking_speed)</code> uses an R-tree
+            <code>with_walking_footpaths(max_distance_m, walking_speed)</code> uses an R*-tree
             over an equirectangular projection of stop coordinates to add bidirectional
             walking edges between every pair of stops within reach. Toggle it below to see
-            how routing changes — for Delhi Metro most stops are line-internal so the
+            how routing changes: for Delhi Metro most stops are line-internal so the
             difference is small, but the mechanic is the same on any feed.
         </p>
         <form id="walking-form">
             <label>From <input list="stops" id="walking-from" required placeholder="e.g. Rajiv Chowk"></label>
             <label>To <input list="stops" id="walking-to" required placeholder="e.g. Khan Market"></label>
             <label>Depart <input type="time" id="walking-depart" value="09:00" step="60"></label>
-            <label>Max distance <select id="walking-dist">
+            <label class="narrow">Max distance <select id="walking-dist">
                 <option value="0">0 m (no walking)</option>
                 <option value="200">200 m</option>
                 <option value="500" selected>500 m</option>
@@ -95,7 +147,7 @@
         <a href="https://crates.io/crates/vulture">crates.io</a>
     </p>
     <p class="small">
-        WASM bundle is ~280 KB gzipped. Delhi Metro GTFS feed is ~1.1 MB.
+        WASM bundle is ~280 KB gzipped.
         All routing happens client-side; this page makes no server calls
         after the initial asset load.
     </p>
