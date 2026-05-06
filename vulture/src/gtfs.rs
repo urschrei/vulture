@@ -174,6 +174,37 @@ pub enum GtfsError {
 
 type GtfsResult<T> = std::result::Result<T, GtfsError>;
 
+/// Number of additional service days to load *after* the base
+/// service date. Newtype around `u8` so the multi-day constructor
+/// argument names itself at the call site:
+///
+/// ```no_run
+/// # use vulture::gtfs::{GtfsTimetable, OvernightDays};
+/// # use jiff::civil::date;
+/// # use gtfs_structures::Gtfs;
+/// # fn ex(gtfs: &Gtfs) -> Result<(), Box<dyn std::error::Error>> {
+/// let tt = GtfsTimetable::new_with_overnight_days(
+///     gtfs,
+///     date(2026, 5, 4),
+///     OvernightDays(1),
+/// )?;
+/// # Ok(()) }
+/// ```
+///
+/// `OvernightDays(0)` is equivalent to [`GtfsTimetable::new`] (the
+/// single-day constructor), so the multi-day constructor is rarely
+/// the right choice with a zero argument; reach for it explicitly
+/// when you need the next day's trips visible to the search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OvernightDays(pub u8);
+
+impl OvernightDays {
+    /// Inner `u8` accessor for adapter-side arithmetic.
+    pub fn get(self) -> u8 {
+        self.0
+    }
+}
+
 /// A [`Timetable`] implementation that wraps a parsed GTFS feed.
 ///
 /// Constructed via [`GtfsTimetable::new`], which validates the feed,
@@ -189,7 +220,7 @@ type GtfsResult<T> = std::result::Result<T, GtfsError>;
 ///
 /// # fn ex() -> anyhow::Result<()> {
 /// let gtfs = Gtfs::new("path/to/gtfs.zip")?;
-/// let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4), 0)?;
+/// let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?;
 ///
 /// let start = tt.stop_idx("origin_id").expect("unknown stop");
 /// let target = tt.stop_idx("target_id").expect("unknown stop");
@@ -279,44 +310,20 @@ pub struct GtfsTimetable {
 }
 
 impl GtfsTimetable {
-    /// Creates a new timetable from a parsed GTFS feed for a specific
-    /// service date, optionally extended by `n_overnight_days`
-    /// additional service days after the base date.
+    /// Creates a single-day timetable from a parsed GTFS feed for a
+    /// specific service date.
     ///
     /// Trips whose `service_id` is not active on `service_date` (per
     /// `calendar.txt` and `calendar_dates.txt`) are filtered out at
-    /// construction. The returned timetable contains only trips that
-    /// run on `service_date` (plus the next `n_overnight_days` days
-    /// if non-zero).
+    /// construction.
     ///
     /// Validates that every trip references existing stops and has
     /// stop_times with departure times, then interns identifiers to dense
     /// `u32` indices and splits each GTFS `route_id` into synthetic
     /// [`RouteIdx`]s as described in the module docs.
     ///
-    /// # Multi-day operation
-    ///
-    /// Pass `n_overnight_days = 0` for the single-day case (the
-    /// majority of routing applications). Pass `1` for "last train
-    /// home" / overnight queries — a 23:00 query can then catch the
-    /// next morning's first trip. Trips active on each subsequent
-    /// day get their stop_times shifted by `day_offset × 86_400` and
-    /// inserted as additional trips on the same RAPTOR route as
-    /// their day-0 counterparts; the algorithm sees a single time
-    /// axis monotone across `0..=n_overnight_days × 86_400` seconds.
-    ///
-    /// Returned arrival times can exceed 86 400 seconds.
-    /// [`SecondOfDay`]'s `Display` impl formats them as `HH:MM:SS`
-    /// with hours past 24 (e.g. `25:30:00`); divide by 86 400 to
-    /// recover the day offset. [`Journey::with_timing`](crate::Journey::with_timing)'s
-    /// [`TimedLeg`](crate::TimedLeg) entries carry the same shifted
-    /// times.
-    ///
-    /// Larger `n_overnight_days` values are unusual; memory and load
-    /// time scale linearly. Returns
-    /// [`GtfsError::DateOutOfRange`] if `service_date +
-    /// n_overnight_days` falls past jiff's representable range
-    /// (only triggers near the year-9999 ceiling).
+    /// For multi-day search ("last train home", overnight queries) use
+    /// [`new_with_overnight_days`](Self::new_with_overnight_days).
     ///
     /// # Footpath assumptions
     ///
@@ -325,8 +332,38 @@ impl GtfsTimetable {
     /// the transitive closure. The [`Timetable`] trait requires the
     /// footpath relation to be transitively closed (see the trait-level
     /// docs).
-    pub fn new(gtfs: &Gtfs, service_date: Date, n_overnight_days: u8) -> GtfsResult<Self> {
-        Self::build(gtfs, service_date, n_overnight_days)
+    pub fn new(gtfs: &Gtfs, service_date: Date) -> GtfsResult<Self> {
+        Self::build(gtfs, service_date, 0)
+    }
+
+    /// Creates a multi-day timetable, extending the base service date
+    /// by [`OvernightDays`] additional days. The algorithm sees a
+    /// single time axis monotone across `0..=days × 86_400` seconds —
+    /// trips active on each subsequent day get their stop_times
+    /// shifted by `day_offset × 86_400` and inserted as additional
+    /// trips on the same RAPTOR route as their day-0 counterparts.
+    ///
+    /// Use this when a late-night query needs to find trips the next
+    /// morning. The typical "last train home" load is
+    /// `OvernightDays(1)`; larger values are unusual and scale memory
+    /// and load time linearly.
+    ///
+    /// Returned arrival times can exceed 86 400 seconds.
+    /// [`SecondOfDay`]'s `Display` impl formats them as `HH:MM:SS`
+    /// with hours past 24 (e.g. `25:30:00`); divide by 86 400 to
+    /// recover the day offset. [`Journey::with_timing`](crate::Journey::with_timing)'s
+    /// [`TimedLeg`](crate::TimedLeg) entries carry the same shifted
+    /// times.
+    ///
+    /// Returns [`GtfsError::DateOutOfRange`] if `service_date + days`
+    /// falls past jiff's representable range (only triggers near the
+    /// year-9999 ceiling).
+    pub fn new_with_overnight_days(
+        gtfs: &Gtfs,
+        service_date: Date,
+        days: OvernightDays,
+    ) -> GtfsResult<Self> {
+        Self::build(gtfs, service_date, days.get())
     }
 
     fn build(gtfs: &Gtfs, base_date: Date, n_overnight_days: u8) -> GtfsResult<Self> {
@@ -1216,16 +1253,17 @@ mod tests {
     #[test]
     fn overnight_days_loads_next_day_trip() {
         // A 23:00 query on Mon 2026-05-04 cannot catch a single 06:00
-        // trip that departs the same morning. Constructing with
-        // n_overnight_days=1 makes the next morning's instance
-        // available, shifted by 86 400 s, and the query finds it.
+        // trip that departs the same morning. Constructing via
+        // new_with_overnight_days(OvernightDays(1)) makes the next
+        // morning's instance available, shifted by 86 400 s, and the
+        // query finds it.
         use crate::{Duration, RaptorCache, SecondOfDay, Timetable};
         use jiff::civil::date;
 
         let g = synthetic_overnight_feed();
 
         // Single-day timetable: no journey from a 23:00 query.
-        let tt = GtfsTimetable::new(&g, date(2026, 5, 4), 0).unwrap();
+        let tt = GtfsTimetable::new(&g, date(2026, 5, 4)).unwrap();
         let a = tt.stop_idx("A").unwrap();
         let b = tt.stop_idx("B").unwrap();
         let mut cache = RaptorCache::for_timetable(&tt);
@@ -1244,7 +1282,8 @@ mod tests {
         // Multi-day timetable: the next morning's trip is shifted to
         // 30:00, well after the 23:00 departure, and the journey is
         // found.
-        let tt = GtfsTimetable::new(&g, date(2026, 5, 4), 1).unwrap();
+        let tt =
+            GtfsTimetable::new_with_overnight_days(&g, date(2026, 5, 4), OvernightDays(1)).unwrap();
         let a = tt.stop_idx("A").unwrap();
         let b = tt.stop_idx("B").unwrap();
         let mut cache = RaptorCache::for_timetable(&tt);
@@ -1265,14 +1304,16 @@ mod tests {
     }
 
     #[test]
-    fn overnight_days_zero_is_single_day() {
-        // n_overnight_days = 0 must produce the same set of trips as
-        // a feed loaded for the base service date alone (verified by
-        // matching the feed's single-day reachable arrival).
+    fn overnight_days_zero_matches_single_day_constructor() {
+        // new_with_overnight_days(OvernightDays(0)) must produce the
+        // same set of reachable trips as new() (verified by matching
+        // the feed's single-day reachable arrival).
         use crate::{RaptorCache, SecondOfDay, Timetable};
 
         let g = synthetic_overnight_feed();
-        let tt_zero = GtfsTimetable::new(&g, ymd_jiff(2026, 5, 4), 0).unwrap();
+        let tt_zero =
+            GtfsTimetable::new_with_overnight_days(&g, ymd_jiff(2026, 5, 4), OvernightDays(0))
+                .unwrap();
 
         // The synthetic feed has a 06:00 trip on the base date; from
         // a 05:00 query it should arrive at 06:30 = 23 400.
