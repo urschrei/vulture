@@ -2964,3 +2964,50 @@ fn arrival_and_fare_default_ctx_is_zero_fare() {
     assert_eq!(kept.label.arrival.0, 100);
     assert_eq!(kept.label.fare, 0, "no FareTable -> fare should be zero");
 }
+
+/// Multi-source query where one of the origins coincides with the
+/// target stop. The genuine boarded journey from the *other* origin
+/// must still be returned; previously the reconstruction short-
+/// circuited the loop on the first iteration because the target was
+/// already a member of the origin set.
+#[test]
+fn multi_source_target_equal_to_origin_finds_other_origins_journey() {
+    use crate::Journey;
+
+    const A: u8 = 0;
+    const B: u8 = 1;
+    let tt = SimpleTimetable::new().route(
+        0u8,
+        &[A, B],
+        &[(
+            0u16,
+            &[
+                (SecondOfDay(0), SecondOfDay(0)),
+                (SecondOfDay(1), SecondOfDay(1)),
+            ],
+        )],
+    );
+
+    let s_a = tt.stop_idx_of(&A);
+    let s_b = tt.stop_idx_of(&B);
+
+    // Origin B has a non-zero walk offset so its seed at stop B is
+    // arrival=2; the only on-time journey to B at arrival=1 must come
+    // from origin A boarding the trip at stop A.
+    let origins = [(s_a, Duration::ZERO), (s_b, Duration(2))];
+    let targets = [(s_b, Duration::ZERO)];
+    let journeys: Vec<Journey<crate::ArrivalTime>> = tt
+        .query()
+        .from(origins.as_slice())
+        .to(targets.as_slice())
+        .max_transfers(1)
+        .depart_at(SecondOfDay(0))
+        .run();
+
+    assert_eq!(journeys.len(), 1, "expected one journey, got {journeys:#?}");
+    let j = &journeys[0];
+    assert_eq!(j.origin, s_a);
+    assert_eq!(j.target, s_b);
+    assert_eq!(j.label.0.0, 1);
+    assert_eq!(j.plan.len(), 1);
+}

@@ -84,7 +84,14 @@ pub(crate) fn reconstruct_journey(
     // round is well beyond anything realistic.
     let mut budget = (k + 1) * 100;
 
-    while !origins.contains(parent.idx()) && budget > 0 {
+    // Always attempt at least one tree lookup before terminating on
+    // origin membership. In multi-source queries the target may also
+    // be one of the origins; checking origin membership first would
+    // discard the genuine boarded journey from a different origin.
+    loop {
+        if budget == 0 {
+            break;
+        }
         budget -= 1;
 
         let Some(step) = tree.get(&(inner_k, parent, parent_arrival)).copied() else {
@@ -113,6 +120,10 @@ pub(crate) fn reconstruct_journey(
                 parent_arrival = pa;
                 // walks do not consume a round
             }
+        }
+
+        if origins.contains(parent.idx()) {
+            break;
         }
     }
 
