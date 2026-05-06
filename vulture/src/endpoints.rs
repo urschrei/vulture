@@ -51,6 +51,42 @@ impl Endpoints {
     pub fn push(&mut self, stop: StopIdx, walk: Duration) {
         self.stops.push((stop, walk));
     }
+
+    /// Build an [`Endpoints`] from a slice of raw `u32` stop indices,
+    /// every entry getting walk-time zero. Companion to
+    /// [`Endpoints::from_pairs`] for the simpler "any of these stops"
+    /// case.
+    ///
+    /// Primarily here for FFI consumers — Python and JS bindings
+    /// typically receive a `list[int]` / `Array<number>` decoded as
+    /// `Vec<u32>`, and the [`IntoEndpoints`] trait is invisible
+    /// across the language boundary. In-Rust callers can pass
+    /// `&[StopIdx]` directly to query methods via [`IntoEndpoints`]
+    /// instead of going through this factory.
+    pub fn from_stop_indices(stops: &[u32]) -> Self {
+        let mut e = Self::new();
+        for &s in stops {
+            e.push(StopIdx::new(s), Duration::ZERO);
+        }
+        e
+    }
+
+    /// Build an [`Endpoints`] from a slice of raw `(stop_idx, walk_seconds)`
+    /// pairs. Inverse of [`Endpoints::as_slice`] modulo the typed
+    /// wrappers — accepting `(u32, u32)` rather than `(StopIdx, Duration)`
+    /// so the input shape matches what FFI bindings naturally decode
+    /// into (`list[tuple[int, int]]` / `Array<[number, number]>`).
+    ///
+    /// In-Rust callers should prefer passing `&[(StopIdx, Duration)]`
+    /// or `Vec<(StopIdx, Duration)>` to query methods via
+    /// [`IntoEndpoints`].
+    pub fn from_pairs(pairs: &[(u32, u32)]) -> Self {
+        let mut e = Self::new();
+        for &(s, w) in pairs {
+            e.push(StopIdx::new(s), Duration(w));
+        }
+        e
+    }
 }
 
 /// Convert any of the natural query-endpoint inputs into an
@@ -158,5 +194,36 @@ impl IntoEndpoints for &Endpoints {
 impl IntoEndpoints for Endpoints {
     fn into_endpoints(self) -> Endpoints {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_stop_indices_assigns_zero_walk() {
+        let e = Endpoints::from_stop_indices(&[3, 7, 11]);
+        assert_eq!(e.len(), 3);
+        let pairs: Vec<_> = e.as_slice().to_vec();
+        assert_eq!(pairs[0], (StopIdx::new(3), Duration::ZERO));
+        assert_eq!(pairs[1], (StopIdx::new(7), Duration::ZERO));
+        assert_eq!(pairs[2], (StopIdx::new(11), Duration::ZERO));
+    }
+
+    #[test]
+    fn from_pairs_preserves_walk_offsets() {
+        let e = Endpoints::from_pairs(&[(0, 0), (5, 60), (12, 240)]);
+        assert_eq!(e.len(), 3);
+        let pairs: Vec<_> = e.as_slice().to_vec();
+        assert_eq!(pairs[0], (StopIdx::new(0), Duration(0)));
+        assert_eq!(pairs[1], (StopIdx::new(5), Duration(60)));
+        assert_eq!(pairs[2], (StopIdx::new(12), Duration(240)));
+    }
+
+    #[test]
+    fn from_stop_indices_empty_slice() {
+        let e = Endpoints::from_stop_indices(&[]);
+        assert!(e.is_empty());
     }
 }
