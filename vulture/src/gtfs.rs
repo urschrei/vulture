@@ -21,7 +21,7 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{Datelike, NaiveDate, Weekday};
-use gtfs_structures::{Exception, Gtfs, PickupDropOffType};
+use gtfs_structures::{Availability, Exception, Gtfs, PickupDropOffType};
 use jiff::civil::Date;
 use rstar::{AABB, PointDistance, RTree, RTreeObject};
 use smallvec::SmallVec;
@@ -206,6 +206,12 @@ pub struct GtfsTimetable<'gtfs> {
     /// `drop_off_type = 1` (NotAvailable). Same shape as `no_pickup`.
     no_drop_off: HashSet<(TripIdx, u32)>,
 
+    /// Trips with `wheelchair_accessible = NotAvailable`. Sparse —
+    /// most feeds either populate the flag rarely or not at all.
+    inaccessible_trips: HashSet<TripIdx>,
+    /// Stops with `wheelchair_boarding = NotAvailable`. Same shape.
+    inaccessible_stops: HashSet<StopIdx>,
+
     /// User-asserted closure flag. Returned from
     /// [`Timetable::footpaths_are_transitively_closed`] so the algorithm
     /// can pick the single-pass relaxation. Set via
@@ -247,10 +253,14 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
         // 1. Intern stops in iteration order.
         let mut stop_ids: Vec<&'gtfs str> = Vec::with_capacity(gtfs.stops.len());
         let mut stop_by_id: HashMap<&'gtfs str, StopIdx> = HashMap::with_capacity(gtfs.stops.len());
-        for stop_id in gtfs.stops.keys() {
+        let mut inaccessible_stops: HashSet<StopIdx> = HashSet::new();
+        for (stop_id, stop) in &gtfs.stops {
             let idx = StopIdx::new(stop_ids.len() as u32);
             stop_ids.push(stop_id.as_str());
             stop_by_id.insert(stop_id.as_str(), idx);
+            if matches!(stop.wheelchair_boarding, Availability::NotAvailable) {
+                inaccessible_stops.insert(idx);
+            }
         }
 
         // 2. Validate trips active on `service_date` and group by
@@ -297,6 +307,7 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
         let mut route_for_trip: Vec<(RouteIdx, usize)> = Vec::with_capacity(gtfs.trips.len());
         let mut no_pickup: HashSet<(TripIdx, u32)> = HashSet::new();
         let mut no_drop_off: HashSet<(TripIdx, u32)> = HashSet::new();
+        let mut inaccessible_trips: HashSet<TripIdx> = HashSet::new();
         let mut trip_ids: Vec<&'gtfs str> = Vec::new();
         let mut trip_by_id: HashMap<&'gtfs str, TripIdx> = HashMap::new();
         let mut route_by_id: HashMap<&'gtfs str, RouteIdx> = HashMap::new();
@@ -329,6 +340,10 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
                     sub_trip_idxs.push(trip_idx);
                     debug_assert_eq!(route_for_trip.len(), trip_idx.idx());
                     route_for_trip.push((route_idx, sub_trip_idxs.len() - 1));
+                    let trip = gtfs.get_trip(trip_id).expect("validated above");
+                    if matches!(trip.wheelchair_accessible, Availability::NotAvailable) {
+                        inaccessible_trips.insert(trip_idx);
+                    }
                 }
 
                 // Per-route arrival/departure tables: shape [stop_pos][trip_pos].
@@ -432,6 +447,8 @@ impl<'gtfs> GtfsTimetable<'gtfs> {
             station_children,
             no_pickup,
             no_drop_off,
+            inaccessible_trips,
+            inaccessible_stops,
         })
     }
 
@@ -726,6 +743,14 @@ impl<'gtfs> Timetable for GtfsTimetable<'gtfs> {
 
     fn drop_off_allowed(&self, trip: TripIdx, pos: u32) -> bool {
         self.no_drop_off.is_empty() || !self.no_drop_off.contains(&(trip, pos))
+    }
+
+    fn trip_wheelchair_accessible(&self, trip: TripIdx) -> bool {
+        self.inaccessible_trips.is_empty() || !self.inaccessible_trips.contains(&trip)
+    }
+
+    fn stop_wheelchair_accessible(&self, stop: StopIdx) -> bool {
+        self.inaccessible_stops.is_empty() || !self.inaccessible_stops.contains(&stop)
     }
 
     fn footpaths_are_transitively_closed(&self) -> bool {

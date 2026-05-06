@@ -1,5 +1,40 @@
 # Changelog
 
+Wheelchair-accessibility filter on the query builder. Honours GTFS
+`stops.wheelchair_boarding` and `trips.wheelchair_accessible` when
+opted into; default behaviour unchanged.
+
+### New API
+
+- `Query::require_wheelchair_accessible()` – chainable on
+  `Query<.., NeedsDeparture>`. With this set, the algorithm skips
+  trips where [`Timetable::trip_wheelchair_accessible`] returns
+  `false` (walking forward to the next trip on the route) and stops
+  where [`Timetable::stop_wheelchair_accessible`] returns `false`
+  cannot be alighting points.
+- Two new `Timetable` methods (default-true so existing adapters
+  keep working unchanged): `trip_wheelchair_accessible(trip)` and
+  `stop_wheelchair_accessible(stop)`.
+- `SimpleTimetable::no_wheelchair_on_trip(trip)` /
+  `SimpleTimetable::no_wheelchair_at_stop(stop)` – manual-adapter
+  builder methods for tests.
+
+### GTFS adapter
+
+Reads `Availability` from each stop's `wheelchair_boarding` and each
+trip's `wheelchair_accessible`. Only `NotAvailable` (= 2) maps to
+forbidden; `InformationNotAvailable` (= 0), `Available` (= 1), and
+any unknown value all permit a wheelchair query, matching the
+lenient interpretation common in the GTFS ecosystem.
+
+### Composition
+
+The filter composes cleanly with the existing [`Label`] machinery — a
+wheelchair-aware journey is still arrival-time-optimal within the
+filtered subnetwork. Storage is sparse (`HashSet` per direction) with
+`is_empty()` short-circuits, so feeds without accessibility data pay
+nothing for the new code path.
+
 ## [0.15.0] – 2026-05-05
 
 Four threads: range-query improvements (rRAPTOR for the serial path,

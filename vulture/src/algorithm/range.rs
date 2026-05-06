@@ -10,6 +10,7 @@ use crate::RangeJourney;
 use crate::RaptorCache;
 use crate::Timetable;
 use crate::algorithm::boarding::extract_target_journeys;
+use crate::algorithm::per_call::earliest_accessible_trip;
 use crate::algorithm::per_call::run_raptor_rounds;
 use crate::endpoints::Endpoints;
 use crate::ids::RouteIdx;
@@ -66,6 +67,7 @@ pub(crate) fn newly_active_stops_into<T: Timetable + ?Sized>(
     lo: SecondOfDay,
     hi: SecondOfDay,
     marked: &mut FixedBitSet,
+    require_wheelchair_accessible: bool,
 ) {
     if lo >= hi {
         return;
@@ -76,7 +78,8 @@ pub(crate) fn newly_active_stops_into<T: Timetable + ?Sized>(
         let stops = tt.get_stops_after(route, 0);
         for (pos_offset, &stop) in stops.iter().enumerate() {
             let pos = pos_offset as u32;
-            if let Some(trip) = tt.get_earliest_trip(route, lo, pos)
+            if let Some(trip) =
+                earliest_accessible_trip(tt, route, lo, pos, require_wheelchair_accessible)
                 && tt.get_departure_time(trip, pos) < hi
             {
                 marked.insert(stop.idx());
@@ -110,6 +113,7 @@ pub(crate) fn newly_active_stops_into<T: Timetable + ?Sized>(
 /// overwrites `labels[k][X]` at the start of each round k, but
 /// `best_arrival` is never cleared. This gives the `pt_threshold`
 /// pruning a tight bound across τ scans.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn raptor_range_rrap_arrival<T: Timetable + ?Sized>(
     tt: &T,
     cache: &mut RaptorCache<ArrivalTime>,
@@ -117,6 +121,7 @@ pub(crate) fn raptor_range_rrap_arrival<T: Timetable + ?Sized>(
     departures: &[SecondOfDay],
     origins: Endpoints,
     targets: Endpoints,
+    require_wheelchair_accessible: bool,
 ) -> Vec<RangeJourney<ArrivalTime>> {
     let origins = origins.as_slice();
     let targets = targets.as_slice();
@@ -166,7 +171,7 @@ pub(crate) fn raptor_range_rrap_arrival<T: Timetable + ?Sized>(
         // exactly `tau` are first-catchable in this scan, while trips
         // at `prev_tau` were already covered by the previous scan.
         if let Some(prev) = prev_tau {
-            newly_active_stops_into(tt, tau, prev, marked_stops);
+            newly_active_stops_into(tt, tau, prev, marked_stops, require_wheelchair_accessible);
         }
 
         // (c) Round-0 footpath relax + rounds 1..=transfers, sharing
@@ -183,6 +188,7 @@ pub(crate) fn raptor_range_rrap_arrival<T: Timetable + ?Sized>(
             relax_heap,
             ever_reached,
             transfers,
+            require_wheelchair_accessible,
             targets,
         );
 

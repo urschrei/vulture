@@ -94,6 +94,11 @@ where
     pub(crate) origins: Endpoints,
     pub(crate) targets: Endpoints,
     pub(crate) max_transfers: Transfers,
+    /// When `true`, the algorithm filters out trips for which
+    /// [`Timetable::trip_wheelchair_accessible`] returns `false` and
+    /// stops for which [`Timetable::stop_wheelchair_accessible`] returns
+    /// `false`. Defaults to `false` (no filtering).
+    pub(crate) require_wheelchair_accessible: bool,
     pub(crate) mode: M,
     pub(crate) _label: PhantomData<L>,
 }
@@ -134,6 +139,7 @@ where
             origins: self.origins,
             targets: self.targets,
             max_transfers: self.max_transfers,
+            require_wheelchair_accessible: self.require_wheelchair_accessible,
             mode: SingleDeparture { at: t.into() },
             _label: PhantomData,
         }
@@ -160,9 +166,30 @@ where
             origins: self.origins,
             targets: self.targets,
             max_transfers: self.max_transfers,
+            require_wheelchair_accessible: self.require_wheelchair_accessible,
             mode: RangeDeparture { departures },
             _label: PhantomData,
         }
+    }
+
+    /// Restrict the algorithm to wheelchair-accessible trips and stops.
+    ///
+    /// With this set, trips for which
+    /// [`Timetable::trip_wheelchair_accessible`] returns `false` are
+    /// skipped at boarding (the algorithm walks forward to the next
+    /// trip on the route), and stops for which
+    /// [`Timetable::stop_wheelchair_accessible`] returns `false` cannot
+    /// be alighting points. Default GTFS semantics treat
+    /// `wheelchair_accessible = 2` (no accommodations) and
+    /// `wheelchair_boarding = 2` (not accessible) as failing the
+    /// requirement; "no info" and "some accessibility" both pass.
+    ///
+    /// Composes with the existing [`Label`](crate::Label) machinery —
+    /// a wheelchair-aware journey is still arrival-time-optimal within
+    /// the filtered subnetwork.
+    pub fn require_wheelchair_accessible(mut self) -> Self {
+        self.require_wheelchair_accessible = true;
+        self
     }
 }
 
@@ -195,6 +222,7 @@ where
             self.mode.at,
             self.origins,
             self.targets,
+            self.require_wheelchair_accessible,
         )
     }
 }
@@ -230,6 +258,7 @@ where
             &self.mode.departures,
             self.origins,
             self.targets,
+            self.require_wheelchair_accessible,
         )
     }
 }
@@ -267,13 +296,21 @@ where
         let targets = self.targets;
         let tt = self.tt;
         let departures = self.mode.departures;
+        let require_accessible = self.require_wheelchair_accessible;
 
         let all: Vec<RangeJourney<L>> = departures
             .par_iter()
             .flat_map_iter(|&depart| {
                 let mut cache = pool.checkout();
-                let journeys =
-                    run_per_call_query(tt, &mut *cache, transfers, depart, &origins, &targets);
+                let journeys = run_per_call_query(
+                    tt,
+                    &mut *cache,
+                    transfers,
+                    depart,
+                    &origins,
+                    &targets,
+                    require_accessible,
+                );
                 journeys
                     .into_iter()
                     .map(move |j| RangeJourney { depart, journey: j })

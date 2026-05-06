@@ -26,6 +26,32 @@ use crate::label::Label;
 use crate::time::Duration;
 use crate::time::SecondOfDay;
 
+/// Wraps [`Timetable::get_earliest_trip`] with optional
+/// wheelchair-accessibility gating: when `require_accessible` is
+/// `true`, walks forward over disallowed trips by re-querying with a
+/// later `at` until either an accessible trip is found or the trip
+/// list at `pos` is exhausted. When `require_accessible` is `false`
+/// this is exactly the underlying call.
+pub(crate) fn earliest_accessible_trip<T: Timetable + ?Sized>(
+    tt: &T,
+    route: RouteIdx,
+    mut at: SecondOfDay,
+    pos: u32,
+    require_accessible: bool,
+) -> Option<TripIdx> {
+    if !require_accessible {
+        return tt.get_earliest_trip(route, at, pos);
+    }
+    loop {
+        let trip = tt.get_earliest_trip(route, at, pos)?;
+        if tt.trip_wheelchair_accessible(trip) {
+            return Some(trip);
+        }
+        let dep = tt.get_departure_time(trip, pos);
+        at = dep + Duration::from_secs(1);
+    }
+}
+
 /// Run round-0 footpath relaxation followed by rounds `1..=transfers`
 /// against an already-seeded cache. Shared by the per-call algorithm
 /// (which seeds a single τ) and the rRAPTOR scan (which re-seeds for
@@ -57,6 +83,7 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
     relax_heap: &mut BinaryHeap<Reverse<(SecondOfDay, u32)>>,
     ever_reached: &mut FixedBitSet,
     transfers: usize,
+    require_wheelchair_accessible: bool,
     targets: &[(StopIdx, Duration)],
 ) {
     let mut pt_threshold = best_to_any_target(best_arrival, targets);
@@ -150,12 +177,19 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
                 let pos = p_pos + offset as u32;
 
                 // 1. Alight every active riding entry at pi.
+                let stop_accessible_ok =
+                    !require_wheelchair_accessible || tt.stop_wheelchair_accessible(pi);
                 for &(boarding_label, trip, boarding_stop) in route_bag.iter() {
                     // Skip stops where this trip doesn't allow drop-off
                     // (GTFS drop_off_type = 1). The trip still passes
                     // through `pi`, but the rider cannot disembark, so
                     // we don't update arrival labels here.
                     if !tt.drop_off_allowed(trip, pos) {
+                        continue;
+                    }
+                    // Same skip when the query requires wheelchair
+                    // access and `pi` is marked inaccessible.
+                    if !stop_accessible_ok {
                         continue;
                     }
                     let arr = tt.get_arrival_time(trip, pos);
@@ -187,7 +221,13 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
                 staged.extend(labels[k - 1][pi.idx()].iter().copied());
                 for candidate in &staged {
                     let cand_arr = candidate.arrival();
-                    let trip = match tt.get_earliest_trip(route, cand_arr, pos) {
+                    let trip = match earliest_accessible_trip(
+                        tt,
+                        route,
+                        cand_arr,
+                        pos,
+                        require_wheelchair_accessible,
+                    ) {
                         Some(t) => t,
                         None => continue,
                     };
@@ -269,6 +309,7 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
 ///
 /// Invoked by `Query::run_with_cache` for single-departure queries and
 /// by the parallel rRAPTOR path for each fan-out departure.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
     tt: &T,
     cache: &mut RaptorCache<L>,
@@ -276,6 +317,7 @@ pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
     depart: SecondOfDay,
     origins: impl IntoEndpoints,
     targets: impl IntoEndpoints,
+    require_wheelchair_accessible: bool,
 ) -> Vec<Journey<L>> {
     let origins = origins.into_endpoints();
     let targets = targets.into_endpoints();
@@ -327,6 +369,7 @@ pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
         relax_heap,
         ever_reached,
         transfers,
+        require_wheelchair_accessible,
         targets,
     );
 

@@ -145,6 +145,36 @@ pub trait Timetable {
         true
     }
 
+    /// Reports whether `trip` is wheelchair-accessible. Maps to GTFS
+    /// `trips.wheelchair_accessible`: only `2` (no accommodations)
+    /// returns `false`; `0` (no info), `1` (some accommodations), and
+    /// any unknown value all permit boarding for wheelchair queries.
+    /// Adapters whose data has no equivalent flag should leave the
+    /// default impl in place.
+    ///
+    /// Consulted only when a query has set
+    /// [`Query::require_wheelchair_accessible`](crate::Query::require_wheelchair_accessible);
+    /// otherwise the algorithm ignores accessibility and treats every
+    /// trip as eligible.
+    fn trip_wheelchair_accessible(&self, trip: TripIdx) -> bool {
+        let _ = trip;
+        true
+    }
+
+    /// Reports whether `stop` is wheelchair-accessible. Maps to GTFS
+    /// `stops.wheelchair_boarding`: only `2` (not accessible) returns
+    /// `false`; `0` (no info), `1` (some accessibility), and any
+    /// unknown value all permit alighting for wheelchair queries.
+    /// Adapters whose data has no equivalent flag should leave the
+    /// default impl in place.
+    ///
+    /// Consulted only when a query has set
+    /// [`Query::require_wheelchair_accessible`](crate::Query::require_wheelchair_accessible).
+    fn stop_wheelchair_accessible(&self, stop: StopIdx) -> bool {
+        let _ = stop;
+        true
+    }
+
     /// Returns all stops directly reachable from the given stop via
     /// walking (footpaths).
     ///
@@ -204,6 +234,7 @@ pub trait Timetable {
             origins: Endpoints::new(),
             targets: Endpoints::new(),
             max_transfers: Transfers(10),
+            require_wheelchair_accessible: false,
             mode: NeedsDeparture,
             _label: PhantomData,
         }
@@ -242,6 +273,7 @@ pub trait Timetable {
             origins: Endpoints::new(),
             targets: Endpoints::new(),
             max_transfers: Transfers(10),
+            require_wheelchair_accessible: false,
             mode: NeedsDeparture,
             _label: PhantomData,
         }

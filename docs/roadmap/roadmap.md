@@ -21,10 +21,6 @@ A 23:00 query that needs an after-midnight or next-morning trip currently return
 
 Either way it's a `GtfsTimetable` builder option (`.with_overnight_days(usize)` or similar) plus algorithm-side handling of cross-midnight times. Real value for "last train home" and red-eye flight queries; nuisance otherwise.
 
-### Accessibility flags
-
-GTFS exposes `wheelchair_boarding` on stops and `wheelchair_accessible` on trips. Add a query-level filter that drops trips/stops failing the requirement. Likely shape: a builder method `.require_wheelchair_accessible()` on the `Query` typestate that adds a per-trip predicate to `get_earliest_trip`. Should compose cleanly with the existing `Label` machinery – a wheelchair-aware journey is still arrival-time-optimal within the filtered subnetwork.
-
 ### Better error context for GTFS construction
 
 `GtfsError` covers the failure modes but each variant currently carries only the offending ID. For real feeds the useful question is "where in the feed did this trip come from" – adding the `agency_id` / `route_id` chain in error messages would make diagnosing bad feeds substantially less painful. Pure ergonomic improvement, no algorithm changes.

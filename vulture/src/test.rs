@@ -2320,7 +2320,7 @@ fn newly_active_stops_marks_only_in_window() {
     // Window [180, 270): R1's T2 (200) and R2's T5 (250) qualify.
     // Stops marked: A and B (R1 reaches both via T2), C and D (R2 reaches both via T5).
     // T2 also has B at 210 and T5 has D at 260 – both fall in the window.
-    newly_active_stops_into(&tt, SecondOfDay(180), SecondOfDay(270), &mut marked);
+    newly_active_stops_into(&tt, SecondOfDay(180), SecondOfDay(270), &mut marked, false);
     assert!(marked.contains(tt.stop_idx_of(&S::A).idx()));
     assert!(marked.contains(tt.stop_idx_of(&S::B).idx()));
     assert!(marked.contains(tt.stop_idx_of(&S::C).idx()));
@@ -2328,12 +2328,12 @@ fn newly_active_stops_marks_only_in_window() {
 
     // Empty window: nothing changes.
     let mut marked2 = FixedBitSet::with_capacity(tt.n_stops());
-    newly_active_stops_into(&tt, SecondOfDay(500), SecondOfDay(500), &mut marked2);
+    newly_active_stops_into(&tt, SecondOfDay(500), SecondOfDay(500), &mut marked2, false);
     assert_eq!(marked2.count_ones(..), 0);
 
     // Window with no qualifying trip: nothing changes.
     let mut marked3 = FixedBitSet::with_capacity(tt.n_stops());
-    newly_active_stops_into(&tt, SecondOfDay(120), SecondOfDay(140), &mut marked3);
+    newly_active_stops_into(&tt, SecondOfDay(120), SecondOfDay(140), &mut marked3, false);
     assert_eq!(marked3.count_ones(..), 0);
 
     // Boundary: dep == lo is included (lower bound is inclusive).
@@ -2341,7 +2341,7 @@ fn newly_active_stops_marks_only_in_window() {
     // so A and B are marked. T5's C=250 hits hi exactly and is excluded; T4's
     // C=150 is below lo. Hence C and D must NOT be marked.
     let mut marked4 = FixedBitSet::with_capacity(tt.n_stops());
-    newly_active_stops_into(&tt, SecondOfDay(200), SecondOfDay(250), &mut marked4);
+    newly_active_stops_into(&tt, SecondOfDay(200), SecondOfDay(250), &mut marked4, false);
     assert!(marked4.contains(tt.stop_idx_of(&S::A).idx()));
     assert!(marked4.contains(tt.stop_idx_of(&S::B).idx()));
     assert!(!marked4.contains(tt.stop_idx_of(&S::C).idx()));
@@ -2352,7 +2352,7 @@ fn newly_active_stops_marks_only_in_window() {
     // so A and B are marked. T6's C=350 hits hi exactly and is excluded; T5's
     // C=250 is below lo. Hence C and D must NOT be marked.
     let mut marked5 = FixedBitSet::with_capacity(tt.n_stops());
-    newly_active_stops_into(&tt, SecondOfDay(300), SecondOfDay(350), &mut marked5);
+    newly_active_stops_into(&tt, SecondOfDay(300), SecondOfDay(350), &mut marked5, false);
     assert!(marked5.contains(tt.stop_idx_of(&S::A).idx()));
     assert!(marked5.contains(tt.stop_idx_of(&S::B).idx()));
     assert!(!marked5.contains(tt.stop_idx_of(&S::C).idx()));
@@ -2363,7 +2363,7 @@ fn newly_active_stops_marks_only_in_window() {
     // afterwards (the helper only ever calls `insert`, never clears).
     let mut marked6 = FixedBitSet::with_capacity(tt.n_stops());
     marked6.insert(tt.stop_idx_of(&S::A).idx());
-    newly_active_stops_into(&tt, SecondOfDay(500), SecondOfDay(500), &mut marked6);
+    newly_active_stops_into(&tt, SecondOfDay(500), SecondOfDay(500), &mut marked6, false);
     assert!(marked6.contains(tt.stop_idx_of(&S::A).idx()));
 }
 
@@ -2548,5 +2548,197 @@ fn get_earliest_trip_skips_to_next_pickup_allowed_trip() {
         best.arrival(),
         SecondOfDay(400),
         "should board T2Late (arr 400), not T1Early (arr 200)",
+    );
+}
+
+// ── Wheelchair-accessibility tests ────────────────────────────────
+
+#[test]
+fn require_wheelchair_skips_inaccessible_trip() {
+    // Two trips on one route; the earliest is wheelchair-inaccessible.
+    // Without the filter the algorithm boards the earliest; with the
+    // filter it skips forward to the accessible one.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Stop {
+        A,
+        B,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Route {
+        R1,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Trip {
+        T1Inaccessible,
+        T2Accessible,
+    }
+    use Route::*;
+    use Stop::*;
+    use Trip::*;
+
+    let tt = SimpleTimetable::new()
+        .route(
+            R1,
+            &[A, B],
+            &[
+                (
+                    T1Inaccessible,
+                    &[
+                        (SecondOfDay(100), SecondOfDay(100)),
+                        (SecondOfDay(200), SecondOfDay(200)),
+                    ],
+                ),
+                (
+                    T2Accessible,
+                    &[
+                        (SecondOfDay(300), SecondOfDay(300)),
+                        (SecondOfDay(400), SecondOfDay(400)),
+                    ],
+                ),
+            ],
+        )
+        .no_wheelchair_on_trip(T1Inaccessible);
+
+    // Baseline: without the filter, the earliest trip wins.
+    let baseline = tt
+        .query()
+        .from(&[(tt.stop_idx_of(&A), Duration::ZERO)])
+        .to(&[(tt.stop_idx_of(&B), Duration::ZERO)])
+        .max_transfers(1)
+        .depart_at(SecondOfDay(0))
+        .run();
+    let best_baseline = baseline.iter().min_by_key(|j| j.arrival()).unwrap();
+    assert_eq!(best_baseline.arrival(), SecondOfDay(200));
+
+    // With the filter, the inaccessible trip is skipped.
+    let filtered = tt
+        .query()
+        .from(&[(tt.stop_idx_of(&A), Duration::ZERO)])
+        .to(&[(tt.stop_idx_of(&B), Duration::ZERO)])
+        .max_transfers(1)
+        .require_wheelchair_accessible()
+        .depart_at(SecondOfDay(0))
+        .run();
+    let best_filtered = filtered
+        .iter()
+        .filter(|j| !j.plan.is_empty())
+        .min_by_key(|j| j.arrival())
+        .expect("an accessible journey should exist");
+    assert_eq!(best_filtered.arrival(), SecondOfDay(400));
+}
+
+#[test]
+fn require_wheelchair_skips_inaccessible_alighting_stop() {
+    // Single trip on a three-stop route; the middle stop is marked
+    // wheelchair-inaccessible. A query targeting B with the filter
+    // returns no journey; a query targeting C still finds the trip.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Stop {
+        A,
+        B,
+        C,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Route {
+        R1,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Trip {
+        T1,
+    }
+    use Route::*;
+    use Stop::*;
+    use Trip::*;
+
+    let tt = SimpleTimetable::new()
+        .route(
+            R1,
+            &[A, B, C],
+            &[(
+                T1,
+                &[
+                    (SecondOfDay(100), SecondOfDay(100)),
+                    (SecondOfDay(200), SecondOfDay(200)),
+                    (SecondOfDay(300), SecondOfDay(300)),
+                ],
+            )],
+        )
+        .no_wheelchair_at_stop(B);
+
+    let to_b = tt
+        .query()
+        .from(&[(tt.stop_idx_of(&A), Duration::ZERO)])
+        .to(&[(tt.stop_idx_of(&B), Duration::ZERO)])
+        .max_transfers(1)
+        .require_wheelchair_accessible()
+        .depart_at(SecondOfDay(0))
+        .run();
+    assert!(
+        to_b.iter().all(|j| j.plan.is_empty()),
+        "no transit journey should reach B when it's wheelchair-inaccessible, got {to_b:?}"
+    );
+
+    let to_c = tt
+        .query()
+        .from(&[(tt.stop_idx_of(&A), Duration::ZERO)])
+        .to(&[(tt.stop_idx_of(&C), Duration::ZERO)])
+        .max_transfers(1)
+        .require_wheelchair_accessible()
+        .depart_at(SecondOfDay(0))
+        .run();
+    let best = to_c
+        .iter()
+        .filter(|j| !j.plan.is_empty())
+        .min_by_key(|j| j.arrival())
+        .expect("A -> C should still find a journey");
+    assert_eq!(best.arrival(), SecondOfDay(300));
+}
+
+#[test]
+fn require_wheelchair_returns_no_journey_when_only_trip_is_inaccessible() {
+    // Single inaccessible trip on a single route. Without the filter
+    // the journey is found; with the filter no journey exists.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Stop {
+        A,
+        B,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Route {
+        R1,
+    }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    enum Trip {
+        T1,
+    }
+    use Route::*;
+    use Stop::*;
+    use Trip::*;
+
+    let tt = SimpleTimetable::new()
+        .route(
+            R1,
+            &[A, B],
+            &[(
+                T1,
+                &[
+                    (SecondOfDay(100), SecondOfDay(100)),
+                    (SecondOfDay(200), SecondOfDay(200)),
+                ],
+            )],
+        )
+        .no_wheelchair_on_trip(T1);
+
+    let filtered = tt
+        .query()
+        .from(&[(tt.stop_idx_of(&A), Duration::ZERO)])
+        .to(&[(tt.stop_idx_of(&B), Duration::ZERO)])
+        .max_transfers(1)
+        .require_wheelchair_accessible()
+        .depart_at(SecondOfDay(0))
+        .run();
+    assert!(
+        filtered.iter().all(|j| j.plan.is_empty()),
+        "no transit journey should exist when the only trip is inaccessible, got {filtered:?}"
     );
 }

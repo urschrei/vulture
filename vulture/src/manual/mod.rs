@@ -63,6 +63,13 @@ where
     /// `(trip, pos)` pairs where alighting is forbidden (GTFS
     /// `drop_off_type = 1`). Empty by default (all stops alightable).
     no_drop_off: HashSet<(TripIdx, u32)>,
+
+    /// Trips marked wheelchair-inaccessible (GTFS
+    /// `trips.wheelchair_accessible = NotAvailable`). Empty by default.
+    inaccessible_trips: HashSet<TripIdx>,
+    /// Stops marked wheelchair-inaccessible (GTFS
+    /// `stops.wheelchair_boarding = NotAvailable`). Empty by default.
+    inaccessible_stops: HashSet<StopIdx>,
 }
 
 impl<S, R, T> SimpleTimetable<S, R, T>
@@ -87,6 +94,8 @@ where
             routes_for_stop: Vec::new(),
             no_pickup: HashSet::new(),
             no_drop_off: HashSet::new(),
+            inaccessible_trips: HashSet::new(),
+            inaccessible_stops: HashSet::new(),
         }
     }
 
@@ -204,6 +213,22 @@ where
         self
     }
 
+    /// Mark `trip` as wheelchair-inaccessible (GTFS
+    /// `trips.wheelchair_accessible = 2`). Trip must already exist.
+    pub fn no_wheelchair_on_trip(mut self, trip: T) -> Self {
+        let trip_idx = self.trip_idx_of(&trip);
+        self.inaccessible_trips.insert(trip_idx);
+        self
+    }
+
+    /// Mark `stop` as wheelchair-inaccessible (GTFS
+    /// `stops.wheelchair_boarding = 2`). Stop must already exist.
+    pub fn no_wheelchair_at_stop(mut self, stop: S) -> Self {
+        let stop_idx = self.stop_idx_of(&stop);
+        self.inaccessible_stops.insert(stop_idx);
+        self
+    }
+
     /// Returns the index assigned to the given stop key. Panics if the
     /// key was never inserted via [`route`](Self::route),
     /// [`footpath`](Self::footpath), or [`transfer_time`](Self::transfer_time).
@@ -313,6 +338,14 @@ where
 
     fn drop_off_allowed(&self, trip: TripIdx, pos: u32) -> bool {
         self.no_drop_off.is_empty() || !self.no_drop_off.contains(&(trip, pos))
+    }
+
+    fn trip_wheelchair_accessible(&self, trip: TripIdx) -> bool {
+        self.inaccessible_trips.is_empty() || !self.inaccessible_trips.contains(&trip)
+    }
+
+    fn stop_wheelchair_accessible(&self, stop: StopIdx) -> bool {
+        self.inaccessible_stops.is_empty() || !self.inaccessible_stops.contains(&stop)
     }
 }
 
