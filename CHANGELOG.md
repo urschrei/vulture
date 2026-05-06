@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Builder accepts `Into<Transfers>` and `jiff::civil::Time`
+
+`Query::max_transfers` now takes `impl Into<Transfers>`, so a bare
+`u8` literal continues to work (`.max_transfers(10)`) and an
+explicit `Transfers(...)` is now also accepted directly.
+`Query::depart_at` already took `impl Into<SecondOfDay>` and the
+`From<jiff::civil::Time> for SecondOfDay` impl already existed —
+this is now exercised by a unit test verifying that the
+`SecondOfDay::hms` shape and the `jiff::civil::time(...)` shape
+produce identical journeys, locking in the ergonomic guarantee
+against regression.
+
 ### `Label::extend_by_trip` takes a `TripContext` struct
 
 The trait method's eight-positional signature

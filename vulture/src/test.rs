@@ -3134,3 +3134,53 @@ fn ffi_entry_points_accept_dyn_timetable() {
     assert_eq!(fare_concrete[0].label.fare, 0);
     assert_eq!(fare_dyn.len(), 1);
 }
+
+/// `max_transfers` accepts anything implementing `Into<Transfers>`
+/// (a bare `u8` literal, an explicit `Transfers(...)`, etc.) and
+/// `depart_at` accepts anything implementing `Into<SecondOfDay>`
+/// (a `SecondOfDay`, an explicit `SecondOfDay::hms`, a `jiff::civil::Time`).
+/// All four call shapes must produce the same result.
+#[test]
+fn builder_accepts_ergonomic_input_types() {
+    use crate::Journey;
+    use crate::Transfers;
+    use jiff::civil::time;
+
+    const A: u8 = 0;
+    const B: u8 = 1;
+    let tt = SimpleTimetable::new().route(
+        0u8,
+        &[A, B],
+        &[(
+            0u16,
+            &[
+                (SecondOfDay::hms(9, 0, 0), SecondOfDay::hms(9, 0, 0)),
+                (SecondOfDay::hms(9, 1, 0), SecondOfDay::hms(9, 1, 0)),
+            ],
+        )],
+    );
+    let s_a = tt.stop_idx_of(&A);
+    let s_b = tt.stop_idx_of(&B);
+
+    // Bare u8 + SecondOfDay::hms — the README's quick-start shape.
+    let baseline: Vec<Journey<crate::ArrivalTime>> = tt
+        .query()
+        .from(s_a)
+        .to(s_b)
+        .max_transfers(1u8)
+        .depart_at(SecondOfDay::hms(9, 0, 0))
+        .run();
+
+    // Explicit Transfers + jiff::civil::Time.
+    let typed: Vec<Journey<crate::ArrivalTime>> = tt
+        .query()
+        .from(s_a)
+        .to(s_b)
+        .max_transfers(Transfers(1))
+        .depart_at(time(9, 0, 0, 0))
+        .run();
+
+    assert_eq!(baseline.len(), typed.len());
+    assert_eq!(baseline[0].label, typed[0].label);
+    assert_eq!(baseline[0].plan, typed[0].plan);
+}
