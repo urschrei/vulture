@@ -42,8 +42,6 @@ let gtfs = Gtfs::from_url("https://example.org/feed/gtfs.zip")?;
 let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?;
 ```
 
-True streaming isn't useful — GTFS is a zip of CSVs, the parser has to buffer the whole archive before any of it is queryable.
-
 ## Worked examples
 
 ### Berlin VBB: station-level query
