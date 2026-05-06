@@ -55,3 +55,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo doc --workspace --no-deps --all-features
+
+  examples:
+    name: Examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Runnable, self-contained examples that exercise the public
+      # API on synthetic timetables. Each example ends with assert!s
+      # that fail the run on behavioural regressions, so this job
+      # catches both compile-time API breakage (also caught by
+      # clippy --all-targets above) and silent output drift.
+      # GTFS-feed-dependent examples (gtfs-timetable, cross-city-bench)
+      # are intentionally excluded — they need feeds under
+      # aux/external/ that CI doesn't have.
+      - run: cargo run --release --example custom_label
+      - run: cargo run --release --example fare_aware
+      - run: cargo run --release --example range_query
+      - run: cargo run --release --example cache_reuse

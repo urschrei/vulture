@@ -141,6 +141,15 @@ let results: Vec<_> = queries.par_iter().map(|q| {
 
 The pool's `checkout()` returns an RAII guard that returns the cache on drop; same pool serves any number of threads with no per-thread bookkeeping.
 
+### Runnable examples
+
+The `vulture/examples/` directory has four self-contained, synthetic-network examples covering the patterns above:
+
+- `cargo run --release --example custom_label` — defines a custom `Label` (route-preference scoring) with its own `Ctx`, builds the lookup table, runs a query, and inspects the Pareto front.
+- `cargo run --release --example fare_aware` — fare-aware Pareto routing using the bundled `ArrivalAndFare` and a `FareTable` context.
+- `cargo run --release --example range_query` — `depart_in_window(...)` over a window of departure times; runs both serial rRAPTOR and the parallel naïve batch, asserts they agree.
+- `cargo run --release --example cache_reuse` — `RaptorCache` reuse across many queries; asserts cached results match one-shot results.
+
 ## Features
 
 - **`Timetable` trait** – describes a transit network. Use the bundled [`GtfsTimetable`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html) for any GTFS feed, or [implement directly](https://docs.rs/vulture/latest/vulture/trait.Timetable.html) for non-GTFS data.
