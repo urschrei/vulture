@@ -9,9 +9,9 @@ use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 
 use crate::spec::{NetworkSpec, close_footpaths};
 
-/// Pre-computed per-trip stop schedules: `(stop, arrival, departure)` per
-/// stop in the trip's stop sequence.
-pub(super) type TripSchedule = Vec<(u8, u16, u16)>;
+/// Pre-computed per-trip stop schedules: per stop in the trip's
+/// sequence, `(stop, arrival, departure, no_pickup, no_drop_off)`.
+pub(super) type TripSchedule = Vec<(u8, u16, u16, bool, bool)>;
 
 /// Pre-computation: per-stop relevant timepoints, per-trip schedules,
 /// transitively-closed footpath matrix.
@@ -22,6 +22,8 @@ pub(super) struct Prep {
     #[cfg_attr(not(test), allow(dead_code))]
     pub nodes: BTreeMap<u8, BTreeSet<u16>>,
     pub trips: Vec<TripSchedule>,
+    /// Per-trip `wheelchair_accessible`, parallel to `trips`.
+    pub trip_wheelchair: Vec<bool>,
     pub footpaths: Vec<Vec<Option<u16>>>,
     pub n_stops: u8,
 }
@@ -31,25 +33,31 @@ impl Prep {
         let footpaths = close_footpaths(spec);
 
         let mut trips: Vec<TripSchedule> = Vec::new();
+        let mut trip_wheelchair: Vec<bool> = Vec::new();
         for route in &spec.routes {
             for trip in &route.trips {
                 let mut schedule: TripSchedule = Vec::with_capacity(route.stop_sequence.len());
                 let mut arr = trip.first_dep;
                 let mut dep = arr.saturating_add(trip.dwell_times[0]);
-                schedule.push((route.stop_sequence[0], arr, dep));
+                let np = pickup_flag(&trip.no_pickup_at, 0);
+                let nd = dropoff_flag(&trip.no_drop_off_at, 0);
+                schedule.push((route.stop_sequence[0], arr, dep, np, nd));
                 for i in 1..route.stop_sequence.len() {
                     arr = dep.saturating_add(trip.leg_durations[i - 1]);
                     dep = arr.saturating_add(trip.dwell_times[i]);
-                    schedule.push((route.stop_sequence[i], arr, dep));
+                    let np = pickup_flag(&trip.no_pickup_at, i);
+                    let nd = dropoff_flag(&trip.no_drop_off_at, i);
+                    schedule.push((route.stop_sequence[i], arr, dep, np, nd));
                 }
                 trips.push(schedule);
+                trip_wheelchair.push(trip.wheelchair_accessible);
             }
         }
 
         let mut nodes: BTreeMap<u8, BTreeSet<u16>> = BTreeMap::new();
         nodes.entry(ps).or_default().insert(tau);
         for sched in &trips {
-            for &(s, a, d) in sched {
+            for &(s, a, d, _, _) in sched {
                 let entry = nodes.entry(s).or_default();
                 entry.insert(a);
                 entry.insert(d);
@@ -78,10 +86,21 @@ impl Prep {
         Prep {
             nodes,
             trips,
+            trip_wheelchair,
             footpaths,
             n_stops: spec.n_stops,
         }
     }
+}
+
+/// `no_pickup_at` may be empty (treated as all-false) or full-length.
+fn pickup_flag(flags: &[bool], i: usize) -> bool {
+    flags.get(i).copied().unwrap_or(false)
+}
+
+/// Same convention for `no_drop_off_at`.
+fn dropoff_flag(flags: &[bool], i: usize) -> bool {
+    flags.get(i).copied().unwrap_or(false)
 }
 
 fn relax(
@@ -107,12 +126,19 @@ fn relax(
 /// node – sufficient for the Pareto-front semantics: any state reachable
 /// from `(s, t, k)` is also reachable from `(s, t, k')` with `k' < k` via
 /// the same sequence of edges.
+///
+/// `require_wheelchair_accessible` mirrors the query option: when true,
+/// trips with `wheelchair_accessible = false` and stops in
+/// `inaccessible_stops` are skipped (alighting only — boarding from an
+/// inaccessible stop is allowed, matching the algorithm's gating).
+/// `no_pickup_at` / `no_drop_off_at` are enforced unconditionally.
 pub fn reference_solve(
     spec: &NetworkSpec,
     ps: u8,
     pt: u8,
     tau: u16,
     max_trips: u8,
+    require_wheelchair_accessible: bool,
 ) -> BTreeSet<(u16, u8)> {
     if ps == pt {
         // `reconstruct_journey` only returns journeys with ≥ 1 trip, so
@@ -123,6 +149,7 @@ pub fn reference_solve(
     }
 
     let prep = Prep::build(spec, ps, tau);
+    let inaccessible_stops = &spec.inaccessible_stops;
 
     let mut min_trips: BTreeMap<(u8, u16), u8> = BTreeMap::new();
     let mut heap: BinaryHeap<Reverse<(u16, u8, u8)>> = BinaryHeap::new();
@@ -153,13 +180,32 @@ pub fn reference_solve(
         // same sequence. This avoids the "free re-ride" bug from a separate
         // ride edge that doesn't track which trip you're on.
         if trips < max_trips {
-            for sched in &prep.trips {
+            for (trip_idx, sched) in prep.trips.iter().enumerate() {
+                // Wheelchair gate (trip-level) — only when the query
+                // opts into it. Skips the trip entirely.
+                if require_wheelchair_accessible && !prep.trip_wheelchair[trip_idx] {
+                    continue;
+                }
                 for i in 0..sched.len() {
-                    let (board_stop, _, board_dep) = sched[i];
+                    let (board_stop, _, board_dep, no_pickup, _) = sched[i];
                     if board_stop != stop || board_dep < t {
                         continue;
                     }
-                    for &(alight_stop, alight_arr, _) in &sched[i + 1..] {
+                    // GTFS pickup_type = 1: boarding forbidden at this position.
+                    if no_pickup {
+                        continue;
+                    }
+                    for &(alight_stop, alight_arr, _, _, no_drop_off) in &sched[i + 1..] {
+                        // GTFS drop_off_type = 1: alighting forbidden at this position.
+                        if no_drop_off {
+                            continue;
+                        }
+                        // Wheelchair gate (stop-level) — alight only.
+                        if require_wheelchair_accessible
+                            && inaccessible_stops.contains(&alight_stop)
+                        {
+                            continue;
+                        }
                         relax(
                             &mut min_trips,
                             &mut heap,
@@ -215,14 +261,16 @@ mod tests {
             n_stops: 2,
             routes: vec![],
             footpaths: vec![],
+            inaccessible_stops: BTreeSet::new(),
             query: QuerySpec {
                 ps: 0,
                 pt: 0,
                 tau: 42,
                 max_transfers: 3,
+                require_wheelchair_accessible: false,
             },
         };
-        let r = reference_solve(&spec, 0, 0, 42, 3);
+        let r = reference_solve(&spec, 0, 0, 42, 3, false);
         assert!(r.is_empty(), "ps == pt is not modelled as a journey");
     }
 
@@ -232,14 +280,16 @@ mod tests {
             n_stops: 2,
             routes: vec![],
             footpaths: vec![],
+            inaccessible_stops: BTreeSet::new(),
             query: QuerySpec {
                 ps: 0,
                 pt: 1,
                 tau: 0,
                 max_transfers: 3,
+                require_wheelchair_accessible: false,
             },
         };
-        let r = reference_solve(&spec, 0, 1, 0, 3);
+        let r = reference_solve(&spec, 0, 1, 0, 3, false);
         assert!(r.is_empty());
     }
 
@@ -253,17 +303,22 @@ mod tests {
                     first_dep: 10,
                     leg_durations: vec![20],
                     dwell_times: vec![0, 0],
+                    wheelchair_accessible: true,
+                    no_pickup_at: vec![],
+                    no_drop_off_at: vec![],
                 }],
             }],
             footpaths: vec![],
+            inaccessible_stops: BTreeSet::new(),
             query: QuerySpec {
                 ps: 0,
                 pt: 1,
                 tau: 0,
                 max_transfers: 3,
+                require_wheelchair_accessible: false,
             },
         };
-        let r = reference_solve(&spec, 0, 1, 0, 3);
+        let r = reference_solve(&spec, 0, 1, 0, 3, false);
         assert_eq!(r, front(&[(30, 1)]));
     }
 
@@ -280,14 +335,16 @@ mod tests {
                 to: 1,
                 walk_time: 5,
             }],
+            inaccessible_stops: BTreeSet::new(),
             query: QuerySpec {
                 ps: 0,
                 pt: 1,
                 tau: 100,
                 max_transfers: 3,
+                require_wheelchair_accessible: false,
             },
         };
-        let r = reference_solve(&spec, 0, 1, 100, 3);
+        let r = reference_solve(&spec, 0, 1, 100, 3, false);
         assert!(r.is_empty(), "walk-only journey should be filtered out");
     }
 
@@ -302,6 +359,9 @@ mod tests {
                     first_dep: 50,
                     leg_durations: vec![20],
                     dwell_times: vec![0, 0],
+                    wheelchair_accessible: true,
+                    no_pickup_at: vec![],
+                    no_drop_off_at: vec![],
                 }],
             }],
             footpaths: vec![FootpathSpec {
@@ -309,14 +369,16 @@ mod tests {
                 to: 1,
                 walk_time: 5,
             }],
+            inaccessible_stops: BTreeSet::new(),
             query: QuerySpec {
                 ps: 0,
                 pt: 2,
                 tau: 0,
                 max_transfers: 3,
+                require_wheelchair_accessible: false,
             },
         };
-        let r = reference_solve(&spec, 0, 2, 0, 3);
+        let r = reference_solve(&spec, 0, 2, 0, 3, false);
         assert_eq!(r, front(&[(70, 1)]));
     }
 
@@ -333,6 +395,9 @@ mod tests {
                         first_dep: 0,
                         leg_durations: vec![100],
                         dwell_times: vec![0, 0],
+                        wheelchair_accessible: true,
+                        no_pickup_at: vec![],
+                        no_drop_off_at: vec![],
                     }],
                 },
                 RouteSpec {
@@ -341,18 +406,23 @@ mod tests {
                         first_dep: 0,
                         leg_durations: vec![80],
                         dwell_times: vec![0, 0],
+                        wheelchair_accessible: true,
+                        no_pickup_at: vec![],
+                        no_drop_off_at: vec![],
                     }],
                 },
             ],
             footpaths: vec![],
+            inaccessible_stops: BTreeSet::new(),
             query: QuerySpec {
                 ps: 0,
                 pt: 1,
                 tau: 0,
                 max_transfers: 3,
+                require_wheelchair_accessible: false,
             },
         };
-        let r = reference_solve(&spec, 0, 1, 0, 3);
+        let r = reference_solve(&spec, 0, 1, 0, 3, false);
         assert_eq!(r, front(&[(80, 1)]));
     }
 
@@ -366,6 +436,9 @@ mod tests {
                     first_dep: 100,
                     leg_durations: vec![20],
                     dwell_times: vec![5, 0],
+                    wheelchair_accessible: true,
+                    no_pickup_at: vec![],
+                    no_drop_off_at: vec![],
                 }],
             }],
             footpaths: vec![FootpathSpec {
@@ -373,11 +446,13 @@ mod tests {
                 to: 2,
                 walk_time: 7,
             }],
+            inaccessible_stops: BTreeSet::new(),
             query: QuerySpec {
                 ps: 0,
                 pt: 2,
                 tau: 0,
                 max_transfers: 2,
+                require_wheelchair_accessible: false,
             },
         };
         let prep = Prep::build(&spec, 0u8, 0u16);

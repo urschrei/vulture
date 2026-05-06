@@ -82,7 +82,64 @@ time** and **number of transfers** in a public transit network.
 
 ## Outstanding soundness issues
 
-None known. The closure-of-footpaths concern that earlier versions of
+### L: Per-trip `drop_off_type` with sibling trips on identical schedules
+
+**What.** Single-criterion RAPTOR with `L = ArrivalTime` keeps a
+`route_bag` of size 1: among all trips on a route catchable from the
+current label, the algorithm boards the one with earliest arrival.
+For [`Label`]s where two trips can be Pareto-incomparable the bag may
+hold multiple entries, but for `ArrivalTime` the entry with earlier
+arrival strictly dominates and the bag collapses.
+
+**When this matters.** If two trips on the same route have **identical
+arrival times at every stop** (same `first_dep`, same `leg_durations`,
+same `dwell_times`) but **different per-position drop-off flags**, the
+algorithm boards whichever the tie-break orders first and rides it
+through. If that trip forbids drop-off at the rider's intended target
+but a sibling trip allows it, the algorithm cannot switch and the
+journey is missed.
+
+**When this does not matter.** Trips with strictly different
+departures are unaffected — the algorithm picks the earliest, and
+sibling trips with later departures can be reached via separate
+boarding labels (a later round, or after a footpath relaxation). And
+trips with strictly different arrival times at any stop are also
+unaffected, for the same reason. The bug bites only on the degenerate
+"two trips, identical schedule, different drop_off" case, which is
+legal in GTFS but rare in real feeds (different drop-off semantics
+usually correlate with timing differences — express vs local, etc.).
+
+**Pickup is fine.** `get_earliest_trip` walks past trips with pickup
+forbidden at the boarding position, so the boarding side picks an
+allowed trip even when sibling trips have different `pickup_type`
+flags. The asymmetry is that boarding is a search ("find a trip I can
+board") while alighting is a check ("can I disembark from the trip
+I'm on"). The algorithm can search for boarding, but it cannot
+re-search for a better trip at alighting time.
+
+**Workarounds today.**
+
+- Adapter-side: if the input feed has degenerate sibling trips, the
+  adapter can drop the strictly-worse trip (one whose drop-off is a
+  proper subset of a sibling's). This is a safe local rewrite the
+  GTFS adapter does not currently perform.
+- Caller-side: a multi-criterion [`Label`] that includes drop-off
+  feasibility as a criterion would keep both sibling trips in the
+  bag. Designing that label is non-trivial because feasibility is
+  per-(trip, target-stop), not a per-trip scalar.
+
+**Why we are not fixing this.** A faithful fix needs either (a) a
+per-route drop-off-flag-aware bag-of-trips data structure or (b) a
+multi-criterion label as above. (a) doubles algorithm complexity
+for a degenerate case; (b) is a user-facing API addition for a
+problem that real feeds do not exhibit at scale. The proptest
+harness's layer-3 generator shares pickup/drop-off flags across all
+trips on a route, side-stepping the case rather than asserting
+incorrect behaviour.
+
+[`Label`]: https://docs.rs/vulture/latest/vulture/trait.Label.html
+
+The closure-of-footpaths concern that earlier versions of
 this document carried is now addressed in two complementary ways
 (*transitive closure* of the footpath relation means every walk
 reachable through a chain of direct edges is already present as a
@@ -131,6 +188,12 @@ identified and fixed:
 | I | Journey reconstruction couldn't trace through walk legs | v0.3 |
 | J | Calendar / service-day filtering | v0.6 |
 | K | Loop routes (trips revisiting a stop) | v0.5 (Phase 0.11) |
+
+One outstanding item — see *Outstanding soundness issues* above:
+
+| ID | Topic | Status |
+|----|-------|--------|
+| L | Per-trip `drop_off_type` with sibling trips on identical schedules | Documented; not fixed (see entry for workarounds) |
 
 The [`vulture-proptest`](../vulture-proptest/) harness validates
 correctness against a brute-force reference solver on every commit;

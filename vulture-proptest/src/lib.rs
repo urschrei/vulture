@@ -58,19 +58,22 @@ fn run_property(tc: &hegel::TestCase, spec: &spec::NetworkSpec) {
     let timetable = spec::render(spec);
     let ps_idx = timetable.stop_idx_of(&spec.query.ps);
     let pt_idx = timetable.stop_idx_of(&spec.query.pt);
-    let ours = timetable
+    let mut q = timetable
         .query()
         .from(&[(ps_idx, Duration::ZERO)])
         .to(&[(pt_idx, Duration::ZERO)])
-        .max_transfers(spec.query.max_transfers as usize as u8)
-        .depart_at(SecondOfDay(spec.query.tau as u32))
-        .run();
+        .max_transfers(spec.query.max_transfers as usize as u8);
+    if spec.query.require_wheelchair_accessible {
+        q = q.require_wheelchair_accessible();
+    }
+    let ours = q.depart_at(SecondOfDay(spec.query.tau as u32)).run();
     let theirs = reference::reference_solve(
         spec,
         spec.query.ps,
         spec.query.pt,
         spec.query.tau,
         spec.query.max_transfers,
+        spec.query.require_wheelchair_accessible,
     );
     let our_front = raptor_front(&ours);
     if our_front != theirs {

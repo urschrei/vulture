@@ -140,6 +140,17 @@ pub trait Timetable {
     /// returns `true`. Trips that pass through `pos` but don't allow
     /// drop-off cannot be the alighting leg of a journey ending or
     /// transferring there.
+    ///
+    /// **Caveat (issue L in `docs/soundness.md`)**: with the default
+    /// single-criterion `Label = ArrivalTime`, the route-scan bag
+    /// collapses to one trip per route per round. If two trips on the
+    /// same route have identical arrival times at every stop but
+    /// different per-position drop-off flags, the algorithm cannot
+    /// switch between them mid-route — the rider boards the
+    /// tie-break-first trip and may miss a target the sibling trip
+    /// would have allowed. This is rare in real feeds (different
+    /// drop-off semantics usually correlate with different timing) but
+    /// legal in GTFS.
     fn drop_off_allowed(&self, trip: TripIdx, pos: u32) -> bool {
         let (_, _) = (trip, pos);
         true

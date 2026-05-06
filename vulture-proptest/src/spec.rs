@@ -3,6 +3,8 @@
 //!
 //! See `lib.rs` for the trip-count convention banner.
 
+use std::collections::BTreeSet;
+
 use vulture::manual::SimpleTimetable;
 
 /// Top-level spec for one randomly-generated test case.
@@ -11,6 +13,10 @@ pub struct NetworkSpec {
     pub n_stops: u8,
     pub routes: Vec<RouteSpec>,
     pub footpaths: Vec<FootpathSpec>,
+    /// Stops marked wheelchair-inaccessible (GTFS
+    /// `wheelchair_boarding = 2`). Default empty. Consulted by the
+    /// algorithm only when `query.require_wheelchair_accessible`.
+    pub inaccessible_stops: BTreeSet<u8>,
     pub query: QuerySpec,
 }
 
@@ -33,6 +39,16 @@ pub struct TripSpec {
     pub leg_durations: Vec<u16>,
     /// `len() == stop_sequence.len()`. Each `≥ 0`.
     pub dwell_times: Vec<u16>,
+    /// Whether this trip is wheelchair-accessible (GTFS
+    /// `wheelchair_accessible = 1`). Default `true`. When `false` and
+    /// the query requires accessibility, the algorithm skips the trip.
+    pub wheelchair_accessible: bool,
+    /// Per-position GTFS `pickup_type = NotAvailable` (boarding
+    /// forbidden). `len() == stop_sequence.len()`. Default all `false`.
+    pub no_pickup_at: Vec<bool>,
+    /// Per-position GTFS `drop_off_type = NotAvailable` (alighting
+    /// forbidden). Same shape as `no_pickup_at`.
+    pub no_drop_off_at: Vec<bool>,
 }
 
 /// One sparse footpath. The renderer transitively closes the footpath graph.
@@ -50,6 +66,10 @@ pub struct QuerySpec {
     pub pt: u8,
     pub tau: u16,
     pub max_transfers: u8,
+    /// When `true`, the query call adds `.require_wheelchair_accessible()`
+    /// to the builder and the reference solver mirrors the gating.
+    /// Default `false`.
+    pub require_wheelchair_accessible: bool,
 }
 
 /// Render a `NetworkSpec` into an executable `SimpleTimetable`.
@@ -83,9 +103,21 @@ pub fn render(spec: &NetworkSpec) -> SimpleTimetable<u8, u8, u16> {
 
         let mut trip_owned: Vec<(u16, Vec<(vulture::SecondOfDay, vulture::SecondOfDay)>)> =
             Vec::with_capacity(route.trips.len());
+        let mut trip_flags: Vec<(u16, &TripSpec)> = Vec::with_capacity(route.trips.len());
         for trip in &route.trips {
             assert_eq!(trip.leg_durations.len(), stops.len() - 1);
             assert_eq!(trip.dwell_times.len(), stops.len());
+            // no_pickup_at / no_drop_off_at default to empty Vecs in the
+            // generators below; render still expects either empty (taken
+            // as all-false) or length == stops.len().
+            assert!(
+                trip.no_pickup_at.is_empty() || trip.no_pickup_at.len() == stops.len(),
+                "no_pickup_at length mismatch",
+            );
+            assert!(
+                trip.no_drop_off_at.is_empty() || trip.no_drop_off_at.len() == stops.len(),
+                "no_drop_off_at length mismatch",
+            );
 
             let mut times: Vec<(vulture::SecondOfDay, vulture::SecondOfDay)> =
                 Vec::with_capacity(stops.len());
@@ -100,6 +132,7 @@ pub fn render(spec: &NetworkSpec) -> SimpleTimetable<u8, u8, u16> {
             }
 
             trip_owned.push((next_trip_id, times));
+            trip_flags.push((next_trip_id, trip));
             next_trip_id = next_trip_id.checked_add(1).expect("trip id overflow");
         }
 
@@ -108,6 +141,30 @@ pub fn render(spec: &NetworkSpec) -> SimpleTimetable<u8, u8, u16> {
             .map(|(id, times)| (*id, times.as_slice()))
             .collect();
         tt = tt.route(route_id, stops, &trip_refs);
+
+        // Per-(trip, position) and per-trip overrides must be applied
+        // *after* .route() has interned each trip id.
+        for (trip_id, trip) in &trip_flags {
+            for (pos, &flag) in trip.no_pickup_at.iter().enumerate() {
+                if flag {
+                    tt = tt.no_pickup_at(*trip_id, pos as u32);
+                }
+            }
+            for (pos, &flag) in trip.no_drop_off_at.iter().enumerate() {
+                if flag {
+                    tt = tt.no_drop_off_at(*trip_id, pos as u32);
+                }
+            }
+            if !trip.wheelchair_accessible {
+                tt = tt.no_wheelchair_on_trip(*trip_id);
+            }
+        }
+    }
+
+    for &stop in &spec.inaccessible_stops {
+        if stop < spec.n_stops {
+            tt = tt.no_wheelchair_at_stop(stop);
+        }
     }
 
     let closed = close_footpaths(spec);
@@ -183,11 +240,13 @@ fn close_footpaths_two_hop_chain() {
                 walk_time: 7,
             },
         ],
+        inaccessible_stops: BTreeSet::new(),
         query: QuerySpec {
             ps: 0,
             pt: 2,
             tau: 0,
             max_transfers: 1,
+            require_wheelchair_accessible: false,
         },
     };
     let closed = close_footpaths(&spec);
@@ -215,11 +274,13 @@ fn close_footpaths_picks_min_when_duplicate() {
                 walk_time: 4,
             },
         ],
+        inaccessible_stops: BTreeSet::new(),
         query: QuerySpec {
             ps: 0,
             pt: 1,
             tau: 0,
             max_transfers: 1,
+            require_wheelchair_accessible: false,
         },
     };
     let closed = close_footpaths(&spec);
@@ -237,14 +298,19 @@ fn render_single_route_two_stops_one_trip() {
                 first_dep: 100,
                 leg_durations: vec![20],
                 dwell_times: vec![5, 0],
+                wheelchair_accessible: true,
+                no_pickup_at: vec![],
+                no_drop_off_at: vec![],
             }],
         }],
         footpaths: vec![],
+        inaccessible_stops: BTreeSet::new(),
         query: QuerySpec {
             ps: 0,
             pt: 1,
             tau: 0,
             max_transfers: 1,
+            require_wheelchair_accessible: false,
         },
     };
     let tt = render(&spec);
@@ -284,11 +350,13 @@ fn render_emits_transitively_closed_footpaths() {
                 walk_time: 4,
             },
         ],
+        inaccessible_stops: BTreeSet::new(),
         query: QuerySpec {
             ps: 0,
             pt: 2,
             tau: 0,
             max_transfers: 1,
+            require_wheelchair_accessible: false,
         },
     };
     let tt = render(&spec);
@@ -322,6 +390,10 @@ pub struct LayerBounds {
     /// (a "loop route" – the trip revisits the same stop). When false,
     /// every stop in a route's sequence is distinct.
     pub allow_loops: bool,
+    /// When true, the generator emits per-trip / per-stop / per-stop_time
+    /// accessibility and pickup/drop-off flags. Layer 1 + 2 keep this off
+    /// to isolate the core algorithm; only layer 3 exercises the gating.
+    pub accessibility_flags: bool,
 }
 
 pub fn layer1_bounds() -> LayerBounds {
@@ -334,6 +406,7 @@ pub fn layer1_bounds() -> LayerBounds {
         stop_seq_max: 4,
         allow_footpaths: false,
         allow_loops: false,
+        accessibility_flags: false,
     }
 }
 
@@ -347,6 +420,7 @@ pub fn layer2_bounds() -> LayerBounds {
         stop_seq_max: 4,
         allow_footpaths: true,
         allow_loops: false,
+        accessibility_flags: false,
     }
 }
 
@@ -360,6 +434,7 @@ pub fn layer3_bounds() -> LayerBounds {
         stop_seq_max: 4,
         allow_footpaths: true,
         allow_loops: true,
+        accessibility_flags: true,
     }
 }
 
@@ -413,6 +488,32 @@ fn route_spec(tc: hegel::TestCase, n_stops: u8, bounds: LayerBounds) -> RouteSpe
             .min_value(1)
             .max_value(bounds.trips_max),
     );
+    // Per-route pickup / drop-off flag vectors. Single-criterion RAPTOR
+    // with `L = ArrivalTime` keeps a bag of size 1 per route — once the
+    // earliest catchable trip is committed, the algorithm cannot switch
+    // to a sibling trip with different drop-off flags partway through.
+    // Mirroring that limitation, we share pickup / drop-off flags across
+    // all trips on the route so the choice between same-departure trips
+    // doesn't matter. Wheelchair flags stay per-trip because the
+    // boarding-side skip-forward in `earliest_accessible_trip` handles
+    // sibling-trip switching cleanly.
+    let (route_no_pickup_at, route_no_drop_off_at) = if bounds.accessibility_flags {
+        let mut np: Vec<bool> = Vec::with_capacity(stop_sequence.len());
+        let mut nd: Vec<bool> = Vec::with_capacity(stop_sequence.len());
+        for _ in 0..stop_sequence.len() {
+            let p = tc.draw(generators::integers::<u8>().min_value(0).max_value(9));
+            let d = tc.draw(generators::integers::<u8>().min_value(0).max_value(9));
+            np.push(p == 0);
+            nd.push(d == 0);
+        }
+        (np, nd)
+    } else {
+        (
+            vec![false; stop_sequence.len()],
+            vec![false; stop_sequence.len()],
+        )
+    };
+
     let mut trips: Vec<TripSpec> = Vec::with_capacity(trip_count as usize);
     let mut last_dep: u16 = 0;
     for _ in 0..trip_count {
@@ -422,10 +523,21 @@ fn route_spec(tc: hegel::TestCase, n_stops: u8, bounds: LayerBounds) -> RouteSpe
                 .min_value(last_dep)
                 .max_value(max_first_dep),
         );
+        // Per-trip flag: wheelchair accessibility. Drawn ~1-in-10 to
+        // pressure the gate without rendering most cases infeasible.
+        let wheelchair_accessible = if bounds.accessibility_flags {
+            let wc_die = tc.draw(generators::integers::<u8>().min_value(0).max_value(9));
+            wc_die != 0
+        } else {
+            true
+        };
         trips.push(TripSpec {
             first_dep: next_dep,
             leg_durations: leg_durations.clone(),
             dwell_times: dwell_times.clone(),
+            wheelchair_accessible,
+            no_pickup_at: route_no_pickup_at.clone(),
+            no_drop_off_at: route_no_drop_off_at.clone(),
         });
         last_dep = next_dep;
     }
@@ -504,15 +616,34 @@ pub fn network_spec(tc: hegel::TestCase, bounds: LayerBounds) -> NetworkSpec {
     let tau = tc.draw(generators::integers::<u16>().min_value(0).max_value(500));
     let max_transfers = tc.draw(generators::integers::<u8>().min_value(1).max_value(5));
 
+    // Layer-3 only: a sparse subset of stops marked wheelchair-inaccessible,
+    // and a 50/50 toss for whether the query opts into the filter. Lower
+    // layers keep both at default (empty / false).
+    let (inaccessible_stops, require_wheelchair_accessible) = if bounds.accessibility_flags {
+        let mut iset = BTreeSet::new();
+        for s in 0..n_stops {
+            let die = tc.draw(generators::integers::<u8>().min_value(0).max_value(9));
+            if die == 0 {
+                iset.insert(s);
+            }
+        }
+        let req = tc.draw(generators::integers::<u8>().min_value(0).max_value(1)) == 0;
+        (iset, req)
+    } else {
+        (BTreeSet::new(), false)
+    };
+
     NetworkSpec {
         n_stops,
         routes,
         footpaths,
+        inaccessible_stops,
         query: QuerySpec {
             ps,
             pt,
             tau,
             max_transfers,
+            require_wheelchair_accessible,
         },
     }
 }
