@@ -1,0 +1,32 @@
+name: Publish vulture to crates.io
+
+on:
+  push:
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Test workspace
+        run: cargo nextest run --workspace
+      - name: Verify packaging
+        run: cargo publish --package vulture --dry-run
+      - name: Mint crates.io OIDC token
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+      - name: Publish to crates.io
+        run: cargo publish --package vulture
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
