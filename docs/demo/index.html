@@ -8,6 +8,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,400..900,0..100;1,9..144,300..900,0..100&family=Bricolage+Grotesque:opsz,wght@12..96,200..800&family=JetBrains+Mono:ital,wght@0,400..700;1,400..700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css">
+    <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
 </head>
 <body>
 <header>
@@ -71,6 +73,18 @@
             error in most cases.
         </p>
     </details>
+</section>
+
+<section class="map-section" id="map-section">
+    <div class="map-header">
+        <span class="map-label">Network map</span>
+        <span class="map-status" id="map-status">— no query yet —</span>
+        <span class="map-walking-toggle" id="map-walking-toggle" hidden>
+            <button type="button" data-state="after" id="walking-toggle-btn">After</button>
+        </span>
+    </div>
+    <div id="map" class="map-canvas"></div>
+    <p class="map-attrib">© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors · © <a href="https://carto.com/attributions">Carto</a></p>
 </section>
 
     <section class="demo" id="simple-demo">
@@ -149,9 +163,9 @@
         <a href="https://www.npmjs.com/package/vulture-wasm">npm</a>
     </p>
     <p class="small">
-        WASM bundle is ~280 KB gzipped.
-        All routing happens client-side; this page makes no server calls
-        after the initial asset load.
+        WASM bundle is ~280 KB gzipped. Routing runs entirely
+        client-side; the only ongoing server traffic is basemap
+        tiles fetched from Carto as you pan and zoom.
     </p>
 </footer>
 

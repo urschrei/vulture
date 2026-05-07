@@ -33,6 +33,419 @@ const LINE_COLOURS = {
 
 const PILL_DEFAULT = "#f0b441"; // matches CSS --amber
 
+// === MapLibre map (dark Carto basemap) ============================
+// One shared instance lives at #map and persists across all three
+// demo panels. drawJourney() (added in a later step) clears + redraws
+// layers on each query.
+
+const MAP_STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+
+const map = new maplibregl.Map({
+    container: "map",
+    style: MAP_STYLE,
+    center: [77.21, 28.64],   // Delhi default; replaced once the feed loads
+    zoom: 9,
+    attributionControl: false,
+});
+map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "top-right");
+
+// Track when the style is loaded — we can't add layers before then.
+let mapReady = false;
+map.on("load", () => { mapReady = true; });
+
+// Single popup instance, reused across clicks.
+const stopPopup = new maplibregl.Popup({
+    closeButton: true,
+    closeOnClick: true,
+    maxWidth: "320px",
+    className: "stop-popup",
+});
+
+function setMapStatus(text) {
+    const statusEl = document.getElementById("map-status");
+    if (statusEl) statusEl.textContent = text;
+}
+
+function escapeHtml(s) {
+    return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+function fmtTimeShort(s) {
+    const hh = Math.floor(s / 3600);
+    const mm = Math.floor((s % 3600) / 60);
+    return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
+function renderStopPopupHtml(name, events) {
+    const parts = [`<p class="stop-popup-name">${escapeHtml(name)}</p>`];
+    if (!events || (!events.arrivals?.length && !events.departures?.length)) {
+        return parts.join("");
+    }
+    for (const a of events.arrivals ?? []) {
+        parts.push(
+            `<div class="stop-popup-event">` +
+                `<span class="label">Arrive</span>` +
+                `<span><span class="time">${fmtTimeShort(a.time)}</span>` +
+                ` · <span class="route">${escapeHtml(a.route)}</span></span>` +
+                `</div>`,
+        );
+    }
+    for (const d of events.departures ?? []) {
+        parts.push(
+            `<div class="stop-popup-event">` +
+                `<span class="label">Depart</span>` +
+                `<span><span class="time">${fmtTimeShort(d.time)}</span>` +
+                ` · <span class="route">${escapeHtml(d.route)}</span></span>` +
+                `</div>`,
+        );
+    }
+    return parts.join("");
+}
+
+const IDLE_SOURCE_ID = "feed-stops";
+const IDLE_LAYER_ID = "feed-stops-layer";
+
+// Returns the id of the first symbol layer in the active basemap
+// style. Insert overlay layers immediately before this one so route
+// lines and stop dots sit below place / station labels rather than
+// painting over them.
+function firstSymbolLayerId() {
+    const style = map.getStyle();
+    if (!style) return undefined;
+    for (const l of style.layers) {
+        if (l.type === "symbol") return l.id;
+    }
+    return undefined;
+}
+
+// Module-scope lookup tables, refreshed on every feed load. Used by
+// drawJourney() (added in a later task) and by renderIdleStops below.
+let routesByIdx = new Map();
+let stopsByIdx = new Map();
+
+// Walking-panel before/after state. Captured by `onWalking` so the
+// map header's toggle can flip the rendered journey without re-running
+// the queries.
+let walkingState = { before: null, after: null, from: null, to: null };
+
+function renderIdleStops(stops) {
+    const features = stops
+        .filter((s) => typeof s.lat === "number" && typeof s.lon === "number")
+        .map((s) => ({
+            type: "Feature",
+            properties: { id: s.id, name: s.name },
+            geometry: { type: "Point", coordinates: [s.lon, s.lat] },
+        }));
+
+    const data = { type: "FeatureCollection", features };
+
+    const apply = () => {
+        if (map.getSource(IDLE_SOURCE_ID)) {
+            map.getSource(IDLE_SOURCE_ID).setData(data);
+        } else {
+            map.addSource(IDLE_SOURCE_ID, { type: "geojson", data });
+            map.addLayer(
+                {
+                    id: IDLE_LAYER_ID,
+                    type: "circle",
+                    source: IDLE_SOURCE_ID,
+                    paint: {
+                        "circle-radius": 2.5,
+                        "circle-color": "#3a3f48",
+                        "circle-opacity": 0.8,
+                    },
+                },
+                firstSymbolLayerId(),
+            );
+        }
+        if (features.length === 0) return;
+        const bbox = features.reduce(
+            (b, f) => {
+                const [lon, lat] = f.geometry.coordinates;
+                return {
+                    minLon: Math.min(b.minLon, lon),
+                    maxLon: Math.max(b.maxLon, lon),
+                    minLat: Math.min(b.minLat, lat),
+                    maxLat: Math.max(b.maxLat, lat),
+                };
+            },
+            { minLon: 180, maxLon: -180, minLat: 90, maxLat: -90 },
+        );
+        if (Number.isFinite(bbox.minLon)) {
+            map.fitBounds(
+                [
+                    [bbox.minLon, bbox.minLat],
+                    [bbox.maxLon, bbox.maxLat],
+                ],
+                { padding: 32, duration: 600 },
+            );
+        }
+    };
+
+    if (mapReady) apply();
+    else map.once("load", apply);
+}
+
+// === Mode palette (keyed on GTFS route_type) ======================
+// Route palette priority: route.route_color (if the feed sets it) ->
+// mode palette below -> fallback. Walking transfers are out of scope
+// (vulture's journey output doesn't surface them today).
+const MODE_PALETTE = {
+    0: "#a78bfa",   // Tram / light rail
+    1: "#ef4444",   // Subway / metro
+    2: "#38bdf8",   // Rail / commuter
+    3: "#f0b441",   // Bus
+    4: "#34d399",   // Ferry
+    5: "#fb7185",   // Cable car
+    6: "#fb7185",   // Aerial
+    7: "#fb7185",   // Funicular
+    11: "#f0b441",  // Trolleybus
+};
+const FALLBACK_COLOUR = "#c2342b";
+
+function colourForRoute(route) {
+    if (route?.route_color) return route.route_color;
+    if (route && route.route_type in MODE_PALETTE) return MODE_PALETTE[route.route_type];
+    return FALLBACK_COLOUR;
+}
+
+const JOURNEY_LINES_ID = "journey-lines";
+const JOURNEY_HALO_ID = "journey-halo";
+const JOURNEY_STOPS_ID = "journey-stops";
+
+function clearJourney() {
+    // Dismiss any open stop popup before tearing the layers down —
+    // its anchor stop may not exist on the next journey.
+    stopPopup.remove();
+    for (const id of [JOURNEY_LINES_ID, JOURNEY_HALO_ID, JOURNEY_STOPS_ID]) {
+        if (map.getLayer(id)) map.removeLayer(id);
+        if (map.getSource(id)) map.removeSource(id);
+    }
+}
+
+/**
+ * Render one journey on the map. Each leg becomes a coloured line
+ * (with off-white halo underneath) plus circle markers at the
+ * board/alight stops. Auto-fits the camera to the union of all leg
+ * geometries.
+ *
+ * @param {object} journey - one WasmJourney; legs[*].shape may be null
+ * @param {Map<number, object>} routes - routesByIdx lookup
+ * @param {Map<number, object>} stops - stopsByIdx lookup (each {lat, lon})
+ */
+function drawJourney(journey, routes, stops) {
+    if (!journey || !journey.legs?.length) return;
+    clearJourney();
+
+    const lineFeatures = [];
+    const stopFeatures = [];
+    const allCoords = [];
+    // stop_idx → { name, lon, lat, colour, arrivals: [{time, route}],
+    //              departures: [{time, route}] }
+    const stopEvents = new Map();
+
+    for (const leg of journey.legs) {
+        const route = routes.get(leg.route);
+        const colour = colourForRoute(route);
+
+        // Leg geometry: prefer the per-leg shape, fall back to a
+        // straight chord between the leg's stops if the feed has no
+        // shapes.txt for this trip.
+        let coords;
+        if (Array.isArray(leg.shape) && leg.shape.length >= 2) {
+            coords = leg.shape.map(([lat, lon]) => [lon, lat]);
+        } else {
+            const board = stops.get(leg.board_stop);
+            const alight = stops.get(leg.alight_stop);
+            if (!board || !alight) continue;
+            coords = [[board.lon, board.lat], [alight.lon, alight.lat]];
+        }
+        lineFeatures.push({
+            type: "Feature",
+            properties: { colour },
+            geometry: { type: "LineString", coordinates: coords },
+        });
+        allCoords.push(...coords);
+
+        // Aggregate per-stop events — a transfer stop appears as
+        // both an alight (from the previous leg) and a board (for
+        // the next leg), so the popup can show both.
+        const routeName = route?.name ?? `route ${leg.route}`;
+        const board = stops.get(leg.board_stop);
+        const alight = stops.get(leg.alight_stop);
+        if (board) {
+            if (!stopEvents.has(leg.board_stop)) {
+                stopEvents.set(leg.board_stop, {
+                    name: board.name,
+                    lon: board.lon,
+                    lat: board.lat,
+                    colour,
+                    arrivals: [],
+                    departures: [],
+                });
+            }
+            stopEvents.get(leg.board_stop).departures.push({
+                time: leg.depart,
+                route: routeName,
+            });
+        }
+        if (alight) {
+            if (!stopEvents.has(leg.alight_stop)) {
+                stopEvents.set(leg.alight_stop, {
+                    name: alight.name,
+                    lon: alight.lon,
+                    lat: alight.lat,
+                    colour,
+                    arrivals: [],
+                    departures: [],
+                });
+            }
+            stopEvents.get(leg.alight_stop).arrivals.push({
+                time: leg.arrive,
+                route: routeName,
+            });
+        }
+    }
+
+    for (const ev of stopEvents.values()) {
+        stopFeatures.push({
+            type: "Feature",
+            properties: {
+                name: ev.name,
+                colour: ev.colour,
+                events: JSON.stringify({
+                    arrivals: ev.arrivals,
+                    departures: ev.departures,
+                }),
+            },
+            geometry: { type: "Point", coordinates: [ev.lon, ev.lat] },
+        });
+    }
+
+    const apply = () => {
+        // Insert all journey layers immediately below the basemap's
+        // first symbol layer so labels (place names, station names)
+        // continue to render on top of the route geometry.
+        const labelAnchor = firstSymbolLayerId();
+
+        // Halo (drawn first, underneath).
+        map.addSource(JOURNEY_HALO_ID, {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: lineFeatures },
+        });
+        map.addLayer(
+            {
+                id: JOURNEY_HALO_ID,
+                type: "line",
+                source: JOURNEY_HALO_ID,
+                paint: {
+                    "line-color": "#f1ebde",
+                    "line-width": 6,
+                    "line-opacity": 0.75,
+                },
+                layout: { "line-cap": "round", "line-join": "round" },
+            },
+            labelAnchor,
+        );
+        // Stroke (over the halo).
+        map.addSource(JOURNEY_LINES_ID, {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: lineFeatures },
+        });
+        map.addLayer(
+            {
+                id: JOURNEY_LINES_ID,
+                type: "line",
+                source: JOURNEY_LINES_ID,
+                paint: {
+                    "line-color": ["get", "colour"],
+                    "line-width": 3,
+                },
+                layout: { "line-cap": "round", "line-join": "round" },
+            },
+            labelAnchor,
+        );
+        // Stop dots.
+        map.addSource(JOURNEY_STOPS_ID, {
+            type: "geojson",
+            data: { type: "FeatureCollection", features: stopFeatures },
+        });
+        map.addLayer(
+            {
+                id: JOURNEY_STOPS_ID,
+                type: "circle",
+                source: JOURNEY_STOPS_ID,
+                paint: {
+                    "circle-radius": 5,
+                    "circle-color": ["get", "colour"],
+                    "circle-stroke-color": "#f1ebde",
+                    "circle-stroke-width": 1.5,
+                },
+            },
+            labelAnchor,
+        );
+
+        // Fit camera to union of all leg coords with padding 64.
+        if (allCoords.length) {
+            const lons = allCoords.map((c) => c[0]);
+            const lats = allCoords.map((c) => c[1]);
+            map.fitBounds(
+                [
+                    [Math.min(...lons), Math.min(...lats)],
+                    [Math.max(...lons), Math.max(...lats)],
+                ],
+                { padding: 64, duration: 600 },
+            );
+        }
+    };
+
+    if (mapReady) apply();
+    else map.once("load", apply);
+}
+
+// Click-to-inspect popups on idle and journey stops. Handlers are
+// keyed on layer id, so they keep working after drawJourney's
+// remove/re-add cycle.
+function setupStopPopups() {
+    const showIdle = (e) => {
+        if (!e.features?.length) return;
+        const f = e.features[0];
+        stopPopup
+            .setLngLat(f.geometry.coordinates)
+            .setHTML(renderStopPopupHtml(f.properties.name, null))
+            .addTo(map);
+    };
+    const showJourney = (e) => {
+        if (!e.features?.length) return;
+        const f = e.features[0];
+        let events = null;
+        try {
+            events = JSON.parse(f.properties.events ?? "null");
+        } catch { /* fall through to name-only popup */ }
+        stopPopup
+            .setLngLat(f.geometry.coordinates)
+            .setHTML(renderStopPopupHtml(f.properties.name, events))
+            .addTo(map);
+    };
+    map.on("click", IDLE_LAYER_ID, showIdle);
+    map.on("click", JOURNEY_STOPS_ID, showJourney);
+    for (const layer of [IDLE_LAYER_ID, JOURNEY_STOPS_ID]) {
+        map.on("mouseenter", layer, () => {
+            map.getCanvas().style.cursor = "pointer";
+        });
+        map.on("mouseleave", layer, () => {
+            map.getCanvas().style.cursor = "";
+        });
+    }
+}
+if (mapReady) setupStopPopups();
+else map.once("load", setupStopPopups);
+
 function lineColour(routeName) {
     if (!routeName) return PILL_DEFAULT;
     const prefix = routeName.split(/[_\s]/)[0].toUpperCase();
@@ -216,6 +629,19 @@ function refreshCatalogue(displayName, date) {
         STOP_BY_LABEL.set(s.label, s);
     }
     populatePicker();
+
+    const routes = TT.allRoutes();
+    routesByIdx = new Map(routes.map((r) => [r.idx, r]));
+    stopsByIdx = new Map(STOPS.map((s) => [s.idx, s]));
+    renderIdleStops(STOPS);
+    setMapStatus("— no query yet —");
+
+    // Drop any walking-panel state from the previous feed — its
+    // journeys reference indices into the old catalogue, and the
+    // toggle would otherwise stay visible from the prior session.
+    walkingState = { before: null, after: null, from: null, to: null };
+    const staleToggle = document.getElementById("map-walking-toggle");
+    if (staleToggle) staleToggle.hidden = true;
 
     document.getElementById("feed-name").textContent = displayName;
     document.getElementById("feed-meta").textContent =
@@ -530,15 +956,22 @@ function onSimple(ev) {
     ]);
     out.appendChild(summary);
 
+    const walkingToggle = document.getElementById("map-walking-toggle");
+    if (walkingToggle) walkingToggle.hidden = true;
+
     if (journeys.length === 0) {
         out.appendChild(
             emptyState(
                 "No journey found. Try a different stop pair, an earlier or later departure time, or raising the transfer cap.",
             ),
         );
+        setMapStatus(`Stop-to-stop · ${from.name} → ${to.name} · no journey found`);
         return;
     }
     for (const j of journeys) out.appendChild(renderJourney(j));
+
+    drawJourney(journeys[0], routesByIdx, stopsByIdx);
+    setMapStatus(`Stop-to-stop · ${from.name} → ${to.name}`);
 }
 
 function onRange(ev) {
@@ -589,6 +1022,9 @@ function onRange(ev) {
                 "No journeys in this window. Try a wider window or a different stop pair.",
             ),
         );
+        const walkingToggle = document.getElementById("map-walking-toggle");
+        if (walkingToggle) walkingToggle.hidden = true;
+        setMapStatus(`Departure window · ${from.name} → ${to.name} · no journeys`);
         return;
     }
 
@@ -605,24 +1041,47 @@ function onRange(ev) {
     // Range entries come back in rRAPTOR's reverse-chronological scan order;
     // sort by depart ascending for a more familiar timetable view.
     const sorted = entries.slice().sort((a, b) => a.depart - b.depart);
-    for (const rj of sorted) {
+    const rowEls = [];
+    for (let i = 0; i < sorted.length; i++) {
+        const rj = sorted[i];
         const j = rj.journey;
         const firstLeg = j.legs[0];
         const firstLegLabel = firstLeg
             ? `${TT.routeName(firstLeg.route) || firstLeg.route_id} from ${TT.stopName(firstLeg.board_stop)}`
             : "—";
-        tbody.appendChild(
-            el("tr", {}, [
-                el("td", {}, fmtTime(rj.depart)),
-                el("td", {}, fmtTime(j.arrival)),
-                el("td", {}, String(j.legs.length)),
-                el("td", {}, firstLegLabel),
-            ]),
-        );
+        const row = el("tr", { class: "range-row" }, [
+            el("td", {}, fmtTime(rj.depart)),
+            el("td", {}, fmtTime(j.arrival)),
+            el("td", {}, String(j.legs.length)),
+            el("td", {}, firstLegLabel),
+        ]);
+        row.addEventListener("click", () => {
+            for (const r of rowEls) r.classList.remove("active");
+            row.classList.add("active");
+            drawJourney(j, routesByIdx, stopsByIdx);
+            setMapStatus(
+                `Departure window · option ${i + 1} of ${sorted.length} · ${from.name} → ${to.name}`,
+            );
+        });
+        rowEls.push(row);
+        tbody.appendChild(row);
     }
     tbl.appendChild(thead);
     tbl.appendChild(tbody);
     out.appendChild(tbl);
+
+    // Default to the first row on a fresh query.
+    const walkingToggle = document.getElementById("map-walking-toggle");
+    if (walkingToggle) walkingToggle.hidden = true;
+    if (rowEls.length > 0) {
+        rowEls[0].classList.add("active");
+        drawJourney(sorted[0].journey, routesByIdx, stopsByIdx);
+        setMapStatus(
+            `Departure window · option 1 of ${sorted.length} · ${from.name} → ${to.name}`,
+        );
+    } else {
+        setMapStatus(`Departure window · ${from.name} → ${to.name} · no journeys`);
+    }
 }
 
 function onWalking(ev) {
@@ -694,6 +1153,57 @@ function onWalking(ev) {
     }
 
     out.appendChild(compare);
+
+    // Capture both candidate journeys for the map toggle. `before` is
+    // always available (baseline runs unconditionally); `after` only
+    // when dist > 0.
+    walkingState = {
+        before: baseline[0] ?? null,
+        after: dist > 0 ? (augmented[0] ?? null) : null,
+        from,
+        to,
+    };
+
+    const toggleEl = document.getElementById("map-walking-toggle");
+    const toggleBtn = document.getElementById("walking-toggle-btn");
+    const haveBoth = !!(walkingState.before && walkingState.after);
+    if (toggleEl) toggleEl.hidden = !haveBoth;
+
+    const renderForState = (state) => {
+        const j = state === "before" ? walkingState.before : walkingState.after;
+        if (j) {
+            drawJourney(j, routesByIdx, stopsByIdx);
+            setMapStatus(
+                `Walking footpaths · ${state} · ${walkingState.from.name} → ${walkingState.to.name}`,
+            );
+        } else {
+            setMapStatus(
+                `Walking footpaths · ${state} · ${walkingState.from.name} → ${walkingState.to.name} · no journey`,
+            );
+        }
+        if (toggleBtn) {
+            toggleBtn.dataset.state = state;
+            toggleBtn.textContent = state.charAt(0).toUpperCase() + state.slice(1);
+        }
+    };
+
+    if (toggleBtn) {
+        toggleBtn.onclick = () => {
+            renderForState(toggleBtn.dataset.state === "after" ? "before" : "after");
+        };
+    }
+
+    // Default render: prefer "after" if available; otherwise show
+    // "before" (the only journey we have when dist === 0).
+    if (walkingState.after) {
+        renderForState("after");
+    } else if (walkingState.before) {
+        renderForState("before");
+    } else {
+        setMapStatus(
+            `Walking footpaths · ${from.name} → ${to.name} · no journey`,
+        );
+    }
 }
 
 bootstrap().catch((err) => {

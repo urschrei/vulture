@@ -735,3 +735,170 @@ footer .small {
     line-height: 1.6;
     max-width: 60ch;
 }
+
+/* === Map section ===========================================
+   Sits between feed-loader and the demo panels. Header bar
+   styled to echo the Solari journey-output boards (black +
+   amber). Canvas is fixed-height so layout doesn't shift on
+   data load. */
+
+.map-section {
+    margin: 1.5rem 0 2rem;
+}
+
+.map-header {
+    background: #0a0c10;
+    color: #f0b441;
+    padding: 0.5rem 1rem;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-radius: 4px 4px 0 0;
+    border: 1px solid #1c1e22;
+    border-bottom: none;
+}
+
+.map-label {
+    font-weight: 600;
+}
+
+.map-status {
+    color: #d2d6de;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 0.78rem;
+}
+
+.map-canvas {
+    width: 100%;
+    height: 480px;
+    background: #14171c;
+    border: 1px solid #1c1e22;
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+}
+
+.map-attrib {
+    font-size: 0.72rem;
+    color: #6b6759;
+    margin: 0.4rem 0 0;
+    text-align: right;
+}
+
+.map-attrib a {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+/* === Range table row interactivity ============================
+   Rows in the departure-window Pareto table become clickable so
+   the user can pick which option to render on the map. The
+   active row picks up the demo's amber accent. */
+
+.range-row {
+    cursor: pointer;
+}
+
+.range-row:hover {
+    background: rgba(240, 180, 65, 0.08);
+}
+
+.range-row.active {
+    background: rgba(240, 180, 65, 0.15);
+}
+
+/* === Walking-panel before/after toggle =========================
+   Appears in the map header only after the walking-footpaths
+   panel runs a query. Toggle styling stays on-house with the
+   demo's railway/Solari aesthetic — uppercase tracked button,
+   amber on dark when "after", neutral when "before". */
+
+.map-walking-toggle button {
+    background: transparent;
+    border: 1px solid #f0b441;
+    color: #f0b441;
+    font-family: inherit;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 0.2rem 0.7rem;
+    border-radius: 2px;
+    cursor: pointer;
+}
+
+.map-walking-toggle button[data-state="before"] {
+    color: #d2d6de;
+    border-color: #d2d6de;
+}
+
+.map-walking-toggle button:hover {
+    background: rgba(240, 180, 65, 0.12);
+}
+
+/* === Stop popup ================================================
+   Solari-styled tooltip on map dots. Idle stops show just the
+   name; journey stops show arrival / departure times and routes
+   for the current journey. */
+
+.maplibregl-popup.stop-popup .maplibregl-popup-content {
+    background: #0a0c10;
+    color: #f1ebde;
+    border: 1px solid #1c1e22;
+    border-radius: 4px;
+    padding: 0.7rem 0.9rem 0.6rem;
+    font-family: "Bricolage Grotesque", system-ui, sans-serif;
+    font-size: 0.78rem;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.maplibregl-popup.stop-popup .maplibregl-popup-tip {
+    border-top-color: #0a0c10;
+    border-bottom-color: #0a0c10;
+}
+
+.maplibregl-popup.stop-popup .maplibregl-popup-close-button {
+    color: #d2d6de;
+    font-size: 1rem;
+    padding: 0 0.4rem;
+}
+
+.stop-popup-name {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #f0b441;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 0 0 0.45rem;
+}
+
+.stop-popup-event {
+    display: grid;
+    grid-template-columns: 4rem 1fr;
+    gap: 0.4rem;
+    align-items: baseline;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.72rem;
+    line-height: 1.45;
+    margin-top: 0.18rem;
+}
+
+.stop-popup-event .label {
+    color: #6b6759;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 0.66rem;
+}
+
+.stop-popup-event .time {
+    color: #f0b441;
+}
+
+.stop-popup-event .route {
+    color: #d2d6de;
+}
