@@ -110,6 +110,16 @@ function renderStopPopupHtml(name, events) {
 const IDLE_SOURCE_ID = "feed-stops";
 const IDLE_LAYER_ID = "feed-stops-layer";
 
+// Some feeds (notably NVBW Baden-Württemberg) ship synthetic
+// placeholder stops at lat=0 lon=0 — Null Island in the Gulf of
+// Guinea. They have valid stop_times so vulture's queries route
+// through them correctly, but if we let those coordinates into the
+// map's bbox calculation the camera zooms out to span both Germany
+// and the equator. Filter them out for visualisation only.
+function looksLikeNullIsland(lat, lon) {
+    return Math.abs(lat) < 0.01 && Math.abs(lon) < 0.01;
+}
+
 // Returns the id of the first symbol layer in the active basemap
 // style. Insert overlay layers immediately before this one so route
 // lines and stop dots sit below place / station labels rather than
@@ -135,7 +145,12 @@ let walkingState = { before: null, after: null, from: null, to: null };
 
 function renderIdleStops(stops) {
     const features = stops
-        .filter((s) => typeof s.lat === "number" && typeof s.lon === "number")
+        .filter(
+            (s) =>
+                typeof s.lat === "number" &&
+                typeof s.lon === "number" &&
+                !looksLikeNullIsland(s.lat, s.lon),
+        )
         .map((s) => ({
             type: "Feature",
             properties: { id: s.id, name: s.name },
@@ -255,16 +270,24 @@ function drawJourney(journey, routes, stops) {
 
         // Leg geometry: prefer the per-leg shape, fall back to a
         // straight chord between the leg's stops if the feed has no
-        // shapes.txt for this trip.
+        // shapes.txt for this trip. Drop any Null-Island placeholder
+        // coordinates so a single bogus endpoint doesn't drag the
+        // polyline across Europe and Africa.
         let coords;
         if (Array.isArray(leg.shape) && leg.shape.length >= 2) {
-            coords = leg.shape.map(([lat, lon]) => [lon, lat]);
+            coords = leg.shape
+                .filter(([lat, lon]) => !looksLikeNullIsland(lat, lon))
+                .map(([lat, lon]) => [lon, lat]);
         } else {
             const board = stops.get(leg.board_stop);
             const alight = stops.get(leg.alight_stop);
             if (!board || !alight) continue;
-            coords = [[board.lon, board.lat], [alight.lon, alight.lat]];
+            coords = [
+                [board.lon, board.lat],
+                [alight.lon, alight.lat],
+            ].filter(([lon, lat]) => !looksLikeNullIsland(lat, lon));
         }
+        if (coords.length < 2) continue;
         lineFeatures.push({
             type: "Feature",
             properties: { colour },
@@ -278,7 +301,11 @@ function drawJourney(journey, routes, stops) {
         const routeName = route?.name ?? `route ${leg.route}`;
         const board = stops.get(leg.board_stop);
         const alight = stops.get(leg.alight_stop);
-        if (board) {
+        const boardPlottable =
+            board && !looksLikeNullIsland(board.lat, board.lon);
+        const alightPlottable =
+            alight && !looksLikeNullIsland(alight.lat, alight.lon);
+        if (boardPlottable) {
             if (!stopEvents.has(leg.board_stop)) {
                 stopEvents.set(leg.board_stop, {
                     name: board.name,
@@ -294,7 +321,7 @@ function drawJourney(journey, routes, stops) {
                 route: routeName,
             });
         }
-        if (alight) {
+        if (alightPlottable) {
             if (!stopEvents.has(leg.alight_stop)) {
                 stopEvents.set(leg.alight_stop, {
                     name: alight.name,
@@ -391,9 +418,16 @@ function drawJourney(journey, routes, stops) {
         );
 
         // Fit camera to union of all leg coords with padding 64.
-        if (allCoords.length) {
-            const lons = allCoords.map((c) => c[0]);
-            const lats = allCoords.map((c) => c[1]);
+        // Skip Null-Island placeholders (synthetic stops at 0,0 in
+        // some feeds) so they don't pull the bbox down to the
+        // equator; the polyline still renders, the camera just
+        // ignores those points when framing.
+        const fittable = allCoords.filter(
+            ([lon, lat]) => !looksLikeNullIsland(lat, lon),
+        );
+        if (fittable.length) {
+            const lons = fittable.map((c) => c[0]);
+            const lats = fittable.map((c) => c[1]);
             map.fitBounds(
                 [
                     [Math.min(...lons), Math.min(...lats)],
