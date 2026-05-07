@@ -22,10 +22,8 @@ jobs:
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-      - name: Upgrade npm (trusted publishing needs >= 11.5.1)
-        run: npm install -g npm@latest
       - name: Build vulture-wasm (web target, release)
         run: wasm-pack build vulture-wasm --target web --release
       - name: Patch package.json for npm + Node ESM
