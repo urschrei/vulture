@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.21.0
+
+### vulture-wasm: parent-station expansion for queries
+
+`vulture-wasm`'s stop catalogue now surfaces GTFS hierarchy: each
+entry returned by `tt.allStops()` carries `location_type` (0 = stop
+or platform, 1 = parent station, etc.) and `parent_station` (the
+parent's GTFS id, or `null`). A new method `tt.stationStops(parentId)`
+returns a `Uint32Array` of the platform stop indices that hang off a
+parent station, intended to be passed to `runArrival` / `runRange`
+as the multi-source / multi-target `originStops` / `targetStops`.
+
+Without this, a query rooted at a parent station (`location_type = 1`)
+silently returns zero journeys, because in GTFS vehicles only board
+at platform-level stops; parent stations are bare grouping nodes
+with no stop_times entries. This was visible on feeds with deep
+station hierarchies (e.g. NVBW Baden-Württemberg, where Karlsruhe
+Hauptbahnhof has 13 child platforms grouped under one parent).
+Feeds with flat catalogues (Delhi Metro and similar) are unaffected.
+
+The bundled demo (`docs/demo/app.js`) auto-expands parent picks via
+`tt.stationStops(parent_id)` so users selecting a station from any
+of the three panels get journeys against every platform.
+
+### Breaking: `runRange` takes `Uint32Array` origins/targets
+
+To match `runArrival`'s shape and support the parent-station
+expansion uniformly, `runRange`'s second and third arguments now
+take `Uint32Array`s of stop indices instead of single `u32` values:
+
+```js
+// Before:
+runRange(tt, origin, target, max, departures, requireWheelchair);
+
+// After:
+runRange(
+    tt,
+    new Uint32Array([origin]),
+    new Uint32Array([target]),
+    max,
+    departures,
+    requireWheelchair,
+);
+```
+
+Single-stop callers wrap their existing values in `new Uint32Array([...])`.
+Vulture's underlying typestate builder already accepted multi-source
+/ multi-target via `IntoEndpoints`; this change just lifts the
+binding to use it.
+
 ## v0.20.0
 
 ### `GtfsTimetable::shape_for_leg` for journey visualisation

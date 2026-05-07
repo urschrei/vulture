@@ -47,15 +47,16 @@ const tt = new VultureTimetable(
 - `tt.nStops()`, `tt.nRoutes()` — counts.
 - `tt.stopIdx(gtfsId)` — GTFS stop id → opaque `StopIdx`, or `undefined`.
 - `tt.stopName(stopIdx)`, `tt.stopCoords(stopIdx)`, `tt.routeName(routeIdx)`, `tt.routeAgency(routeIdx)` — display-data accessors.
-- `tt.allStops()` — bulk catalogue of `{idx, id, name, lat, lon}` per stop.
-- `tt.allRoutes()` — bulk catalogue of `{idx, id, name, agency, route_type, route_color}` per route. `route_type` is the GTFS integer (0=tram, 1=metro, 2=rail, 3=bus, 4=ferry, 5=cable, 6=aerial, 7=funicular, …); `route_color` is `"#rrggbb"` or `null`.
+- `tt.allStops()` — bulk catalogue of `{idx, id, name, lat, lon, location_type, parent_station}` per stop. `location_type` is the GTFS integer (0 = stop or platform, 1 = parent station, 2 = entrance/exit, 3 = generic node, 4 = boarding area); `parent_station` is the parent's GTFS id or `null`.
+- `tt.allRoutes()` — bulk catalogue of `{idx, id, name, agency, route_type, route_color}` per route. `route_type` is the GTFS integer (0 = tram, 1 = metro, 2 = rail, 3 = bus, 4 = ferry, 5 = cable, 6 = aerial, 7 = funicular, …); `route_color` is `"#rrggbb"` or `null`.
+- `tt.stationStops(parentId)` — given a parent station's GTFS id, returns a `Uint32Array` of the platform stop indices that hang off it. Pass the result as `originStops` / `targetStops` to query against every platform of a station; queries rooted at a `location_type = 1` stop return zero journeys without this expansion, because in GTFS vehicles only board at platform-level stops.
 - `tt.withWalkingFootpaths(maxDistMeters, walkSpeedMetersPerSec)` — replace the footpath set with one derived from stop coordinates.
 - `tt.resetFootpaths()` — restore the original `transfers.txt` set.
 
 Free functions:
 
 - `runArrival(tt, originStops, targetStops, maxTransfers, departSeconds, requireWheelchair)` — single-departure query. Returns an array of journeys with timed legs.
-- `runRange(tt, origin, target, maxTransfers, departures, requireWheelchair)` — depart-in-window Pareto profile. Returns `[{depart, journey}]` where each `journey` has the same shape as a `runArrival` entry (`origin`, `target`, `arrival`, `legs`).
+- `runRange(tt, originStops, targetStops, maxTransfers, departures, requireWheelchair)` — depart-in-window Pareto profile. Returns `[{depart, journey}]` where each `journey` has the same shape as a `runArrival` entry (`origin`, `target`, `arrival`, `legs`).
 
 Each leg in `journey.legs` is `{board_stop, alight_stop, route, trip, route_id, depart, arrive, shape}`. `shape` is a `[lat, lon][]` polyline for that leg's segment of the trip's `shapes.txt` geometry, or `null` if the feed has no shape for the trip.
 
@@ -132,7 +133,14 @@ const departures = new Uint32Array(
     Array.from({ length: 13 }, (_, i) => 9 * 3600 + i * 300),
 );
 
-const profile = runRange(tt, origin, target, 10, departures, false);
+const profile = runRange(
+    tt,
+    new Uint32Array([origin]),
+    new Uint32Array([target]),
+    10,
+    departures,
+    false,
+);
 
 for (const entry of profile) {
     console.log(
@@ -174,6 +182,49 @@ console.log(`with footpaths: ${after.length} journey(s)`);
 ```
 
 `tt.resetFootpaths()` restores the original `transfers.txt` set.
+
+### 4. Querying entire stations (parent-station expansion)
+
+GTFS feeds with deep station hierarchies (regional German rail, French SNCF, UK NaPTAN, etc.) model a single station as one parent stop (`location_type = 1`) with many child platforms (`location_type = 0`) hanging off it. Vehicles only board at platforms; querying directly against a parent station returns zero journeys. Detect parents and expand them into the platform set:
+
+```js
+import init, { VultureTimetable, runArrival } from "vulture-wasm";
+
+await init();
+
+const tt = new VultureTimetable(
+    new Uint8Array(await (await fetch("/path/to/feed.zip")).arrayBuffer()),
+    "2026-05-04",
+);
+
+// Resolve a stop record (from `tt.allStops()` or any other lookup
+// path) into the array of stop indices to query against.
+function endpointsFor(stop) {
+    if (stop.location_type === 1) {
+        const platforms = tt.stationStops(stop.id);
+        if (platforms.length > 0) return platforms;
+    }
+    return new Uint32Array([stop.idx]);
+}
+
+const stops = tt.allStops();
+const stopByName = new Map(stops.map((s) => [s.name, s]));
+
+const from = stopByName.get("Karlsruhe Hauptbahnhof");   // a parent station
+const to = stopByName.get("Basel SBB");                  // also a parent
+
+const journeys = runArrival(
+    tt,
+    endpointsFor(from),
+    endpointsFor(to),
+    /* maxTransfers */ 10,
+    /* depart        */ 9 * 3600,
+    /* wheelchair    */ false,
+);
+console.log(`${journeys.length} journey(s) across all platform combinations`);
+```
+
+The same `endpointsFor(stop)` helper is what the bundled demo uses across all three panels.
 
 ## Build from source
 

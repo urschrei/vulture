@@ -843,6 +843,22 @@ function updatePlaceholders() {
     }
 }
 
+// Resolve a stop record into the `Uint32Array` of stop indices that
+// vulture should query against. Parent stations (GTFS
+// `location_type = 1`) have no boardings of their own, so expand them
+// into their child platforms via `tt.stationStops(parent_id)`; every
+// other stop becomes a single-element array. If the parent has no
+// children in the feed (a malformed entry), fall back to the single
+// stop — the query will likely return nothing, surfacing the feed
+// shape rather than masking it.
+function endpointsFor(stop) {
+    if (stop.location_type === 1) {
+        const platforms = TT.stationStops(stop.id);
+        if (platforms.length > 0) return platforms;
+    }
+    return new Uint32Array([stop.idx]);
+}
+
 function lookupStopFromInput(input) {
     const raw = input.value.trim();
     // Exact picker label match wins.
@@ -941,8 +957,8 @@ function onSimple(ev) {
     const t0 = performance.now();
     const journeys = runArrival(
         TT,
-        new Uint32Array([from.idx]),
-        new Uint32Array([to.idx]),
+        endpointsFor(from),
+        endpointsFor(to),
         max,
         depart,
         false,
@@ -1000,8 +1016,8 @@ function onRange(ev) {
     const t0 = performance.now();
     const entries = runRange(
         TT,
-        from.idx,
-        to.idx,
+        endpointsFor(from),
+        endpointsFor(to),
         10,
         new Uint32Array(departures),
         false,
@@ -1099,13 +1115,16 @@ function onWalking(ev) {
     const depart = parseHHMM(document.getElementById("walking-depart").value);
     const dist = Number(document.getElementById("walking-dist").value);
 
+    const fromIdxs = endpointsFor(from);
+    const toIdxs = endpointsFor(to);
+
     // Baseline: no walking augmentation.
     TT.resetFootpaths();
     const t0a = performance.now();
     const baseline = runArrival(
         TT,
-        new Uint32Array([from.idx]),
-        new Uint32Array([to.idx]),
+        fromIdxs,
+        toIdxs,
         10,
         depart,
         false,
@@ -1120,8 +1139,8 @@ function onWalking(ev) {
         const t0b = performance.now();
         augmented = runArrival(
             TT,
-            new Uint32Array([from.idx]),
-            new Uint32Array([to.idx]),
+            fromIdxs,
+            toIdxs,
             10,
             depart,
             false,
