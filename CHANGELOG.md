@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Skip GTFS `transfer_type=3` ("transfer not possible") in footpath loading
+
+The `vulture::gtfs` adapter previously created a footpath for every entry in `transfers.txt` regardless of `transfer_type`. Per the GTFS spec, `transfer_type=3` ("not possible") is the publisher explicitly forbidding a transfer between two stops, typically used for geographically close pairs that aren't connected by walkable infrastructure (opposite sides of a motorway, fare-controlled platforms, etc.). The adapter now filters these out via an iterator predicate in `GtfsTimetable::new`, so queries respect the publisher's intent. Other transfer types (0 Recommended, 1 Timed, 2 MinTime, 4 StayOnBoard, 5 MustReboard) continue to create a footpath; `min_transfer_time` is preserved as before.
+
+A new unit test (`impossible_transfers_are_excluded_from_footpaths`) constructs a synthetic feed with one Recommended and one Impossible transfer from the same stop, then asserts only the Recommended one becomes a footpath in the built timetable.
+
 ## v0.21.0
 
 ### vulture-wasm: parent-station expansion for queries

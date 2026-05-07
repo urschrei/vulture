@@ -589,7 +589,17 @@ impl GtfsTimetable {
             let from_idx = *stop_by_id
                 .get(stop_id.as_str())
                 .expect("every stop_id was interned by the stops loop at the start of new()");
-            for t in &stop.transfers {
+            // Skip transfer_type=3 ("Impossible"); the publisher is
+            // explicitly forbidding the transfer (typically used for
+            // geographically close stops that aren't connected by
+            // walkable infrastructure, e.g. opposite sides of a
+            // motorway). Other types (Recommended, Timed, MinTime,
+            // StayOnBoard, MustReboard) all create a footpath.
+            let usable = stop
+                .transfers
+                .iter()
+                .filter(|t| t.transfer_type != gtfs_structures::TransferType::Impossible);
+            for t in usable {
                 let Some(&to_idx) = stop_by_id.get(t.to_stop_id.as_str()) else {
                     continue;
                 };
@@ -1580,6 +1590,93 @@ mod tests {
         assert!(
             tt.shape_for_leg(&gtfs, "trip-that-does-not-exist", some_stop, some_stop)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn impossible_transfers_are_excluded_from_footpaths() {
+        use gtfs_structures::{Route, Stop, StopTransfer, TransferType, Trip};
+        use std::sync::Arc;
+
+        let mut g = weekday_only_feed();
+
+        let stop_a = Arc::new(Stop {
+            id: "A".into(),
+            transfers: vec![
+                StopTransfer {
+                    to_stop_id: "B".into(),
+                    transfer_type: TransferType::Recommended,
+                    min_transfer_time: Some(60),
+                },
+                StopTransfer {
+                    to_stop_id: "C".into(),
+                    transfer_type: TransferType::Impossible,
+                    min_transfer_time: None,
+                },
+            ],
+            ..Default::default()
+        });
+        let stop_b = Arc::new(Stop {
+            id: "B".into(),
+            ..Default::default()
+        });
+        let stop_c = Arc::new(Stop {
+            id: "C".into(),
+            ..Default::default()
+        });
+        g.stops.insert("A".into(), Arc::clone(&stop_a));
+        g.stops.insert("B".into(), Arc::clone(&stop_b));
+        g.stops.insert("C".into(), Arc::clone(&stop_c));
+
+        // A trivial trip A -> B keeps the timetable construction happy
+        // (a feed with no trips at all is rejected); the trip itself
+        // is irrelevant to the transfer-loading assertion below.
+        g.routes.insert(
+            "R".into(),
+            Route {
+                id: "R".into(),
+                ..Default::default()
+            },
+        );
+        g.trips.insert(
+            "T".into(),
+            Trip {
+                id: "T".into(),
+                service_id: "weekday".into(),
+                route_id: "R".into(),
+                stop_times: vec![
+                    StopTime {
+                        arrival_time: Some(6 * 3600),
+                        departure_time: Some(6 * 3600),
+                        stop: Arc::clone(&stop_a),
+                        ..Default::default()
+                    },
+                    StopTime {
+                        arrival_time: Some(6 * 3600 + 600),
+                        departure_time: Some(6 * 3600 + 600),
+                        stop: Arc::clone(&stop_b),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        );
+
+        let tt = GtfsTimetable::new(&g, ymd_jiff(2026, 5, 4)).unwrap();
+        let a = tt.stop_idx("A").unwrap();
+        let b = tt.stop_idx("B").unwrap();
+        let c = tt.stop_idx("C").unwrap();
+
+        let footpaths = tt.get_footpaths_from(a);
+        assert!(
+            footpaths.contains(&b),
+            "Recommended transfer A->B must create a footpath, got {:?}",
+            footpaths,
+        );
+        assert!(
+            !footpaths.contains(&c),
+            "Impossible (transfer_type=3) A->C must not create a footpath, got {:?}",
+            footpaths,
         );
     }
 }
