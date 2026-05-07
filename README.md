@@ -2,9 +2,9 @@
 
 Rust implementation of [RAPTOR](https://www.microsoft.com/en-us/research/publication/round-based-public-transit-routing/) (Delling, Pajor, Werneck): given a public transit network, find all Pareto-optimal journeys between two stops, trading fewer transfers against earlier arrival.
 
-**[Live browser demo](https://urschrei.github.io/vulture/)** — vulture compiled to WASM (~275 KB gzipped) running in your browser against the Delhi Metro feed: stop-to-stop routing, depart-in-window Pareto profile, walking-footpath augmentation. See [`vulture-wasm/`](vulture-wasm/) for the bindings and [`docs/demo/`](docs/demo/) for the page itself.
+**[Live browser demo](https://urschrei.github.io/vulture/)**: vulture compiled to WASM (~275 KB gzipped) running in your browser against the Delhi Metro feed: stop-to-stop routing, depart-in-window Pareto profile, walking-footpath augmentation. See [`vulture-wasm/`](vulture-wasm/) for the bindings and [`docs/demo/`](docs/demo/) for the page itself.
 
-**JS / browser bindings on npm:** [`vulture-wasm`](https://www.npmjs.com/package/vulture-wasm) — `npm install vulture-wasm`.
+**JS / browser bindings on npm:** [`vulture-wasm`](https://www.npmjs.com/package/vulture-wasm): `npm install vulture-wasm`.
 
 ## Quick start
 
@@ -151,10 +151,10 @@ The pool's `checkout()` returns an RAII guard that returns the cache on drop; sa
 
 The `vulture/examples/` directory has four self-contained, synthetic-network examples covering the patterns above:
 
-- `cargo run --release --example custom_label` — defines a custom `Label` (route-preference scoring) with its own `Ctx`, builds the lookup table, runs a query, and inspects the Pareto front.
-- `cargo run --release --example fare_aware` — fare-aware Pareto routing using the bundled `ArrivalAndFare` and a `FareTable` context.
-- `cargo run --release --example range_query` — `depart_in_window(...)` over a window of departure times; runs both serial rRAPTOR and the parallel naïve batch, asserts they agree.
-- `cargo run --release --example cache_reuse` — `RaptorCache` reuse across many queries; asserts cached results match one-shot results.
+- `cargo run --release --example custom_label` – defines a custom `Label` (route-preference scoring) with its own `Ctx`, builds the lookup table, runs a query, and inspects the Pareto front.
+- `cargo run --release --example fare_aware` – fare-aware Pareto routing using the bundled `ArrivalAndFare` and a `FareTable` context.
+- `cargo run --release --example range_query` – `depart_in_window(...)` over a window of departure times; runs both serial rRAPTOR and the parallel naïve batch, asserts they agree.
+- `cargo run --release --example cache_reuse` – `RaptorCache` reuse across many queries; asserts cached results match one-shot results.
 
 ## Features
 
@@ -199,7 +199,7 @@ Single-query latency, warm `RaptorCache`, M-series Apple Silicon, single thread.
 | Berlin VBB | 42,000 | 71,000 | Hbf → Alex (station-to-station) | 385 µs |
 | Paris IDFM | 54,000 | 146,000 | Châtelet → Versailles RD | 17 ms |
 
-For range-query latencies (serial rRAPTOR vs parallel naïve batch), see the [bench source](vulture/benches/gtfs.rs) and the linked benchmark page. For a head-to-head against an independent RAPTOR implementation (the TypeScript [`raptor-journey-planner`](https://github.com/planarnetwork/raptor)) on the same four feeds — including the correctness diff and a diagnosed timezone bug in the upstream library — see [`docs/cross-impl-comparison.md`](docs/cross-impl-comparison.md).
+For range-query latencies (serial rRAPTOR vs parallel naïve batch), see the [bench source](vulture/benches/gtfs.rs) and the linked benchmark page. For a head-to-head against an independent RAPTOR implementation (the TypeScript [`raptor-journey-planner`](https://github.com/planarnetwork/raptor)) on the same four feeds – including the correctness diff and a diagnosed timezone bug in the upstream library – see [`docs/cross-impl-comparison.md`](docs/cross-impl-comparison.md).
 
 ## Soundness
 
@@ -213,7 +213,7 @@ Three overlapping layers, all run by `cargo nextest r` on every PR:
 - **Doctests** on every public type with a non-trivial contract (`Label`, `Query`, `Journey`, `RaptorCache`, `GtfsTimetable::station_stops`, etc.)
 - **Property-based tests** in [`vulture-proptest`](vulture-proptest/) generate random transit networks and check the algorithm against a brute-force reference solver. Powered by [Hegel](https://github.com/hegeldev/hegel-rust).
 
-The proptest harness ships three generator layers – Layer 1 (1–2 routes, 2–4 stops, no footpaths), Layer 2 (adds 1–4 footpaths), Layer 3 (1–4 routes, up to 6 stops, optional footpaths, multi-source/multi-target queries with walk offsets, per-route fares for fare-label tests) — and six properties:
+The proptest harness ships three generator layers – Layer 1 (1–2 routes, 2–4 stops, no footpaths), Layer 2 (adds 1–4 footpaths), Layer 3 (1–4 routes, up to 6 stops, optional footpaths, multi-source/multi-target queries with walk offsets, per-route fares for fare-label tests) – and six properties:
 
 | Property | What it checks |
 | --- | --- |
