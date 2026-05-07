@@ -152,18 +152,25 @@ impl VultureTimetable {
     }
 
     /// Returns the entire synthetic-route catalogue as a JS array of
-    /// `{idx, id, name, agency}` objects.
+    /// `{idx, id, name, agency, route_type, route_color}` objects.
     #[wasm_bindgen(js_name = allRoutes)]
     pub fn all_routes(&self) -> Result<JsValue, JsError> {
         let n = self.tt().n_routes();
         let mut out: Vec<RouteRow> = Vec::with_capacity(n);
         for i in 0..n as u32 {
             let id = self.tt().route_id(RouteIdx::new(i)).to_owned();
+            let route = self.gtfs.routes.get(&id);
+            let route_type = route.map(|r| route_type_int(r.route_type)).unwrap_or(3);
+            let route_color = route
+                .and_then(|r| r.color)
+                .map(|c| format!("#{:02x}{:02x}{:02x}", c.r, c.g, c.b));
             out.push(RouteRow {
                 idx: i,
                 id,
                 name: self.route_name(i).unwrap_or_default(),
                 agency: self.route_agency(i),
+                route_type,
+                route_color,
             });
         }
         serde_wasm_bindgen::to_value(&out).map_err(|e| JsError::new(&format!("{e}")))
@@ -216,6 +223,12 @@ struct RouteRow {
     id: String,
     name: String,
     agency: Option<String>,
+    /// GTFS `route_type` integer (0=tram, 1=metro, 2=rail, 3=bus,
+    /// 4=ferry, 5=cable, 6=aerial, 7=funicular, …).
+    route_type: i16,
+    /// Hex colour `"#rrggbb"` from `routes.route_color`, or `None`
+    /// if unset.
+    route_color: Option<String>,
 }
 
 /// One transit leg with reconstructed timing (route, trip, boarding
@@ -235,6 +248,9 @@ pub struct WasmTimedLeg {
     pub depart: u32,
     /// Arrival time at `alight_stop`, seconds since midnight.
     pub arrive: u32,
+    /// Polyline points `[lat, lon]` for this leg's shape segment.
+    /// `None` when the feed has no `shapes.txt` for this trip.
+    pub shape: Option<Vec<(f32, f32)>>,
 }
 
 /// JS-friendly representation of a [`vulture::Journey`] with timed
@@ -349,14 +365,19 @@ fn make_wasm_journey(
         .unwrap_or_default();
     let legs: Vec<WasmTimedLeg> = timed
         .iter()
-        .map(|leg| WasmTimedLeg {
-            route: leg.route.get(),
-            trip: leg.trip.get(),
-            route_id: inner.route_id(leg.route).to_owned(),
-            board_stop: leg.board.get(),
-            alight_stop: leg.alight.get(),
-            depart: leg.depart.0,
-            arrive: leg.arrive.0,
+        .map(|leg| {
+            let trip_id = inner.trip_id(leg.trip);
+            let shape = inner.shape_for_leg(&tt.gtfs, trip_id, leg.board, leg.alight);
+            WasmTimedLeg {
+                route: leg.route.get(),
+                trip: leg.trip.get(),
+                route_id: inner.route_id(leg.route).to_owned(),
+                board_stop: leg.board.get(),
+                alight_stop: leg.alight.get(),
+                depart: leg.depart.0,
+                arrive: leg.arrive.0,
+                shape,
+            }
         })
         .collect();
     WasmJourney {
@@ -364,5 +385,27 @@ fn make_wasm_journey(
         origin: j.origin.get(),
         target: j.target.get(),
         legs,
+    }
+}
+
+/// Map [`gtfs_structures::RouteType`] to its canonical GTFS integer.
+/// Mirrors the Extended Route Types convention for entries beyond the
+/// core 0–7 range (200=coach, 1100=air, 1500=taxi); `Other(i)` is
+/// passed through unchanged.
+fn route_type_int(rt: gtfs_structures::RouteType) -> i16 {
+    use gtfs_structures::RouteType;
+    match rt {
+        RouteType::Tramway => 0,
+        RouteType::Subway => 1,
+        RouteType::Rail => 2,
+        RouteType::Bus => 3,
+        RouteType::Ferry => 4,
+        RouteType::CableCar => 5,
+        RouteType::Gondola => 6,
+        RouteType::Funicular => 7,
+        RouteType::Coach => 200,
+        RouteType::Air => 1100,
+        RouteType::Taxi => 1500,
+        RouteType::Other(i) => i,
     }
 }

@@ -47,7 +47,8 @@ const tt = new VultureTimetable(
 - `tt.nStops()`, `tt.nRoutes()` — counts.
 - `tt.stopIdx(gtfsId)` — GTFS stop id → opaque `StopIdx`, or `undefined`.
 - `tt.stopName(stopIdx)`, `tt.stopCoords(stopIdx)`, `tt.routeName(routeIdx)`, `tt.routeAgency(routeIdx)` — display-data accessors.
-- `tt.allStops()`, `tt.allRoutes()` — bulk catalogue dumps for populating UI pickers.
+- `tt.allStops()` — bulk catalogue of `{idx, id, name, lat, lon}` per stop.
+- `tt.allRoutes()` — bulk catalogue of `{idx, id, name, agency, route_type, route_color}` per route. `route_type` is the GTFS integer (0=tram, 1=metro, 2=rail, 3=bus, 4=ferry, 5=cable, 6=aerial, 7=funicular, …); `route_color` is `"#rrggbb"` or `null`.
 - `tt.withWalkingFootpaths(maxDistMeters, walkSpeedMetersPerSec)` — replace the footpath set with one derived from stop coordinates.
 - `tt.resetFootpaths()` — restore the original `transfers.txt` set.
 
@@ -55,6 +56,8 @@ Free functions:
 
 - `runArrival(tt, originStops, targetStops, maxTransfers, departSeconds, requireWheelchair)` — single-departure query. Returns an array of journeys with timed legs.
 - `runRange(tt, origin, target, maxTransfers, departures, requireWheelchair)` — depart-in-window Pareto profile. Returns `[{depart, journey}]` where each `journey` has the same shape as a `runArrival` entry (`origin`, `target`, `arrival`, `legs`).
+
+Each leg in `journey.legs` is `{board_stop, alight_stop, route, trip, route_id, depart, arrive, shape}`. `shape` is a `[lat, lon][]` polyline for that leg's segment of the trip's `shapes.txt` geometry, or `null` if the feed has no shape for the trip.
 
 `originStops` / `targetStops` / `departures` are `Uint32Array`s; times are seconds since midnight on the service date. Full type signatures are in the bundled `vulture_wasm.d.ts`.
 
@@ -212,3 +215,5 @@ node vulture-wasm/tests/smoke.mjs
 ## Demo page
 
 `docs/demo/` is a vanilla-JS / vanilla-CSS demo with three panels – stop-to-stop, departure window, walking-footpath comparison – running entirely client-side against the bundled Delhi Metro feed. Live at <https://urschrei.github.io/vulture/>.
+
+The demo also renders each journey on a MapLibre dark basemap, using `leg.shape` from `runArrival` / `runRange` for the polyline geometry and `route.route_color` / `route.route_type` for the per-mode colour. See `docs/demo/app.js` (`drawJourney`) for the rendering wiring — roughly 80 lines of GeoJSON sources + circle/line layers with a halo+stroke pattern for legibility on the dark tiles.

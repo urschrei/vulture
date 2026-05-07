@@ -95,4 +95,32 @@ console.log(`allStops: ${stops.length} stops; allRoutes: ${routes.length} routes
 console.log(`  example stop: ${JSON.stringify(stops[0])}`);
 console.log(`  example route: ${JSON.stringify(routes[0])}`);
 
+// New v0.19+ fields: per-leg shape on transit legs, route_type +
+// route_color on routes.
+const firstLeg = j.legs[0];
+if (!Array.isArray(firstLeg.shape) || firstLeg.shape.length === 0) {
+    throw new Error(
+        `expected non-empty shape on first leg, got ${JSON.stringify(firstLeg.shape)}`,
+    );
+}
+if (
+    !firstLeg.shape.every(
+        (p) => Array.isArray(p) && p.length === 2 && typeof p[0] === "number",
+    )
+) {
+    throw new Error("expected shape entries to be [lat, lon] number pairs");
+}
+console.log(
+    `  first-leg shape: ${firstLeg.shape.length} points, first=${JSON.stringify(firstLeg.shape[0])}`,
+);
+
+if (typeof routes[0].route_type !== "number") {
+    throw new Error(
+        `expected route_type to be number, got ${typeof routes[0].route_type}`,
+    );
+}
+console.log(
+    `  first route: type=${routes[0].route_type} color=${routes[0].route_color ?? "(none)"}`,
+);
+
 console.log("smoke test passed");
