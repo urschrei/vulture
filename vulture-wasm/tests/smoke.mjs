@@ -2,19 +2,27 @@
 // run a query, assert the journey shape matches what vulture's
 // native tests assert.
 //
-// Run with:  node vulture-wasm/tests/smoke.mjs
-//
-// Requires the wasm-pack `nodejs` build to exist:
-//   (cd vulture-wasm && wasm-pack build --target nodejs --release)
+// Run with:
+//   wasm-pack build vulture-wasm --target web --release
+//   node vulture-wasm/tests/smoke.mjs
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { VultureTimetable, runArrival, runRange } from "../pkg/vulture_wasm.js";
+import init, { VultureTimetable, runArrival, runRange } from "../pkg/vulture_wasm.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..", "..");
+
+// The web-target bundle does not auto-fetch the wasm in Node (no
+// relative `fetch` for file://). Pass the bytes explicitly.
+await init({
+    module_or_path: readFileSync(
+        new URL("../pkg/vulture_wasm_bg.wasm", import.meta.url),
+    ),
+});
+
 const gtfsBytes = readFileSync(join(repoRoot, "aux", "dmrc_gtfs.zip"));
 
 console.log(`loaded ${gtfsBytes.length} bytes of GTFS zip`);
