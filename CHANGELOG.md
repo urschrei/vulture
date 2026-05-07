@@ -1,5 +1,75 @@
 # Changelog
 
+## v0.19.0
+
+### Breaking: `gtfs-structures` pulled in with `default-features = false`
+
+The `vulture` crate now depends on `gtfs-structures` without its
+default features, which removes the transitive `reqwest` / `tokio`
+HTTP stack from a default `cargo add vulture` install. This is
+required for the new `wasm32-unknown-unknown` target (no `reqwest`
+there) and is a smaller, faster default for the common case of
+loading GTFS feeds from disk.
+
+If your code uses [`Gtfs::from_url`](https://docs.rs/gtfs-structures/latest/gtfs_structures/structures/gtfs/struct.Gtfs.html#method.from_url)
+or [`Gtfs::from_url_async`](https://docs.rs/gtfs-structures/latest/gtfs_structures/structures/gtfs/struct.Gtfs.html#method.from_url_async),
+add `gtfs-structures` to your own `Cargo.toml` with the `read-url`
+feature:
+
+```toml
+[dependencies]
+vulture = "0.19"
+gtfs-structures = { version = "0.47", features = ["read-url"] }
+```
+
+`Gtfs::new(path)` and [`Gtfs::from_reader`](https://docs.rs/gtfs-structures/latest/gtfs_structures/structures/gtfs/struct.Gtfs.html#method.from_reader)
+(any `Read + Seek`) work without the feature and remain the
+recommended loading paths.
+
+### `vulture::ffi` module — concrete-typed entry points for FFI bindings
+
+A new public `vulture::ffi` module exposes three concrete-typed query
+functions for foreign-language bindings (PyO3, wasm-bindgen, and
+similar) where the generic [`Query<'tt, T, L, M>`](https://docs.rs/vulture/latest/vulture/struct.Query.html)
+builder doesn't monomorphise cleanly across the language boundary:
+
+- `ffi::run_arrival(tt, origins, targets, max_transfers, depart, require_wheelchair)` — single-criterion arrival-time query (default RAPTOR shape). Returns `Vec<Journey<ArrivalTime>>`.
+- `ffi::run_walk(...)` — two-criterion `(arrival, walking time)` Pareto. Returns `Vec<Journey<ArrivalAndWalk>>`.
+- `ffi::run_fare(tt, fares, ...)` — two-criterion `(arrival, fare)` Pareto, with a [`FareTable`](https://docs.rs/vulture/latest/vulture/struct.FareTable.html) route → fare map. Returns `Vec<Journey<ArrivalAndFare>>`.
+
+Each function accepts `tt: &T` with `T: Timetable + ?Sized`, so it
+works against both concrete adapters (`&GtfsTimetable`,
+`&SimpleTimetable`) and trait objects (`&dyn Timetable`) — FFI
+bindings typically wrap `Box<dyn Timetable>` and pass `&*tt`. Each
+allocates a fresh [`RaptorCache`](https://docs.rs/vulture/latest/vulture/struct.RaptorCache.html)
+per call; repeated queries against the same timetable should hold a
+cache binding-side and call the lower-level builder API directly.
+
+Direct Rust use should still prefer
+[`Timetable::query`](https://docs.rs/vulture/latest/vulture/trait.Timetable.html#method.query) /
+[`Timetable::query_with_label`](https://docs.rs/vulture/latest/vulture/trait.Timetable.html#method.query_with_label).
+The `ffi` module exists for binding authors; the typestate builder
+remains the primary single-criterion API.
+
+This is the surface that the in-tree [`vulture-wasm`](vulture-wasm/)
+crate (published as [`vulture-wasm`](https://www.npmjs.com/package/vulture-wasm)
+on npm) is built on, and is intended to be stable for downstream
+binding authors to depend on.
+
+### `Endpoints::from_stop_indices` / `from_pairs` factories
+
+Companion FFI factories on [`Endpoints`](https://docs.rs/vulture/latest/vulture/struct.Endpoints.html):
+
+- `Endpoints::from_stop_indices(&[u32])` — every stop, walk-time zero.
+- `Endpoints::from_pairs(&[(u32, u32)])` — `(stop_idx, walk_seconds)` pairs.
+
+Both accept raw `u32` slices because Python and JS bindings naturally
+decode `list[int]` / `Array<number>` to `Vec<u32>` and the
+[`IntoEndpoints`](https://docs.rs/vulture/latest/vulture/trait.IntoEndpoints.html)
+trait is invisible across the language boundary. In-Rust callers
+should keep passing `&[StopIdx]` / `&[(StopIdx, Duration)]` /
+`Vec<...>` directly via `IntoEndpoints`.
+
 ## v0.18.0
 
 ### Builder accepts `Into<Transfers>` and `jiff::civil::Time`

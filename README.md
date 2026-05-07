@@ -46,6 +46,8 @@ let gtfs = Gtfs::from_url("https://example.org/feed/gtfs.zip")?;
 let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?;
 ```
 
+> **`from_url` requires the `read-url` feature on `gtfs-structures`.** Since v0.19, vulture depends on `gtfs-structures` with `default-features = false` (so wasm and minimal native builds don't drag in `reqwest` / `tokio`). To use the URL-loading paths, add `gtfs-structures` directly to your `Cargo.toml`: `gtfs-structures = { version = "0.47", features = ["read-url"] }`. `Gtfs::new(path)` and `Gtfs::from_reader` (any `Read + Seek`) need no extra features.
+
 ## Worked examples
 
 ### Berlin VBB: station-level query
