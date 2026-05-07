@@ -56,6 +56,34 @@ crate (published as [`vulture-wasm`](https://www.npmjs.com/package/vulture-wasm)
 on npm) is built on, and is intended to be stable for downstream
 binding authors to depend on.
 
+### `GtfsTimetable::shape_for_leg` for journey visualisation
+
+A new method that returns the polyline segment for one transit leg
+(by `trip_id` + boarding/alighting `StopIdx`):
+
+```rust
+pub fn shape_for_leg(
+    &self,
+    gtfs: &Gtfs,
+    trip_id: &str,
+    board_stop: StopIdx,
+    alight_stop: StopIdx,
+) -> Option<Vec<(f32, f32)>>;
+```
+
+Uses `shape_dist_traveled` for exact slicing when present and
+projects each stop onto the polyline as a fallback for feeds without
+distance-traveled data. Returns `None` if the trip is unknown, has
+no shape, or doesn't include the requested stops; otherwise returns
+points in `(lat, lon)` order.
+
+Primarily for FFI binding authors visualising journeys on a map. The
+in-tree `vulture-wasm` crate uses this to bake per-leg `shape` arrays
+into the JS objects returned by `runArrival` / `runRange` (alongside
+new `route_type` and `route_color` fields on the route catalogue),
+which the bundled demo at `docs/demo/` then renders on a MapLibre
+dark basemap with mode-keyed polyline colours.
+
 ### `Endpoints::from_stop_indices` / `from_pairs` factories
 
 Companion FFI factories on [`Endpoints`](https://docs.rs/vulture/latest/vulture/struct.Endpoints.html):

@@ -21,3 +21,6 @@
 /docs/demo/pkg/
 /docs/demo/dmrc_gtfs.zip
 /vulture-wasm/pkg/
+
+# Brainstorming visual companion scratch dir.
+/.superpowers/

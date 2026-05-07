@@ -24,6 +24,16 @@
 //! Use [`GtfsTimetable::route_id`] to recover the original GTFS
 //! `route_id` for display, and [`GtfsTimetable::routes_for_gtfs_id`] to
 //! enumerate every synthetic derived from a given GTFS route.
+//!
+//! ## Visualisation
+//!
+//! [`GtfsTimetable::shape_for_leg`] returns the polyline segment of one
+//! journey leg's shape, sliced between board and alight stops. Uses
+//! `shape_dist_traveled` for exact slicing when present and projects
+//! each stop onto the polyline as a fallback. Primarily for FFI
+//! consumers visualising journeys on a map; the in-tree `vulture-wasm`
+//! crate uses it to bake per-leg `shape` data into the JS objects
+//! returned by `runArrival` / `runRange`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -802,6 +812,66 @@ impl GtfsTimetable {
     pub fn trip_idx(&self, id: &str) -> Option<TripIdx> {
         self.trip_by_id.get(id).copied()
     }
+
+    /// Polyline points (lat, lon) for the segment of `trip_id`'s shape
+    /// between `board_stop` and `alight_stop`. Returns `None` if
+    /// `trip_id` is unknown to the feed, the trip has no shape, or
+    /// the requested stops are not on the trip.
+    ///
+    /// Uses `shape_dist_traveled` for exact slicing when both
+    /// stop_times entries have it set; otherwise projects each stop's
+    /// coordinates onto the polyline and slices to the closest two
+    /// shape points (the standard fallback for feeds without
+    /// distance-traveled data). The returned polyline begins at the
+    /// nearest shape point at-or-inside the leg's distance range and
+    /// ends at the nearest shape point at-or-inside the alighting
+    /// stop — for sparse shapes this can leave a small visible gap
+    /// between the last shape point and the stop coordinate.
+    ///
+    /// Primarily for FFI consumers visualising journeys on a map.
+    /// The companion `vulture-wasm` crate bakes this into the per-leg
+    /// JSON returned by `runArrival` / `runRange`.
+    pub fn shape_for_leg(
+        &self,
+        gtfs: &Gtfs,
+        trip_id: &str,
+        board_stop: StopIdx,
+        alight_stop: StopIdx,
+    ) -> Option<Vec<(f32, f32)>> {
+        let trip = gtfs.trips.get(trip_id)?;
+        let shape_id = trip.shape_id.as_deref()?;
+        let shape = gtfs.shapes.get(shape_id)?;
+        if shape.is_empty() {
+            return None;
+        }
+        let mut shape_sorted: Vec<&gtfs_structures::Shape> = shape.iter().collect();
+        shape_sorted.sort_by_key(|s| s.sequence);
+
+        let board_id = self.stop_id(board_stop);
+        let alight_id = self.stop_id(alight_stop);
+        let board_st = trip.stop_times.iter().find(|st| st.stop.id == board_id)?;
+        let alight_st = trip.stop_times.iter().find(|st| st.stop.id == alight_id)?;
+
+        if let (Some(b_dist), Some(a_dist)) =
+            (board_st.shape_dist_traveled, alight_st.shape_dist_traveled)
+        {
+            return Some(slice_shape_by_dist(&shape_sorted, b_dist, a_dist));
+        }
+
+        let board_coord = (
+            board_st.stop.latitude? as f32,
+            board_st.stop.longitude? as f32,
+        );
+        let alight_coord = (
+            alight_st.stop.latitude? as f32,
+            alight_st.stop.longitude? as f32,
+        );
+        Some(slice_shape_by_projection(
+            &shape_sorted,
+            board_coord,
+            alight_coord,
+        ))
+    }
 }
 
 /// Greedily split a departure-sorted list of trips on a shared stop
@@ -990,6 +1060,75 @@ impl Timetable for GtfsTimetable {
     fn footpaths_are_transitively_closed(&self) -> bool {
         self.transfers_closed
     }
+}
+
+/// Slice a polyline by `shape_dist_traveled` cumulative distance.
+/// `shape` is the shape's points sorted ascending by `sequence`.
+/// Returns the inclusive range `[board_dist, alight_dist]`. If
+/// `alight_dist < board_dist`, returns an empty Vec.
+fn slice_shape_by_dist(
+    shape: &[&gtfs_structures::Shape],
+    board_dist: f32,
+    alight_dist: f32,
+) -> Vec<(f32, f32)> {
+    let (lo, hi) = if board_dist <= alight_dist {
+        (board_dist, alight_dist)
+    } else {
+        return Vec::new();
+    };
+    shape
+        .iter()
+        .filter_map(|s| {
+            let d = s.dist_traveled?;
+            if d >= lo && d <= hi {
+                Some((s.latitude as f32, s.longitude as f32))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Slice a polyline by projecting two coordinates onto it and
+/// returning the inclusive range between the closest shape points.
+/// `shape` is sorted ascending by `sequence`. Distance is squared
+/// Euclidean in lat/lon space — adequate for the "find the closest
+/// shape point" task at city scale.
+fn slice_shape_by_projection(
+    shape: &[&gtfs_structures::Shape],
+    board: (f32, f32),
+    alight: (f32, f32),
+) -> Vec<(f32, f32)> {
+    let nearest = |target: (f32, f32)| -> usize {
+        shape
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                let da = sq_dist((a.latitude as f32, a.longitude as f32), target);
+                let db = sq_dist((b.latitude as f32, b.longitude as f32), target);
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i)
+            .unwrap_or(0)
+    };
+    let bi = nearest(board);
+    let ai = nearest(alight);
+    let (lo, hi) = if bi <= ai {
+        (bi, ai)
+    } else {
+        return Vec::new();
+    };
+    shape[lo..=hi]
+        .iter()
+        .map(|s| (s.latitude as f32, s.longitude as f32))
+        .collect()
+}
+
+#[inline]
+fn sq_dist(a: (f32, f32), b: (f32, f32)) -> f32 {
+    let dx = a.0 - b.0;
+    let dy = a.1 - b.1;
+    dx * dx + dy * dy
 }
 
 #[cfg(test)]
@@ -1337,5 +1476,110 @@ mod tests {
 
     fn ymd_jiff(y: i16, m: i8, d: i8) -> Date {
         Date::new(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn slice_shape_by_dist_inclusive_range() {
+        use gtfs_structures::Shape;
+        let s = |seq, lat, lon, d| Shape {
+            id: "x".into(),
+            latitude: lat,
+            longitude: lon,
+            sequence: seq,
+            dist_traveled: Some(d),
+        };
+        let shape_owned = [
+            s(0, 28.6, 77.1, 0.0),
+            s(1, 28.7, 77.2, 100.0),
+            s(2, 28.8, 77.3, 200.0),
+            s(3, 28.9, 77.4, 300.0),
+        ];
+        let shape: Vec<&Shape> = shape_owned.iter().collect();
+        let out = slice_shape_by_dist(&shape, 100.0, 200.0);
+        assert_eq!(out, vec![(28.7, 77.2), (28.8, 77.3)]);
+    }
+
+    #[test]
+    fn slice_shape_by_dist_returns_empty_for_inverted_range() {
+        use gtfs_structures::Shape;
+        let s = |seq, d| Shape {
+            id: "x".into(),
+            latitude: 0.0,
+            longitude: 0.0,
+            sequence: seq,
+            dist_traveled: Some(d),
+        };
+        let shape_owned = [s(0, 0.0), s(1, 100.0)];
+        let shape: Vec<&Shape> = shape_owned.iter().collect();
+        assert_eq!(
+            slice_shape_by_dist(&shape, 100.0, 0.0),
+            Vec::<(f32, f32)>::new()
+        );
+    }
+
+    #[test]
+    fn slice_shape_by_projection_finds_closest_indices() {
+        use gtfs_structures::Shape;
+        let s = |seq, lat, lon| Shape {
+            id: "x".into(),
+            latitude: lat,
+            longitude: lon,
+            sequence: seq,
+            dist_traveled: None,
+        };
+        let shape_owned = [
+            s(0, 0.0, 0.0),
+            s(1, 1.0, 1.0),
+            s(2, 2.0, 2.0),
+            s(3, 3.0, 3.0),
+        ];
+        let shape: Vec<&Shape> = shape_owned.iter().collect();
+        let out = slice_shape_by_projection(&shape, (0.9, 0.9), (2.1, 2.1));
+        assert_eq!(out, vec![(1.0, 1.0), (2.0, 2.0)]);
+    }
+
+    #[test]
+    fn shape_for_leg_returns_polyline_for_delhi_trip_with_shape() {
+        use gtfs_structures::Gtfs;
+        use jiff::civil::date;
+
+        let gtfs = Gtfs::new("../aux/dmrc_gtfs.zip").expect("Delhi GTFS loads");
+        let tt = GtfsTimetable::new(&gtfs, date(2024, 1, 15)).expect("timetable builds");
+
+        let (trip_id, trip) = gtfs
+            .trips
+            .iter()
+            .find(|(_, t)| t.shape_id.is_some() && t.stop_times.len() >= 2)
+            .expect("Delhi has trips with shapes");
+
+        let board_id = &trip.stop_times[0].stop.id;
+        let alight_id = &trip.stop_times.last().unwrap().stop.id;
+        let board_idx = tt.stop_idx(board_id).expect("board stop in catalogue");
+        let alight_idx = tt.stop_idx(alight_id).expect("alight stop in catalogue");
+
+        let shape = tt
+            .shape_for_leg(&gtfs, trip_id, board_idx, alight_idx)
+            .expect("shape extracted");
+
+        assert!(!shape.is_empty(), "shape should be non-empty");
+        for (lat, lon) in &shape {
+            assert!((28.0..30.0).contains(lat), "lat {lat} not in Delhi range");
+            assert!((76.0..78.0).contains(lon), "lon {lon} not in Delhi range");
+        }
+    }
+
+    #[test]
+    fn shape_for_leg_returns_none_for_unknown_trip() {
+        use gtfs_structures::Gtfs;
+        use jiff::civil::date;
+
+        let gtfs = Gtfs::new("../aux/dmrc_gtfs.zip").unwrap();
+        let tt = GtfsTimetable::new(&gtfs, date(2024, 1, 15)).unwrap();
+
+        let some_stop = tt.stop_idx("1").expect("Dilshad Garden");
+        assert!(
+            tt.shape_for_leg(&gtfs, "trip-that-does-not-exist", some_stop, some_stop)
+                .is_none()
+        );
     }
 }

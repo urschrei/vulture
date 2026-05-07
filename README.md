@@ -169,6 +169,7 @@ The `vulture/examples/` directory has four self-contained, synthetic-network exa
 - **Per-leg timing** – [`journey.with_timing(&tt, depart, origin_walk)`](https://docs.rs/vulture/latest/vulture/struct.Journey.html#method.with_timing) reconstructs trip IDs and per-leg depart/arrive times. `Journey.plan` alone is just topology.
 - **Wheelchair-accessibility filter** – chain [`require_wheelchair_accessible()`](https://docs.rs/vulture/latest/vulture/struct.Query.html#method.require_wheelchair_accessible) on the query builder to skip trips where `trips.wheelchair_accessible = 2` and stops where `stops.wheelchair_boarding = 2`. Default behaviour is unchanged.
 - **Multi-day search** – [`GtfsTimetable::new_with_overnight_days(&gtfs, date, OvernightDays(n))`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html#method.new_with_overnight_days) loads `n` additional service days after the base date, shifting day-`d` trips into a single time axis so a 23:00 query can catch tomorrow morning's first train.
+- **Per-leg shape access** – [`GtfsTimetable::shape_for_leg(&gtfs, trip_id, board, alight)`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html#method.shape_for_leg) returns the polyline points (lat, lon) for one journey leg, sliced exactly when `shape_dist_traveled` is present and projected onto the polyline as a fallback. Used by the [live demo](https://urschrei.github.io/vulture/) to draw journeys on a MapLibre map.
 
 ## When To Use What
 
@@ -185,6 +186,7 @@ The `vulture/examples/` directory has four self-contained, synthetic-network exa
 | Any platform of a station | `tt.station_stops(parent_id)` into `.from(...)` / `.to(...)` |
 | Sparse `transfers.txt` | `.with_walking_footpaths(&gtfs, max_dist_m, speed_m_per_s)` at construction |
 | Trip IDs and per-leg times in output | `journey.with_timing(&tt, depart, origin_walk)` |
+| Polyline geometry per leg (for map drawing) | `tt.shape_for_leg(&gtfs, trip_id, board, alight)` |
 
 ## Perf
 
