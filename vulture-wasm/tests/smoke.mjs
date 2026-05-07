@@ -82,7 +82,14 @@ if (!j.legs.every((l) => l.depart > 0 && l.arrive > l.depart)) {
 
 // Range-query smoke: 09:00, 09:15, 09:30 → at least one Pareto entry.
 const departures = new Uint32Array([9 * 3600, 9 * 3600 + 900, 9 * 3600 + 1800]);
-const range = runRange(tt, start, target, 10, departures, false);
+const range = runRange(
+    tt,
+    new Uint32Array([start]),
+    new Uint32Array([target]),
+    10,
+    departures,
+    false,
+);
 console.log(`runRange returned ${range.length} entries`);
 if (range.length === 0) {
     throw new Error("expected at least one range entry");
@@ -122,5 +129,29 @@ if (typeof routes[0].route_type !== "number") {
 console.log(
     `  first route: type=${routes[0].route_type} color=${routes[0].route_color ?? "(none)"}`,
 );
+
+// Parent-station fields on stops + stationStops accessor.
+if (typeof stops[0].location_type !== "number") {
+    throw new Error(
+        `expected location_type to be number, got ${typeof stops[0].location_type}`,
+    );
+}
+console.log(
+    `  first stop: location_type=${stops[0].location_type}` +
+        ` parent_station=${stops[0].parent_station ?? "(none)"}`,
+);
+
+const stationStops = tt.stationStops("not-a-real-parent");
+if (!(stationStops instanceof Uint32Array)) {
+    throw new Error(
+        `expected stationStops to return Uint32Array, got ${stationStops?.constructor?.name}`,
+    );
+}
+if (stationStops.length !== 0) {
+    throw new Error(
+        `expected stationStops to be empty for unknown parent, got ${stationStops.length}`,
+    );
+}
+console.log(`  stationStops("not-a-real-parent") returned ${stationStops.length} platforms`);
 
 console.log("smoke test passed");

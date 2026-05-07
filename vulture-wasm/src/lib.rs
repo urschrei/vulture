@@ -140,12 +140,18 @@ impl VultureTimetable {
             let name = stop.and_then(|s| s.name.clone()).unwrap_or_default();
             let lat = stop.and_then(|s| s.latitude);
             let lon = stop.and_then(|s| s.longitude);
+            let location_type = stop
+                .map(|s| location_type_int(s.location_type))
+                .unwrap_or(0);
+            let parent_station = stop.and_then(|s| s.parent_station.clone());
             out.push(StopRow {
                 idx: i,
                 id,
                 name,
                 lat,
                 lon,
+                location_type,
+                parent_station,
             });
         }
         serde_wasm_bindgen::to_value(&out).map_err(|e| JsError::new(&format!("{e}")))
@@ -174,6 +180,25 @@ impl VultureTimetable {
             });
         }
         serde_wasm_bindgen::to_value(&out).map_err(|e| JsError::new(&format!("{e}")))
+    }
+
+    /// Expand a parent station's GTFS id into the platform stop
+    /// indices that hang off it. Returns an empty array if `parent_id`
+    /// is not a parent station in the feed (or has no children).
+    ///
+    /// Useful for the "any platform of this station" pattern: in
+    /// GTFS, vehicles only board at platform-level stops
+    /// (`location_type = 0`), so a query rooted at the parent station
+    /// (`location_type = 1`) returns nothing. Pass this method's
+    /// result as `originStops` / `targetStops` to query against every
+    /// platform.
+    #[wasm_bindgen(js_name = stationStops)]
+    pub fn station_stops(&self, parent_id: &str) -> Vec<u32> {
+        self.tt()
+            .station_stops(parent_id)
+            .iter()
+            .map(|(idx, _)| idx.get())
+            .collect()
     }
 
     /// Augment the timetable's footpath graph with bidirectional
@@ -215,6 +240,14 @@ struct StopRow {
     name: String,
     lat: Option<f64>,
     lon: Option<f64>,
+    /// GTFS `location_type` integer. 0 = stop or platform (the
+    /// addressable thing vehicles board at), 1 = station (a parent
+    /// grouping with no boardings of its own), 2 = entrance/exit,
+    /// 3 = generic node, 4 = boarding area.
+    location_type: i16,
+    /// GTFS `parent_station` (the parent station's `stop_id`) if
+    /// this entry is a child of a station, otherwise `null`.
+    parent_station: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -315,27 +348,37 @@ pub fn run_arrival(
 }
 
 /// Range query: run RAPTOR across a window of departure times. JS
-/// passes `departures` as a `Uint32Array` of seconds-since-midnight
-/// values. Returns `[{depart, journey}]` Pareto-filtered on
-/// `(later depart, fewer transfers, earlier arrival)`.
+/// passes `origins` / `targets` as `Uint32Array`s of stop indices
+/// (each entry gets walk-time zero), and `departures` as a
+/// `Uint32Array` of seconds-since-midnight values. Returns
+/// `[{depart, journey}]` Pareto-filtered on `(later depart, fewer
+/// transfers, earlier arrival)`.
 ///
-/// Currently single-source / single-target only — the demo's range
-/// panel doesn't need multi-endpoint, and rRAPTOR's serial path
-/// (the one we use here) requires `ArrivalTime`.
+/// Multi-source / multi-target so the "any platform of this station"
+/// pattern (via `tt.stationStops(parent_id)`) works the same way as
+/// in `runArrival`.
 #[wasm_bindgen(js_name = runRange)]
 pub fn run_range(
     tt: &VultureTimetable,
-    origin: u32,
-    target: u32,
+    origins: &[u32],
+    targets: &[u32],
     max_transfers: u8,
     departures: &[u32],
     require_wheelchair: bool,
 ) -> Result<JsValue, JsError> {
+    let origins_v: Vec<(StopIdx, Duration)> = origins
+        .iter()
+        .map(|&s| (StopIdx::new(s), Duration::ZERO))
+        .collect();
+    let targets_v: Vec<(StopIdx, Duration)> = targets
+        .iter()
+        .map(|&s| (StopIdx::new(s), Duration::ZERO))
+        .collect();
     let inner = tt.tt();
     let mut query = inner
         .query()
-        .from(StopIdx::new(origin))
-        .to(StopIdx::new(target))
+        .from(origins_v.as_slice())
+        .to(targets_v.as_slice())
         .max_transfers(max_transfers);
     if require_wheelchair {
         query = query.require_wheelchair_accessible();
@@ -407,5 +450,20 @@ fn route_type_int(rt: gtfs_structures::RouteType) -> i16 {
         RouteType::Air => 1100,
         RouteType::Taxi => 1500,
         RouteType::Other(i) => i,
+    }
+}
+
+/// Map [`gtfs_structures::LocationType`] to its canonical GTFS
+/// integer (0 = stop/platform, 1 = station, 2 = entrance/exit,
+/// 3 = generic node, 4 = boarding area).
+fn location_type_int(lt: gtfs_structures::LocationType) -> i16 {
+    use gtfs_structures::LocationType;
+    match lt {
+        LocationType::StopPoint => 0,
+        LocationType::StopArea => 1,
+        LocationType::StationEntrance => 2,
+        LocationType::GenericNode => 3,
+        LocationType::BoardingArea => 4,
+        LocationType::Unknown(i) => i,
     }
 }
