@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.22.0
 
 ### `with_walking_footpaths` now caps walking per leg, not per edge
 
