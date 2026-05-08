@@ -305,12 +305,13 @@ pub struct GtfsTimetable {
     /// Stops with `wheelchair_boarding = NotAvailable`. Same shape.
     inaccessible_stops: HashSet<StopIdx>,
 
-    /// User-asserted closure flag. Returned from
+    /// Closure flag returned from
     /// [`Timetable::footpaths_are_transitively_closed`] so the algorithm
     /// can pick the single-pass relaxation. Set via
-    /// [`GtfsTimetable::assert_footpaths_closed`]; reset to `false` by
-    /// [`GtfsTimetable::with_walking_footpaths`] (which adds direct,
-    /// non-closed edges).
+    /// [`GtfsTimetable::assert_footpaths_closed`] (publisher-curated
+    /// closed `transfers.txt`) or [`GtfsTimetable::with_walking_footpaths`]
+    /// (R-tree-derived edges with a per-leg distance cap, where chaining
+    /// would violate the cap and is therefore disallowed).
     transfers_closed: bool,
 
     /// For each parent-station GTFS id, the child platform `StopIdx`es
@@ -670,8 +671,10 @@ impl GtfsTimetable {
     /// requires chaining direct walks within a round. If unsure,
     /// don't call this – the Dijkstra fallback is always sound.
     ///
-    /// [`GtfsTimetable::with_walking_footpaths`] resets this flag,
-    /// because coordinate-derived edges are not closed by construction.
+    /// [`GtfsTimetable::with_walking_footpaths`] sets the same flag for
+    /// a different reason – its R-tree-derived edges enforce a per-leg
+    /// max walking distance, and the closed runtime is what prevents
+    /// the algorithm from chaining short walks beyond the cap.
     pub fn assert_footpaths_closed(mut self) -> Self {
         self.transfers_closed = true;
         self
@@ -704,10 +707,25 @@ impl GtfsTimetable {
     /// – coordinate-derived edges are only added where no explicit
     /// transfer between the pair already exists.
     ///
-    /// The algorithm chains walks within a round (footpath relaxation
-    /// runs to a fixed point), so the graph does not need to be
-    /// transitively closed; pairs beyond `max_distance_m` that are
-    /// reachable via a chain of shorter walks are still found.
+    /// `max_distance_m` is a per-leg cap, not a per-edge one: the
+    /// returned timetable reports
+    /// [`Timetable::footpaths_are_transitively_closed`] as `true`, so
+    /// the runtime takes at most one walk per round and never chains
+    /// short straight-line edges to a fixed point. Without this, dense
+    /// stop graphs (e.g. a 3,000-stop regional feed with 500 m edges)
+    /// would let a single walking phase traverse several kilometres by
+    /// hopping between stops; flipping closure on matches the
+    /// cap-during-preprocessing pattern from the original RAPTOR paper
+    /// and gives users the per-leg semantic they expect from
+    /// "max walking distance". By the triangle inequality, any
+    /// straight-line walk between two stops within the cap is already
+    /// the shortest-time edge in the relation, so closure is exact for
+    /// the coordinate-derived subset; `transfers.txt` entries keep the
+    /// publisher's stated walk time and are likewise treated as a
+    /// single direct walk (chained `transfers.txt` walks, if any
+    /// publisher relies on them, will not be discovered – use
+    /// [`GtfsTimetable::assert_footpaths_closed`] instead if your feed
+    /// needs closure on a different basis).
     ///
     /// Typical values: `max_distance_m = 500` (covers same-block
     /// interchanges), `walking_speed_m_per_s = 1.4` (≈ 5 km/h, the
@@ -770,9 +788,12 @@ impl GtfsTimetable {
             }
         }
 
-        // Coordinate-derived edges are direct only – closure is not
-        // preserved. Drop any prior closure assertion.
-        self.transfers_closed = false;
+        // Mark the relation closed so the per-round relaxation takes
+        // the single-pass `O(E)` path rather than chaining straight-line
+        // walks to a fixed point. This is what enforces the user-facing
+        // "max walking distance per leg" semantic – see the doc comment
+        // above for why this is sound for R-tree-derived edges.
+        self.transfers_closed = true;
         self
     }
 
@@ -1677,6 +1698,109 @@ mod tests {
             !footpaths.contains(&c),
             "Impossible (transfer_type=3) A->C must not create a footpath, got {:?}",
             footpaths,
+        );
+    }
+
+    /// Stops S, M, T are colinear at the equator with neighbour spacing
+    /// 400 m and end-to-end spacing 800 m. With a 500 m cap, the R-tree
+    /// adds S↔M and M↔T but not S↔T, and the resulting timetable must
+    /// report itself transitively closed so the runtime walks each
+    /// source's labels once and never stitches the 800 m chain together.
+    #[test]
+    fn with_walking_footpaths_caps_per_leg_and_marks_closed() {
+        use gtfs_structures::{Route, Stop, Trip};
+        use std::sync::Arc;
+
+        let mut g = weekday_only_feed();
+
+        // 1 deg latitude ≈ 111 320 m at the equator. 400 m → 0.0035929 deg.
+        const STEP_DEG: f64 = 400.0 / 111_320.0;
+
+        let stop = |id: &str, lat: f64| {
+            Arc::new(Stop {
+                id: id.into(),
+                latitude: Some(lat),
+                longitude: Some(0.0),
+                ..Default::default()
+            })
+        };
+        let stop_s = stop("S", 0.0);
+        let stop_m = stop("M", STEP_DEG);
+        let stop_t = stop("T", 2.0 * STEP_DEG);
+        g.stops.insert("S".into(), Arc::clone(&stop_s));
+        g.stops.insert("M".into(), Arc::clone(&stop_m));
+        g.stops.insert("T".into(), Arc::clone(&stop_t));
+
+        // Trivial trip so the timetable construction has at least one
+        // service to attach the stops to; routing isn't exercised here.
+        g.routes.insert(
+            "R".into(),
+            Route {
+                id: "R".into(),
+                ..Default::default()
+            },
+        );
+        g.trips.insert(
+            "T1".into(),
+            Trip {
+                id: "T1".into(),
+                service_id: "weekday".into(),
+                route_id: "R".into(),
+                stop_times: vec![
+                    StopTime {
+                        arrival_time: Some(6 * 3600),
+                        departure_time: Some(6 * 3600),
+                        stop: Arc::clone(&stop_s),
+                        ..Default::default()
+                    },
+                    StopTime {
+                        arrival_time: Some(6 * 3600 + 600),
+                        departure_time: Some(6 * 3600 + 600),
+                        stop: Arc::clone(&stop_m),
+                        ..Default::default()
+                    },
+                    StopTime {
+                        arrival_time: Some(6 * 3600 + 1200),
+                        departure_time: Some(6 * 3600 + 1200),
+                        stop: Arc::clone(&stop_t),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        );
+
+        let tt = GtfsTimetable::new(&g, ymd_jiff(2026, 5, 4))
+            .unwrap()
+            .with_walking_footpaths(&g, 500.0, 1.4);
+
+        assert!(
+            tt.footpaths_are_transitively_closed(),
+            "with_walking_footpaths must mark the relation closed so the \
+             runtime caps walking at one hop per round",
+        );
+
+        let s = tt.stop_idx("S").unwrap();
+        let m = tt.stop_idx("M").unwrap();
+        let t = tt.stop_idx("T").unwrap();
+
+        let from_s = tt.get_footpaths_from(s);
+        assert!(
+            from_s.contains(&m),
+            "S→M (400 m) must be a direct footpath, got {:?}",
+            from_s,
+        );
+        assert!(
+            !from_s.contains(&t),
+            "S→T (800 m) must not be a direct footpath at cap=500 m, got {:?}",
+            from_s,
+        );
+
+        let from_m = tt.get_footpaths_from(m);
+        assert!(
+            from_m.contains(&s) && from_m.contains(&t),
+            "M is within 400 m of both S and T, got {:?}",
+            from_m,
         );
     }
 }

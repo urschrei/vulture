@@ -131,9 +131,12 @@
             box no walking transfers exist between physical stops. Vulture's
             <code>with_walking_footpaths(max_distance_m, walking_speed)</code> uses an R*-tree
             over an equirectangular projection of stop coordinates to add bidirectional
-            walking edges between every pair of stops within reach. Toggle it below to see
-            how routing changes: for Delhi Metro most stops are line-internal so the
-            difference is small, but the mechanic is the same on any feed.
+            walking edges between every pair of stops within reach, and the cap is
+            enforced <em>per leg</em>: the resulting graph is marked transitively closed so
+            the routing runtime takes one walk per round and won't quietly stitch
+            short hops into a kilometres-long chain. Toggle it below to see how routing
+            changes: for Delhi Metro most stops are line-internal so the difference is
+            small, but the mechanic is the same on any feed.
         </p>
         <form id="walking-form">
             <label>From <input list="stops" id="walking-from" required placeholder="e.g. Rajiv Chowk"></label>

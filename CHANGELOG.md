@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### `with_walking_footpaths` now caps walking per leg, not per edge
+
+`GtfsTimetable::with_walking_footpaths(max_distance_m, walking_speed)` previously added every pair of stops within `max_distance_m` straight-line distance as a direct footpath but explicitly cleared the closure flag, so the per-round footpath relaxation chained R-tree edges to a fixed point. On dense regional feeds the effective walking range was the cap multiplied by however many stops sat between the endpoints – on the bundled Offenburg dataset (3,300+ stops, lots of close pairs) a 500 m cap was enough for the algorithm to walk roughly 4.5 km in one phase, surfacing a "0 transfers" walking-only journey between two villages where the user expected to take public transit.
+
+The fix matches the cap-during-preprocessing pattern from the original RAPTOR paper (Delling/Pajor/Werneck, 2012). The R-tree-derived edges in 2D Euclidean space are already the shortest single-hop walks within the cap by the triangle inequality, so the constructor now sets `transfers_closed = true`. The runtime then dispatches to the single-pass `O(E)` `relax_footpaths_round_closed`, which walks each source's labels through direct neighbours once per round; chains beyond `max_distance_m` are not stitched. Per-leg max walking distance now matches what the parameter name implies.
+
+This is a behaviour change for callers that combine `with_walking_footpaths` with a `transfers.txt` whose entries depend on chained walking to be discovered. Such cases were rare (publishers typically curate `transfers.txt` as direct one-hop walks); if a feed needs that behaviour, build the closed footpath relation explicitly and use `assert_footpaths_closed` instead.
+
+A new unit test (`with_walking_footpaths_caps_per_leg_and_marks_closed`) constructs a three-stop colinear feed at the equator with 400 m neighbour spacing and an 800 m end-to-end span; with a 500 m cap, it asserts the resulting timetable reports closure, that S↔M and M↔T are direct edges, and that S→T is not in the relation.
+
+The walking-footpaths panel of the bundled demo (`docs/demo/index.html`) reflects the new semantic.
+
 ### Skip GTFS `transfer_type=3` ("transfer not possible") in footpath loading
 
 The `vulture::gtfs` adapter previously created a footpath for every entry in `transfers.txt` regardless of `transfer_type`. Per the GTFS spec, `transfer_type=3` ("not possible") is the publisher explicitly forbidding a transfer between two stops, typically used for geographically close pairs that aren't connected by walkable infrastructure (opposite sides of a motorway, fare-controlled platforms, etc.). The adapter now filters these out via an iterator predicate in `GtfsTimetable::new`, so queries respect the publisher's intent. Other transfer types (0 Recommended, 1 Timed, 2 MinTime, 4 StayOnBoard, 5 MustReboard) continue to create a footpath; `min_transfer_time` is preserved as before.
