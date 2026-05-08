@@ -132,8 +132,7 @@ main {
     margin: 1.6rem 0 0;
     max-width: 62ch;
     font-family: var(--serif);
-    font-style: italic;
-    font-variation-settings: "opsz" 24, "SOFT" 50;
+    font-variation-settings: "opsz" 24, "SOFT" 0;
     font-weight: 400;
     font-size: 1.15rem;
     line-height: 1.5;
@@ -142,7 +141,6 @@ main {
 }
 
 .lede em {
-    font-style: normal;
     font-weight: 700;
     color: var(--rail);
 }
