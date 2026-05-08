@@ -198,9 +198,8 @@ main {
 
 #feed-name {
     font-family: var(--serif);
-    font-style: italic;
     font-weight: 600;
-    font-variation-settings: "opsz" 24, "SOFT" 50;
+    font-variation-settings: "opsz" 24, "SOFT" 0;
     font-size: 1.25rem;
     color: var(--ink);
 }
@@ -333,14 +332,13 @@ main { counter-reset: demo; }
     margin: 0 0 1.4rem;
     max-width: 64ch;
     font-family: var(--serif);
-    font-style: italic;
-    font-variation-settings: "opsz" 18, "SOFT" 50;
+    font-variation-settings: "opsz" 18, "SOFT" 0;
     font-size: 1rem;
     color: var(--muted);
     line-height: 1.6;
 }
 
-.intro em { font-style: normal; font-weight: 600; color: var(--ink); }
+.intro em { font-weight: 600; color: var(--ink); }
 
 /* Forms --------------------------------------------------- */
 
