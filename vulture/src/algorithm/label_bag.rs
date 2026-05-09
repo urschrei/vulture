@@ -72,8 +72,19 @@ impl<L: Label> Default for LabelBag<L> {
 
 /// Try to insert `(label, step)` into `labels[k][stop]` and the
 /// boarding tree. Updates `best_arrival[stop]` and marks the stop
-/// in `out` if the new label improves on `pt_threshold`. Returns
-/// `true` if any insertion happened.
+/// in `out`. Returns `true` if any insertion happened.
+///
+/// Labels with `arrival() >= pt_threshold` are rejected before the
+/// bag insert: such a label cannot lead to a Pareto-optimal journey
+/// at any target (its arrival is already worse than the best known
+/// effective arrival across the whole target set), so any boarding
+/// tree entry it would produce is a ghost step that reconstruction
+/// would later surface as a dominated journey. The route-scan inner
+/// loop applies the same guard (`arr >= time_to_beat`); without it
+/// here the footpath-relax path silently re-introduces dominated
+/// journeys whenever a multi-target query has one target reachable
+/// via a faster walk-only path than another target's trip-based
+/// arrival.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_into_bag<L: Label>(
     labels: &mut [Vec<LabelBag<L>>],
@@ -87,6 +98,9 @@ pub(crate) fn insert_into_bag<L: Label>(
     label: L,
     step: Step,
 ) -> bool {
+    if label.arrival() >= pt_threshold {
+        return false;
+    }
     let added = labels[k][stop.idx()].insert(label);
     if !added {
         return false;
@@ -94,8 +108,6 @@ pub(crate) fn insert_into_bag<L: Label>(
     board_detail.insert((k, stop, label.arrival()), step);
     best_arrival[stop.idx()].insert(label);
     ever_reached.insert(stop.idx());
-    if label.arrival() < pt_threshold {
-        out.push(stop);
-    }
+    out.push(stop);
     true
 }

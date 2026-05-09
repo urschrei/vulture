@@ -53,6 +53,25 @@ pub fn raptor_front(journeys: &[Journey]) -> BTreeSet<(u16, u8)> {
 #[cfg(test)]
 use vulture::{Duration, SecondOfDay, Timetable};
 
+/// Hegel test settings used by every proptest in this crate.
+///
+/// Hegel's default `Settings::new()` auto-detects CI environments
+/// (`GITHUB_ACTIONS`, `CI`, etc.) and switches to `derandomize: true`
+/// (a fixed seed derived from the test name) plus disables the
+/// failing-example database. That made one CI run equivalent to
+/// every other CI run and silently masked layer-3 bugs that random
+/// search reliably finds locally.
+///
+/// We force `derandomize: false` everywhere so CI and local both
+/// draw fresh random seeds each run; over many CI runs across PRs
+/// this surfaces multi-target / generator-corner bugs that any
+/// single fixed seed misses. Test reproducibility for a known
+/// failure is still available via `seed = N` on a per-test basis.
+#[cfg(test)]
+fn proptest_settings() -> hegel::Settings {
+    hegel::Settings::new().derandomize(false)
+}
+
 #[cfg(test)]
 fn run_property(tc: &hegel::TestCase, spec: &spec::NetworkSpec) {
     let timetable = spec::render(spec);
@@ -95,19 +114,19 @@ fn run_property(tc: &hegel::TestCase, spec: &spec::NetworkSpec) {
     assert_eq!(our_front, theirs);
 }
 
-#[hegel::test]
+#[hegel::test(crate::proptest_settings())]
 fn layer1_matches_reference(tc: hegel::TestCase) {
     let spec = tc.draw(spec::network_spec(spec::layer1_bounds()));
     run_property(&tc, &spec);
 }
 
-#[hegel::test]
+#[hegel::test(crate::proptest_settings())]
 fn layer2_matches_reference(tc: hegel::TestCase) {
     let spec = tc.draw(spec::network_spec(spec::layer2_bounds()));
     run_property(&tc, &spec);
 }
 
-#[hegel::test(test_cases = 500)]
+#[hegel::test(crate::proptest_settings(), test_cases = 500)]
 fn layer3_matches_reference(tc: hegel::TestCase) {
     let spec = tc.draw(spec::network_spec(spec::layer3_bounds()));
     run_property(&tc, &spec);
@@ -138,7 +157,7 @@ fn layer3_matches_reference(tc: hegel::TestCase) {
 /// algorithm correctness is already covered by `layer{1,2,3}_matches_reference`;
 /// this is the only test exercising the range-query path, so it must
 /// stay fast enough to run on every commit.
-#[hegel::test]
+#[hegel::test(crate::proptest_settings())]
 fn parallel_naive_matches_serial_rrap(tc: hegel::TestCase) {
     use vulture::RaptorCachePool;
 
@@ -222,7 +241,7 @@ fn parallel_naive_matches_serial_rrap(tc: hegel::TestCase) {
 /// 2. Wrong `RouteIdx` threaded to `extend_by_trip`: if the
 ///    algorithm passes a wrong route to the label, the fare lookup
 ///    in `FareTable` would miss or pick the wrong route's fare.
-#[hegel::test]
+#[hegel::test(crate::proptest_settings())]
 fn fare_label_matches_per_leg_sum(tc: hegel::TestCase) {
     use vulture::labels::{ArrivalAndFare, FareTable};
 
@@ -314,7 +333,7 @@ where
 /// 3-departure window plus per-departure brute force is `3 ×
 /// reference_solve`, which is comfortable on small networks but
 /// would dominate the run on layer 3.
-#[hegel::test]
+#[hegel::test(crate::proptest_settings())]
 fn range_query_matches_reference(tc: hegel::TestCase) {
     let spec = tc.draw(spec::network_spec(spec::layer1_bounds()));
     let timetable = spec::render(&spec);
