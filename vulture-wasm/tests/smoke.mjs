@@ -154,4 +154,47 @@ if (stationStops.length !== 0) {
 }
 console.log(`  stationStops("not-a-real-parent") returned ${stationStops.length} platforms`);
 
+// Feed-features introspection: features() returns the snapshot,
+// suggestions() returns advisory strings.
+const features = tt.features();
+if (typeof features !== "object" || features === null) {
+    throw new Error(`expected features() to return an object, got ${typeof features}`);
+}
+for (const k of [
+    "nStops",
+    "nStopsWithCoords",
+    "nParentStations",
+    "nInaccessibleStops",
+    "nRoutes",
+    "nTrips",
+    "nTripsWithShapes",
+    "transfersByType",
+    "walkingFootpathsAdded",
+    "footpathsClosed",
+    "nFootpaths",
+]) {
+    if (!(k in features)) {
+        throw new Error(`features() missing field ${k}: ${JSON.stringify(features)}`);
+    }
+}
+if (features.nStops !== tt.nStops()) {
+    throw new Error(`features.nStops mismatch: ${features.nStops} vs ${tt.nStops()}`);
+}
+console.log(
+    `features: nStops=${features.nStops} nParents=${features.nParentStations}` +
+        ` nFootpaths=${features.nFootpaths} closed=${features.footpathsClosed}`,
+);
+
+const suggestions = tt.suggestions();
+if (!Array.isArray(suggestions)) {
+    throw new Error(`expected suggestions() to be array, got ${typeof suggestions}`);
+}
+if (!suggestions.every((s) => typeof s === "string")) {
+    throw new Error(`expected suggestions() entries to be strings`);
+}
+console.log(`suggestions: ${suggestions.length} entries`);
+for (const s of suggestions) {
+    console.log(`  - ${s}`);
+}
+
 console.log("smoke test passed");

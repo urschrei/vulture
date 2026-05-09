@@ -683,6 +683,8 @@ function refreshCatalogue(displayName, date) {
     document.getElementById("feed-meta").textContent =
         `· ${date} · ${TT.nStops()} stops · ${TT.nRoutes()} routes`;
 
+    renderFeedFeatures();
+
     // Stop ids change between feeds — wipe pickers and result panels.
     for (const id of [
         "simple-from",
@@ -698,6 +700,60 @@ function refreshCatalogue(displayName, date) {
         clear(document.getElementById(id));
     }
     setSensibleDefaults();
+}
+
+// Map FeedFeatures fields to the human-readable labels used in the
+// "Feed features" panel. Order is the order they appear in the panel.
+const FEATURE_LABELS = [
+    ["nStops", "Stops"],
+    ["nStopsWithCoords", "Stops with coordinates"],
+    ["nParentStations", "Parent stations"],
+    ["nInaccessibleStops", "Inaccessible stops"],
+    ["nRoutes", "Routes (after stop-pattern split)"],
+    ["nTrips", "Trips on service date"],
+    ["nInaccessibleTrips", "Inaccessible trips"],
+    ["nTripsWithShapes", "Trips with shapes"],
+    ["nFootpaths", "Footpath edges"],
+];
+
+function formatTransferBreakdown(t) {
+    const parts = [];
+    if (t.recommended) parts.push(`${t.recommended} recommended`);
+    if (t.timed) parts.push(`${t.timed} timed`);
+    if (t.minTime) parts.push(`${t.minTime} min-time`);
+    if (t.stayOnBoard) parts.push(`${t.stayOnBoard} stay-on-board`);
+    if (t.mustAlight) parts.push(`${t.mustAlight} must-alight`);
+    if (t.impossible) parts.push(`${t.impossible} impossible (filtered)`);
+    return parts.length === 0 ? "0 (transfers.txt empty)" : parts.join(", ");
+}
+
+function renderFeedFeatures() {
+    const wrap = document.getElementById("feed-features");
+    if (!wrap || !TT || typeof TT.features !== "function") return;
+    const features = TT.features();
+    const grid = document.getElementById("feed-features-grid");
+    clear(grid);
+    for (const [key, label] of FEATURE_LABELS) {
+        grid.appendChild(el("dt", {}, label));
+        grid.appendChild(el("dd", {}, String(features[key] ?? 0)));
+    }
+    grid.appendChild(el("dt", {}, "transfers.txt"));
+    grid.appendChild(el("dd", {}, formatTransferBreakdown(features.transfersByType)));
+    grid.appendChild(el("dt", {}, "Footpath state"));
+    const flags = [];
+    if (features.walkingFootpathsAdded) flags.push("walking footpaths added");
+    flags.push(features.footpathsClosed ? "closed (single-pass relax)" : "open (Dijkstra relax)");
+    grid.appendChild(el("dd", {}, flags.join(", ")));
+
+    const sugWrap = document.getElementById("feed-features-suggestions");
+    const sugList = sugWrap.querySelector("ul");
+    clear(sugList);
+    const suggestions = TT.suggestions();
+    for (const s of suggestions) {
+        sugList.appendChild(el("li", {}, s));
+    }
+    sugWrap.hidden = suggestions.length === 0;
+    wrap.hidden = false;
 }
 
 async function onFeedSubmit(ev) {
