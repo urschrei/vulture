@@ -11,6 +11,16 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# wasm-pack reads this metadata block. The workspace `[profile.release]`
+# is `opt-level = 3` for native runtime perf; we lean on `wasm-opt -Oz`
+# (Binaryen's size-optimising pass) to shrink the .wasm bytes back down
+# after wasm-bindgen finishes. Empirically this reaches a similar size
+# to the older cargo `opt-level = "z"` setup without paying the native
+# regression. wasm-pack invokes wasm-opt on every release build that
+# Binaryen is available for; check the build log if the size moves.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz"]
+
 [dependencies]
 vulture = { path = "../vulture", default-features = false }
 gtfs-structures = { version = "0.47.0", default-features = false }

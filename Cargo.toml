@@ -5,11 +5,19 @@ resolver = "3"
 [profile.dev]
 debug = "full"
 
-# Aggressive size optimisation for vulture-wasm's browser delivery;
-# the wasm blob is user-visible bandwidth. Native release builds
-# inherit this too — slightly slower compile, smaller binaries.
+# Native release: standard runtime optimisation for binaries,
+# examples, benches, and downstream consumers pulling `vulture` in
+# as a dependency. `opt-level = "z"` here used to apply to every
+# native release build for the sake of the vulture-wasm blob; that
+# was a 70-80 % native-query regression for callers who never see
+# the wasm. The wasm size budget is now served by wasm-opt -Oz on
+# the wasm-pack output (see `vulture-wasm/Cargo.toml`).
+#
+# `codegen-units = 1` and `lto = true` are kept: they shrink both
+# native binary size and wasm output size, and both feeds gain from
+# the cross-crate inlining LTO permits at this codegen-units count.
 [profile.release]
-opt-level = "z"
+opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
