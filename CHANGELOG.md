@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Perf: native release back to `opt-level = 3`
+
+The workspace `[profile.release]` was set to `opt-level = "z"` since the vulture-wasm bring-up (May 2026) so that `wasm-pack` would produce a small browser blob. Native release builds inherited the size profile too, and the cross-city-bench numbers in the docs were measured before that change. Bisect identifies the regression: between `aa53a37` (last "good", Delhi 2-trip 38 µs) and `0dff73d` (the wasm crate commit, Delhi 2-trip 64 µs); the only change was the `Cargo.toml` profile. Native query latency was 70-80 % slower than expected.
+
+`[profile.release]` is now `opt-level = 3` again. The wasm size budget is recovered separately: `vulture-wasm/Cargo.toml` now carries a `[package.metadata.wasm-pack.profile.release]` block telling `wasm-pack` to run `wasm-opt -Oz` on the .wasm output, so Binaryen's size-optimising pass shrinks the blob after wasm-bindgen finishes. `codegen-units = 1` and `lto = true` are kept (both cut native binary size and wasm bytes; the cross-crate inlining LTO enables matters in both directions).
+
+Cross-city-bench, Delhi 2-trip, this machine:
+
+| State | Latency |
+| --- | ---: |
+| Pre-fix (`opt-level = "z"`) | 60 µs |
+| Post-fix (`opt-level = 3`) | 34 µs |
+
+Helsinki / Berlin / Paris similar (-40 to -55 % across the board). Criterion `gtfs_query` numbers move comparably (`transfer_2trip` 68 µs → 31 µs).
+
 ### Bugfix: footpath relaxation now respects `pt_threshold`
 
 `insert_into_bag` (the helper called by both round-0 and round-k footpath relaxation) used `pt_threshold` only to decide whether to mark the destination stop for the next round, never to drop the label itself. The route-scan inner loop did drop labels at or after the threshold (`arr >= time_to_beat`), so the algorithm's two label-introducing paths disagreed: trip-based alighting respected the bound, footpath relaxation did not. In multi-target queries this surfaced as ghost journeys to one target that arrived strictly later than a walk-only path to a different target: dominated journeys that should never have left the round, but reached output via a boarding-tree entry the relax path inserted.
