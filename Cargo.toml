@@ -22,5 +22,16 @@ lto = true
 codegen-units = 1
 panic = "abort"
 
+# Native profiling target: same codegen as release (so perf claims
+# match what users get) plus DWARF for symbol resolution under
+# samply / cargo-flamegraph. Build with `cargo build --profile
+# profiling`. `split-debuginfo = "packed"` writes a .dSYM bundle
+# alongside the binary on macOS so the profiler resolves symbols.
+[profile.profiling]
+inherits = "release"
+debug = "full"
+strip = "none"
+split-debuginfo = "packed"
+
 [workspace.dependencies]
 vulture = { path = "./vulture" }
