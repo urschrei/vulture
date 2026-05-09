@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Bugfix: footpath relaxation now respects `pt_threshold`
+
+`insert_into_bag` (the helper called by both round-0 and round-k footpath relaxation) used `pt_threshold` only to decide whether to mark the destination stop for the next round, never to drop the label itself. The route-scan inner loop did drop labels at or after the threshold (`arr >= time_to_beat`), so the algorithm's two label-introducing paths disagreed: trip-based alighting respected the bound, footpath relaxation did not. In multi-target queries this surfaced as ghost journeys to one target that arrived strictly later than a walk-only path to a different target: dominated journeys that should never have left the round, but reached output via a boarding-tree entry the relax path inserted.
+
+`insert_into_bag` now rejects labels with `arrival() >= pt_threshold` before touching the bag, mirroring the route-scan guard. Output of single-target queries is unchanged. Multi-target queries now drop journeys to a slower target whose arrival has already been beaten by a walk-only path to another target.
+
+The proptest harness (`vulture-proptest`) now forces `derandomize: false` on every `#[hegel::test]` via a shared `proptest_settings()` helper. Hegel's default behaviour auto-detects CI (`GITHUB_ACTIONS`, `CI`, etc.) and switches to a fixed seed per test name plus a disabled failure database, which made every CI run draw the same handful of seeds and silently masked the layer-3 multi-target case that random search reliably finds locally. Forcing random seeds in CI surfaces this class of generator-corner bug going forward.
+
 ## v0.22.1
 
 ### Feed-features introspection: `GtfsTimetable::features()` + `suggestions()`
