@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.22.1
 
 ### Feed-features introspection: `GtfsTimetable::features()` + `suggestions()`
 
