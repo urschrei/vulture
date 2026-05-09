@@ -46,9 +46,9 @@ multi-leg journeys use shared physical interchange stops.
 
 | Query                                              | Median latency |              Result |
 |----------------------------------------------------|---------------:|--------------------:|
-| Dilshad Garden → Shahdara (1 trip, Red Line east)  |         5.2 µs | arr 09:09:32 (9 m)  |
-| Dilshad Garden → Vishwavidyalaya (2 trips)         |          22 µs | arr 09:31:49 (32 m) |
-| Paschim Vihar West → Ghitorni (3 trips, 3 lines)   |          41 µs | arr 10:22:52 (83 m) |
+| Dilshad Garden → Shahdara (1 trip, Red Line east)  |         3.8 µs | arr 09:09:32 (9 m)  |
+| Dilshad Garden → Vishwavidyalaya (2 trips)         |          28 µs | arr 09:31:49 (32 m) |
+| Paschim Vihar West → Ghitorni (3 trips, 3 lines)   |          60 µs | arr 10:22:52 (83 m) |
 
 ### Helsinki HSL
 
@@ -59,8 +59,8 @@ journey because HSL ships an empty `transfers.txt`.
 
 | Query                                              | Median latency |              Result |
 |----------------------------------------------------|---------------:|--------------------:|
-| Kamppi metro (1040601) → Itäkeskus metro (1453601) |        5.88 ms | arr 09:17:00 (17 m) |
-| Rautatientori → Pasila (station-to-station, ~3 km) |        4.99 ms |  arr 09:07:00 (7 m) |
+| Kamppi metro (1040601) → Itäkeskus metro (1453601) |        1.07 ms | arr 09:17:00 (17 m) |
+| Rautatientori → Pasila (station-to-station, ~3 km) |        575 µs  |  arr 09:07:00 (7 m) |
 
 The Kamppi-to-Itäkeskus leg is a single direct trip on the M1/M2
 metro line; the latency is the Dijkstra footpath-relaxation cost on
@@ -72,8 +72,8 @@ at 09:07. Both queries previously returned no journey.
 
 | Query                                                              | Median latency |              Result |
 |--------------------------------------------------------------------|---------------:|--------------------:|
-| Berlin Hauptbahnhof → Alexanderplatz (S-Bahn, hand-picked plats)   |        106 µs | arr 09:20:36 (20 m) |
-| Berlin Hauptbahnhof → Alexanderplatz (station-to-station)          |        385 µs |  arr 09:07:06 (7 m) |
+| Berlin Hauptbahnhof → Alexanderplatz (S-Bahn, hand-picked plats)   |        377 µs | arr 09:20:36 (20 m) |
+| Berlin Hauptbahnhof → Alexanderplatz (station-to-station)          |        794 µs |  arr 09:07:06 (7 m) |
 
 The hand-picked-platforms query takes 20 minutes because the chosen
 ID is one specific eastbound S-Bahn platform: the 09:00 query waits
@@ -99,9 +99,9 @@ considered).
 
 | Query                              | Median latency |              Result |
 |------------------------------------|---------------:|--------------------:|
-| Châtelet → Gare du Nord            |        0.77 ms | arr 09:05:00 (5 m)  |
-| Châtelet → La Défense              |        0.88 ms | arr 09:10:09 (10 m) |
-| Châtelet → Versailles Rive Droite  |        16.7 ms | arr 09:43:00 (43 m) |
+| Châtelet → Gare du Nord            |        932 µs  | arr 09:05:00 (5 m)  |
+| Châtelet → La Défense              |        1.34 ms | arr 09:10:09 (10 m) |
+| Châtelet → Versailles Rive Droite  |        28.6 ms | arr 09:43:00 (43 m) |
 
 All three queries return single sensible journeys – the loop-route
 soundness bug that produced ARR<DEP results in earlier benchmark runs

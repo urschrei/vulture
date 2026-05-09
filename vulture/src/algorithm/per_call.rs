@@ -14,6 +14,7 @@ use crate::algorithm::boarding::BoardingTree;
 use crate::algorithm::boarding::Step;
 use crate::algorithm::boarding::best_to_any_target;
 use crate::algorithm::boarding::extract_target_journeys;
+use crate::algorithm::boarding::tighten_pt_threshold;
 use crate::algorithm::footpaths::relax_footpaths_round;
 use crate::algorithm::footpaths::relax_footpaths_round_closed;
 use crate::algorithm::label_bag::LabelBag;
@@ -62,10 +63,22 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
     walked_buf: &mut Vec<StopIdx>,
     relax_heap: &mut BinaryHeap<Reverse<(SecondOfDay, u32)>>,
     ever_reached: &mut FixedBitSet,
+    is_dest: &FixedBitSet,
     transfers: usize,
     require_wheelchair_accessible: bool,
     targets: &[(StopIdx, Duration)],
 ) {
+    // `pt_threshold` is the best known effective arrival at any
+    // target. The route-scan inner loop tightens it incrementally on
+    // every successful insert at a target stop via
+    // `tighten_pt_threshold`, replacing the post-route-scan
+    // `best_to_any_target` recompute. Footpath relaxation does not
+    // tighten in-line: the bag-level guard in `insert_into_bag`
+    // (`arrival >= pt_threshold` → reject) would then drop
+    // Pareto-incomparable multi-criterion labels at a target whose
+    // arrival is not the new minimum. Instead we recompute
+    // `pt_threshold` once per round-boundary, after each footpath
+    // relaxation pass.
     let mut pt_threshold = best_to_any_target(best_arrival, targets);
 
     // Pick the per-round footpath relaxation strategy once. Closed
@@ -206,6 +219,7 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
                         );
                         marked_stops.insert(pi.idx());
                         ever_reached.insert(pi.idx());
+                        tighten_pt_threshold(&mut pt_threshold, pi, &new_label, is_dest, targets);
                     }
                 }
 
@@ -257,10 +271,10 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
             q_entry[r.idx()] = None;
         }
 
-        // Refresh target threshold after the route scan, then run
-        // footpath relax. Refresh again after the footpath round so
-        // the next round's boarding decisions use a current threshold.
-        pt_threshold = best_to_any_target(best_arrival, targets);
+        // The route-scan loop tightened `pt_threshold` incrementally
+        // on every successful insert at a target stop, so the relax
+        // pass already sees the tightest known bound; no mid-round
+        // refresh needed.
         if footpaths_closed {
             relax_footpaths_round_closed(
                 tt,
@@ -292,6 +306,11 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
         for s in walked_buf.drain(..) {
             marked_stops.insert(s.idx());
         }
+        // Refresh the threshold to capture any target reached during
+        // footpath relaxation. The relax pass cannot tighten in line
+        // (multi-criterion soundness; see the round-0 comment), so
+        // the next round's route scan inherits a bound stale by at
+        // most one round.
         pt_threshold = best_to_any_target(best_arrival, targets);
 
         if marked_stops.is_clear() {
@@ -332,6 +351,7 @@ pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
         origin_set,
         relax_heap,
         ever_reached,
+        is_dest,
         ..
     } = cache;
 
@@ -339,6 +359,13 @@ pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
     origin_set.clear();
     for &(o, _) in origins {
         origin_set.insert(o.idx());
+    }
+
+    // Populate the destination bitset from the targets slice. The
+    // rounds loop uses this for an O(1) "is this an interesting stop
+    // for the threshold?" check on every successful insert.
+    for &(t, _) in targets {
+        is_dest.insert(t.idx());
     }
 
     // Seed labels for each origin at depart + its walk-time offset.
@@ -366,6 +393,7 @@ pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
         walked_buf,
         relax_heap,
         ever_reached,
+        is_dest,
         transfers,
         require_wheelchair_accessible,
         targets,

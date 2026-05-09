@@ -2,21 +2,19 @@
 
 ## Unreleased
 
-### Perf: native release back to `opt-level = 3`
+### Perf: incremental `pt_threshold` tightening during route scan
 
-The workspace `[profile.release]` was set to `opt-level = "z"` since the vulture-wasm bring-up (May 2026) so that `wasm-pack` would produce a small browser blob. Native release builds inherited the size profile too, and the cross-city-bench numbers in the docs were measured before that change. Bisect identifies the regression: between `aa53a37` (last "good", Delhi 2-trip 38 µs) and `0dff73d` (the wasm crate commit, Delhi 2-trip 64 µs); the only change was the `Cargo.toml` profile. Native query latency was 70-80 % slower than expected.
+The RAPTOR rounds loop used to recompute `pt_threshold` (the best known effective arrival at any target) only at round boundaries: once after the round-0 footpath pass, again after each round's route scan, and again after each round's footpath relaxation. Inside the route scan, every alight decision used the threshold value frozen at the start of the round, even after that scan itself produced a strictly better target arrival ten routes earlier in the same loop.
 
-`[profile.release]` is now `opt-level = 3` again. The wasm size budget is recovered separately: `vulture-wasm/Cargo.toml` now carries a `[package.metadata.wasm-pack.profile.release]` block telling `wasm-pack` to run `wasm-opt -Oz` on the .wasm output, so Binaryen's size-optimising pass shrinks the blob after wasm-bindgen finishes. `codegen-units = 1` and `lto = true` are kept (both cut native binary size and wasm bytes; the cross-crate inlining LTO enables matters in both directions).
+Successful inserts at a target stop in the route-scan inner loop now tighten `pt_threshold` in place via `tighten_pt_threshold`, gated by a new precomputed `is_dest` bitset on `RaptorCache` so the common non-target path is a single bit-test. The tighter mid-scan bound prunes more alights at non-target stops within the same round, which the earlier round-end recompute could not. The post-route-scan recompute is dropped (the incremental tighten subsumes it); the post-relax recompute is kept (multi-criterion soundness: the relax pass cannot tighten in line without dropping Pareto-incomparable inserts at a target whose arrival is not the bag minimum, so it stays loose and the next round inherits a one-round-stale bound).
 
-Cross-city-bench, Delhi 2-trip, this machine:
+Real-feed bench (Delhi Metro, `vulture/benches/gtfs.rs`), against the perf-fix baseline above:
 
-| State | Latency |
-| --- | ---: |
-| Pre-fix (`opt-level = "z"`) | 60 µs |
-| Post-fix (`opt-level = 3`) | 34 µs |
+- `gtfs_query/raptor/direct_1trip` 8.6 µs → 3.9 µs (-54 %)
+- `gtfs_query/raptor/transfer_2trip` 35.4 µs → 30.7 µs (-13 %)
+- `gtfs_query/raptor/transfer_3trip` 68.3 µs → 64.0 µs (-6 %)
 
-Helsinki / Berlin / Paris similar (-40 to -55 % across the board). Criterion `gtfs_query` numbers move comparably (`transfer_2trip` 68 µs → 31 µs).
-
+The synthetic `vulture/benches/raptor.rs` benches show smaller deltas (typically within ±2 %); they don't exercise the "target reached early in round 1, then more routes scanned" pattern that real metro queries hit hardest.
 ### Bugfix: footpath relaxation now respects `pt_threshold`
 
 `insert_into_bag` (the helper called by both round-0 and round-k footpath relaxation) used `pt_threshold` only to decide whether to mark the destination stop for the next round, never to drop the label itself. The route-scan inner loop did drop labels at or after the threshold (`arr >= time_to_beat`), so the algorithm's two label-introducing paths disagreed: trip-based alighting respected the bound, footpath relaxation did not. In multi-target queries this surfaced as ghost journeys to one target that arrived strictly later than a walk-only path to a different target: dominated journeys that should never have left the round, but reached output via a boarding-tree entry the relax path inserted.

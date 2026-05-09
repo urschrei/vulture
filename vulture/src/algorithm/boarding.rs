@@ -59,6 +59,47 @@ pub(crate) fn best_to_any_target<L: Label>(
         .unwrap_or(SecondOfDay::MAX)
 }
 
+/// Tighten `pt_threshold` if `stop` is one of the query's targets and
+/// the inserted label improves on the current bound. The
+/// `is_dest` bitset short-circuits the common non-target path with a
+/// single bit-test; the linear scan over `targets` only runs when the
+/// bit is set, and queries typically have a handful of targets at most.
+///
+/// Only safe to call from the route-scan inner loop. The route-scan
+/// guard (`arr >= time_to_beat`) already drops alights that wouldn't
+/// improve the bag's arrival minimum, so inserts that reach this
+/// helper do strictly improve the target's bag arrival, making it
+/// sound to feed the new arrival back into the threshold for the
+/// rest of the same scan. Footpath relaxation does *not* hold this
+/// invariant: a Pareto-incomparable multi-criterion label can
+/// successfully insert at a target with arrival worse than the bag
+/// minimum (better in some other criterion). Calling
+/// `tighten_pt_threshold` there would tighten on the first target
+/// arrival the relax pass produces, then cause `insert_into_bag` to
+/// reject every later Pareto-incomparable insert at the same target
+/// (`arrival >= pt_threshold`), silently dropping multi-criterion
+/// front entries.
+pub(crate) fn tighten_pt_threshold<L: Label>(
+    pt_threshold: &mut SecondOfDay,
+    stop: StopIdx,
+    label: &L,
+    is_dest: &FixedBitSet,
+    targets: &[(StopIdx, Duration)],
+) {
+    if !is_dest.contains(stop.idx()) {
+        return;
+    }
+    for &(t, w) in targets {
+        if t == stop {
+            let candidate = label.arrival() + w;
+            if candidate < *pt_threshold {
+                *pt_threshold = candidate;
+            }
+            return;
+        }
+    }
+}
+
 /// Reconstruct a single candidate plan terminating at the target
 /// label `(pt, target_arrival)` at round `k`. Traces back through
 /// the boarding tree (which is keyed on `(round, stop, label_arrival)`
