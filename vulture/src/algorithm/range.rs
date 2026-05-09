@@ -140,13 +140,18 @@ pub(crate) fn raptor_range_rrap_arrival<T: Timetable + ?Sized>(
         origin_set,
         relax_heap,
         ever_reached,
+        is_dest,
         ..
     } = cache;
 
-    // origin_set is constant across τ scans; populate once.
+    // origin_set and is_dest are both constant across τ scans;
+    // populate them once before the scan loop.
     origin_set.clear();
     for &(source, _) in origins {
         origin_set.insert(source.idx());
+    }
+    for &(t, _) in targets {
+        is_dest.insert(t.idx());
     }
 
     let mut output: Vec<RangeJourney<ArrivalTime>> = Vec::new();
@@ -190,6 +195,7 @@ pub(crate) fn raptor_range_rrap_arrival<T: Timetable + ?Sized>(
             walked_buf,
             relax_heap,
             ever_reached,
+            is_dest,
             transfers,
             require_wheelchair_accessible,
             targets,
