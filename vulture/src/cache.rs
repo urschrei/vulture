@@ -1,6 +1,6 @@
 //! [`RaptorCache`] – reusable scratch buffers for repeated queries —
-//! plus the `Sync` freelist variant [`RaptorCachePool`] and its
-//! [`PooledCache`] checkout guard.
+//! plus the `Sync` freelist variant [`RaptorCachePool`] and the
+//! [`PooledCache`] handle returned from [`RaptorCachePool::checkout`].
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
@@ -249,9 +249,10 @@ impl<L: Label> std::fmt::Debug for RaptorCachePool<L> {
     }
 }
 
-/// RAII guard handed out by [`RaptorCachePool::checkout`]. Derefs to
-/// [`RaptorCache`]; pass `&mut pooled_cache` wherever a `&mut RaptorCache`
-/// is wanted. Returns the cache to the pool on drop.
+/// Scoped handle handed out by [`RaptorCachePool::checkout`] that
+/// owns a [`RaptorCache`] for its lifetime and returns it to the pool
+/// when dropped. Derefs to [`RaptorCache`]; pass `&mut pooled_cache`
+/// wherever a `&mut RaptorCache` is wanted.
 pub struct PooledCache<'p, L: Label = ArrivalTime> {
     pool: &'p RaptorCachePool<L>,
     cache: Option<RaptorCache<L>>,
