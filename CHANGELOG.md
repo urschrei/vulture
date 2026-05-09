@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Perf: drop `staged` snapshot in route-scan EXTEND step
+
+The route scan's EXTEND step copied `labels[k-1][pi]` into a `SmallVec<[L; 8]>` scratch buffer once per `(route × pos)` pair. The original comment ("snapshot first to avoid aliasing") flagged this as a borrow-checker workaround, but the inner loop only mutates `route_bag` and reads `tt`; nothing in it touches `labels`, so there is no aliasing to dodge. A samply profile of the merged perf-fix + PR1 stack pinned ~14 % of self-time in `SmallVec::{clear, triple, triple_mut, spilled}` driven by exactly this `clear / extend` pair, so the workaround was costing real cycles.
+
+The buffer is gone. The EXTEND loop now iterates `labels[k-1][pi.idx()].iter()` directly. Output is unchanged.
+
+| Bench | vs main |
+| --- | ---: |
+| `gtfs_query/raptor/direct_1trip` | -5.5 % |
+| `gtfs_query/raptor/transfer_2trip` | -3.1 % |
+| `gtfs_query/raptor/transfer_3trip` | -7.2 % |
+| `linear/raptor/200s_20t` (synthetic) | -5.7 % |
+| `transfer_scaling/raptor/k20` (synthetic) | -8.4 % |
+| `reconstruction_breadth/raptor/10p_10l` | -3.8 % |
+
+The synthetic suite's other groups land in the 2-8 % range; the criterion gtfs benches at the top of the list are the closest analogue to real-feed query latency.
+
 ### Perf: incremental `pt_threshold` tightening during route scan
 
 The RAPTOR rounds loop used to recompute `pt_threshold` (the best known effective arrival at any target) only at round boundaries: once after the round-0 footpath pass, again after each round's route scan, and again after each round's footpath relaxation. Inside the route scan, every alight decision used the threshold value frozen at the start of the round, even after that scan itself produced a strictly better target arrival ten routes earlier in the same loop.

@@ -164,7 +164,6 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
         // threaded through so labels with per-trip context (e.g. fares)
         // can know where the rider got on.
         let mut route_bag: SmallVec<[(L, TripIdx, StopIdx, u32); 8]> = SmallVec::new();
-        let mut staged: SmallVec<[L; 8]> = SmallVec::new();
 
         for &route in q_routes.iter() {
             let p_pos = q_entry[route.idx()].expect("route in q_routes must have an entry");
@@ -225,10 +224,15 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
 
                 // 2. Try to extend route_bag with labels from
                 //    labels[k-1][pi] that can catch a trip on this
-                //    route at pi. Snapshot first to avoid aliasing.
-                staged.clear();
-                staged.extend(labels[k - 1][pi.idx()].iter().copied());
-                for candidate in &staged {
+                //    route at pi. Iterate the source bag directly:
+                //    nothing in this loop touches `labels`, so there
+                //    is no aliasing to dodge. (Earlier code copied
+                //    the bag into a SmallVec scratch buffer per pos
+                //    × route, which the profile pinned at ~14 % of
+                //    self-time across `SmallVec::clear / triple_mut
+                //    / spilled` plus the `extend` traffic.)
+                let cand_bag = &labels[k - 1][pi.idx()];
+                for candidate in cand_bag.iter() {
                     let cand_arr = candidate.arrival();
                     let trip = match tt.earliest_accessible_trip(
                         route,
