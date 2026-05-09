@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Perf: boarding tree `BTreeMap` → `FxHashMap`
+
+The boarding tree (`board_detail`) records one `Step` per successful label insert during the route-scan and footpath-relax phases, then is read once at the end of the query during journey reconstruction. The merged-PR1 profile pinned ~12 % of self-time inside `BTreeMap::insert` / `search_tree` / `find_key_index` / tuple `cmp` chains driven by tree-rebalancing on every insert; the only access patterns are point insert and point lookup, so an ordered map was the wrong shape.
+
+Now a `rustc-hash` `FxHashMap`. Default `HashMap` (SipHash) regresses small queries by 2-4 %; `FxHash` is the standard fast-hash choice for short integer-tuple keys (the rustc internals use it for the same reason) and wins across the suite once map size is non-trivial.
+
+`rustc-hash` v2 added as a dependency of `vulture`.
+
+| Bench | vs PR-B (criterion) |
+| --- | ---: |
+| `gtfs_query/raptor/direct_1trip` | -1.0 % |
+| `gtfs_query/raptor/transfer_2trip` | +0.9 % |
+| `gtfs_query/raptor/transfer_3trip` | -19.8 % |
+| `linear/raptor/200s_20t` | -27.6 % |
+| `grid/raptor/10r_30s_6c` | -19.3 % |
+| `linear/raptor/10s_5t` (smallest case) | +5.4 % |
+
+Real-feed cross-city run, end-to-end vs the merged-PR1 baseline (cumulative across PR-B + PR-A):
+
+| Query | Before (PR1) | After (PR1 + PR-B + PR-A) |
+| --- | ---: | ---: |
+| Delhi 2-trip | 28 µs | **25 µs** |
+| Delhi 3-trip | 60 µs | **43 µs** |
+| Helsinki Kamppi → Itäkeskus | 1.07 ms | **1.17 ms** (noise) |
+| Berlin Hbf → Alex (station) | 794 µs | **745 µs** |
+| Paris Châtelet → Gare du Nord | 932 µs | **746 µs** |
+| Paris Châtelet → Versailles | 28.6 ms | **17.9 ms** |
+
+The smallest synthetic queries (tens of stops, single-digit boarding-tree entries) see a ~5 % regression from FxHash's per-key cost on a near-empty map; they are sub-µs queries already and the absolute miss is small. Trade is a clear net positive.
+
 ### Perf: drop `staged` snapshot in route-scan EXTEND step
 
 The route scan's EXTEND step copied `labels[k-1][pi]` into a `SmallVec<[L; 8]>` scratch buffer once per `(route × pos)` pair. The original comment ("snapshot first to avoid aliasing") flagged this as a borrow-checker workaround, but the inner loop only mutates `route_bag` and reads `tt`; nothing in it touches `labels`, so there is no aliasing to dodge. A samply profile of the merged perf-fix + PR1 stack pinned ~14 % of self-time in `SmallVec::{clear, triple, triple_mut, spilled}` driven by exactly this `clear / extend` pair, so the workaround was costing real cycles.
