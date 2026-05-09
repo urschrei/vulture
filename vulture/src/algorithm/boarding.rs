@@ -2,9 +2,8 @@
 //! reconstruction helpers that walk them ([`reconstruct_journey`],
 //! [`extract_target_journeys`], [`best_to_any_target`]).
 
-use std::collections::BTreeMap;
-
 use fixedbitset::FixedBitSet;
+use rustc_hash::FxHashMap;
 
 use crate::K;
 use crate::algorithm::label_bag::LabelBag;
@@ -43,7 +42,22 @@ pub(crate) enum Step {
 /// Boarding tree key: `(round, stop, label_arrival)`. The third
 /// component disambiguates Pareto-optimal labels with distinct
 /// arrival times in the same `(round, stop)` bag.
-pub(crate) type BoardingTree = BTreeMap<(K, StopIdx, SecondOfDay), Step>;
+///
+/// `FxHashMap` (the rustc-internal hasher): the only access
+/// patterns are point insert (per successful label insert in
+/// route-scan or footpath relax) and point lookup (during
+/// reconstruction at the end of the query). No range scans, no
+/// ordered iteration, no enumeration. The earlier `BTreeMap`
+/// showed up at ~12 % of self-time in the merged-PR1 profile,
+/// mostly in `search_tree` / `find_key_index` / tuple `cmp` chains
+/// driven by tree-rebalancing on every insert; a hash map turns
+/// each of those into a hash + bucket probe. `FxHash` over the
+/// default `SipHash` because the keys are 16-byte tuples of
+/// integer indices and the hasher cost dominates on the small
+/// boarding trees produced by short queries (`direct_1trip` has
+/// ~10 entries; SipHash on a small map regresses 2-4 % vs
+/// `BTreeMap` while FxHash wins across the board).
+pub(crate) type BoardingTree = FxHashMap<(K, StopIdx, SecondOfDay), Step>;
 
 /// Returns the minimum of `best_arrival[t].min_arrival() + w` across
 /// all `(t, w)` in `targets`, saturating on overflow. Returns

@@ -48,5 +48,6 @@ jiff = "0.2"
 log = "0.4.29"
 rayon = { version = "1.10", optional = true }
 rstar = "0.12"
+rustc-hash = "2"
 smallvec = { version = "1.15.1", features = ["const_generics"] }
 thiserror = "2.0.18"
