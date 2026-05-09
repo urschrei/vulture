@@ -33,6 +33,19 @@
         <strong id="feed-name">loading…</strong>
         <span class="muted" id="feed-meta"></span>
     </div>
+    <details id="feed-features" hidden>
+        <summary>Feed features</summary>
+        <dl id="feed-features-grid" class="feed-features-grid"></dl>
+        <div id="feed-features-suggestions" class="feed-features-suggestions" hidden>
+            <p class="label">Suggestions</p>
+            <ul></ul>
+        </div>
+        <p class="cors-note">
+            Counts come from <code>tt.features()</code>; advisory pointers
+            from <code>tt.suggestions()</code>. Both are pure introspection
+            – they don't alter routing.
+        </p>
+    </details>
     <details id="feed-details">
         <summary>Load a different GTFS feed</summary>
         <form id="feed-form">

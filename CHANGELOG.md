@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Feed-features introspection: `GtfsTimetable::features()` + `suggestions()`
+
+`GtfsTimetable` now exposes a `features()` method returning a `FeedFeatures` snapshot of the loaded feed: stop and trip counts (including how many stops carry coordinates, how many are parent stations, how many trips have shapes, how many trips/stops carry the wheelchair-not-available flag), a `TransfersByType` breakdown of `transfers.txt` rows by GTFS `transfer_type` (so callers can see how many `Impossible` rows the adapter filtered out at construction), and the current state of the footpath graph (whether `with_walking_footpaths` has been applied, whether the relation is marked transitively closed, total directed edge count). Counts are computed once at construction; the dynamic-state fields update as the timetable mutates. The motivating use case is small UIs and tools that want to describe a feed without keeping the source `Gtfs` around.
+
+`FeedFeatures::suggestions()` returns a `Vec<&'static str>` of advisory pointers mapping the snapshot to vulture knobs that may be worth turning, e.g. "transfers.txt is empty: call `with_walking_footpaths(...)`", "feed has parent stations: queries rooted there return zero journeys – expand via `station_stops(parent_id)`", "feed has trip shapes: call `shape_for_leg(...)` for polylines". Strings are heuristics, not instructions; calling none of them still gives correct results. The list is empty for feeds in a "happy path" state (publisher-curated `transfers.txt`, no parent stations or shapes to surface, no wheelchair flags).
+
+The pair is also surfaced over `vulture-wasm` as `tt.features()` (returns a JS object with camelCase fields) and `tt.suggestions()` (returns a JS string array). The bundled demo shows both in a new "Feed features" `<details>` block under each loaded feed.
+
+A new helper `TransfersByType::loaded()` returns the row count actually loaded as footpaths (every `transfer_type` except `Impossible`), complementing `total()`.
+
+Six new unit tests cover the `suggestions()` branches and an end-to-end `features_reports_input_counts_and_dynamic_state` test exercises the input-derived and post-`with_walking_footpaths` counts on a synthetic feed with parent stations, mixed transfer types, shaped/unshaped trips, and wheelchair flags.
+
 ## v0.22.0
 
 ### `with_walking_footpaths` now caps walking per leg, not per edge

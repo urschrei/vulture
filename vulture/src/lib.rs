@@ -97,6 +97,11 @@
 //!   trip the next morning.
 //! - **Sparse `transfers.txt`.** [`gtfs::GtfsTimetable::with_walking_footpaths`]
 //!   builds bidirectional walking edges from stop coordinates using an R-tree.
+//! - **Feed introspection.** [`gtfs::GtfsTimetable::features`] returns a
+//!   [`gtfs::FeedFeatures`] snapshot of the loaded feed (counts, transfer-type
+//!   breakdown, parent stations, shaped trips, wheelchair flags, current
+//!   footpath state); [`gtfs::FeedFeatures::suggestions`] maps the snapshot to
+//!   advisory pointers about vulture knobs worth turning.
 //!
 //! # Custom backends
 //!

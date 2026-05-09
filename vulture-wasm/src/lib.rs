@@ -16,7 +16,7 @@ use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
 use vulture::ffi;
-use vulture::gtfs::GtfsTimetable as VTimetable;
+use vulture::gtfs::{FeedFeatures, GtfsTimetable as VTimetable, TransfersByType};
 use vulture::{Duration, RouteIdx, SecondOfDay, StopIdx, Timetable};
 
 /// Opaque handle to a parsed GTFS feed + timetable. The JS side
@@ -217,6 +217,30 @@ impl VultureTimetable {
             Some(inner.with_walking_footpaths(&self.gtfs, max_distance_m, walking_speed_m_per_s));
     }
 
+    /// Snapshot of the loaded feed's features (stop / trip / route
+    /// counts, `transfers.txt` shape, shape-availability, and the
+    /// current state of the footpath graph). Returns a JS object
+    /// matching the shape of [`vulture::gtfs::FeedFeatures`].
+    #[wasm_bindgen(js_name = features)]
+    pub fn features(&self) -> Result<JsValue, JsError> {
+        let row = FeaturesRow::from(&self.tt().features());
+        serde_wasm_bindgen::to_value(&row).map_err(|e| JsError::new(&format!("{e}")))
+    }
+
+    /// Heuristic list of vulture knobs worth turning given this
+    /// feed's shape (e.g. "transfers.txt is empty: call
+    /// withWalkingFootpaths(...)"). Returns a JS array of strings;
+    /// empty when no heuristic fires.
+    #[wasm_bindgen(js_name = suggestions)]
+    pub fn suggestions(&self) -> Vec<String> {
+        self.tt()
+            .features()
+            .suggestions()
+            .into_iter()
+            .map(String::from)
+            .collect()
+    }
+
     /// Reset the timetable to its base-date single-day state,
     /// discarding any walking-footpath augmentation. Useful for
     /// "before/after" demos.
@@ -262,6 +286,69 @@ struct RouteRow {
     /// Hex colour `"#rrggbb"` from `routes.route_color`, or `None`
     /// if unset.
     route_color: Option<String>,
+}
+
+/// JSON-serialisable mirror of [`vulture::gtfs::TransfersByType`].
+#[derive(Serialize)]
+struct TransfersByTypeRow {
+    recommended: usize,
+    timed: usize,
+    min_time: usize,
+    impossible: usize,
+    stay_on_board: usize,
+    must_alight: usize,
+}
+
+impl From<&TransfersByType> for TransfersByTypeRow {
+    fn from(t: &TransfersByType) -> Self {
+        Self {
+            recommended: t.recommended,
+            timed: t.timed,
+            min_time: t.min_time,
+            impossible: t.impossible,
+            stay_on_board: t.stay_on_board,
+            must_alight: t.must_alight,
+        }
+    }
+}
+
+/// JSON-serialisable mirror of [`vulture::gtfs::FeedFeatures`].
+/// Field names match the Rust shape and are camel-cased on the JS
+/// side via `serde_wasm_bindgen`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FeaturesRow {
+    n_stops: usize,
+    n_stops_with_coords: usize,
+    n_parent_stations: usize,
+    n_inaccessible_stops: usize,
+    n_routes: usize,
+    n_trips: usize,
+    n_inaccessible_trips: usize,
+    n_trips_with_shapes: usize,
+    transfers_by_type: TransfersByTypeRow,
+    walking_footpaths_added: bool,
+    footpaths_closed: bool,
+    n_footpaths: usize,
+}
+
+impl From<&FeedFeatures> for FeaturesRow {
+    fn from(f: &FeedFeatures) -> Self {
+        Self {
+            n_stops: f.n_stops,
+            n_stops_with_coords: f.n_stops_with_coords,
+            n_parent_stations: f.n_parent_stations,
+            n_inaccessible_stops: f.n_inaccessible_stops,
+            n_routes: f.n_routes,
+            n_trips: f.n_trips,
+            n_inaccessible_trips: f.n_inaccessible_trips,
+            n_trips_with_shapes: f.n_trips_with_shapes,
+            transfers_by_type: TransfersByTypeRow::from(&f.transfers_by_type),
+            walking_footpaths_added: f.walking_footpaths_added,
+            footpaths_closed: f.footpaths_closed,
+            n_footpaths: f.n_footpaths,
+        }
+    }
 }
 
 /// One transit leg with reconstructed timing (route, trip, boarding

@@ -215,6 +215,187 @@ impl OvernightDays {
     }
 }
 
+/// `transfers.txt` row counts grouped by GTFS `transfer_type`. The
+/// adapter creates a footpath for every type *except* `Impossible`
+/// (type 3), which is the publisher explicitly forbidding the
+/// transfer; the [`impossible`](Self::impossible) field records that
+/// publisher intent so callers can see what was filtered.
+///
+/// [`impossible`]: TransfersByType::impossible
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TransfersByType {
+    /// `transfer_type = 0`: recommended interchange.
+    pub recommended: usize,
+    /// `transfer_type = 1`: timed transfer (departing trip waits for
+    /// the arriving one).
+    pub timed: usize,
+    /// `transfer_type = 2`: minimum-time transfer; `min_transfer_time`
+    /// is honoured.
+    pub min_time: usize,
+    /// `transfer_type = 3`: impossible / forbidden. Filtered out at
+    /// construction.
+    pub impossible: usize,
+    /// `transfer_type = 4`: stay-on-board (in-seat continuation).
+    pub stay_on_board: usize,
+    /// `transfer_type = 5`: in-seat transfer not allowed; the rider
+    /// must alight and re-board another vehicle.
+    pub must_alight: usize,
+}
+
+impl TransfersByType {
+    /// Total `transfers.txt` rows across every type (including
+    /// `Impossible`). Returns 0 when the feed has no `transfers.txt`.
+    pub fn total(&self) -> usize {
+        self.recommended
+            + self.timed
+            + self.min_time
+            + self.impossible
+            + self.stay_on_board
+            + self.must_alight
+    }
+
+    /// Rows that produced a footpath in the loaded timetable
+    /// (everything except `Impossible`). This is what the algorithm
+    /// actually walks over from `transfers.txt` alone, before any
+    /// [`GtfsTimetable::with_walking_footpaths`] augmentation.
+    pub fn loaded(&self) -> usize {
+        self.total() - self.impossible
+    }
+}
+
+/// Snapshot of a loaded GTFS feed's features. Returned by
+/// [`GtfsTimetable::features`] so callers can introspect what's in a
+/// feed at a glance, without reaching back to the source [`Gtfs`].
+///
+/// Fields fall into two groups:
+///
+/// 1. **Input-derived counts** (everything except the last three
+///    fields) are computed once at construction and immutable.
+/// 2. **Mutable state** ([`walking_footpaths_added`],
+///    [`footpaths_closed`], [`n_footpaths`]) reflects the timetable's
+///    *current* state and changes if you call
+///    [`GtfsTimetable::with_walking_footpaths`] or
+///    [`GtfsTimetable::assert_footpaths_closed`] after construction.
+///
+/// For an advisory list of vulture knobs that may be worth turning
+/// given a feed's shape, see [`FeedFeatures::suggestions`].
+///
+/// [`walking_footpaths_added`]: FeedFeatures::walking_footpaths_added
+/// [`footpaths_closed`]: FeedFeatures::footpaths_closed
+/// [`n_footpaths`]: FeedFeatures::n_footpaths
+#[derive(Debug, Clone, Default)]
+pub struct FeedFeatures {
+    /// Stops in the timetable's [`StopIdx`] domain (i.e. interned at
+    /// construction; equals `Gtfs.stops.len()` for well-formed feeds).
+    pub n_stops: usize,
+    /// Stops with both `latitude` and `longitude` populated. Only
+    /// these participate in coordinate-derived features (R-tree
+    /// walking footpaths, leg-shape rendering).
+    pub n_stops_with_coords: usize,
+    /// Stops with `location_type = 1` (parent stations). Queries
+    /// rooted at a parent station yield zero journeys; use
+    /// [`GtfsTimetable::station_stops`] to fan out to platforms.
+    pub n_parent_stations: usize,
+    /// Stops the publisher flagged `wheelchair_boarding = NotAvailable`.
+    /// Filtered by `Query::require_wheelchair_accessible(true)`.
+    pub n_inaccessible_stops: usize,
+
+    /// Routes in the timetable's [`RouteIdx`] domain. Note that
+    /// vulture splits a single GTFS `route_id` into multiple
+    /// [`RouteIdx`]s when its trips have different stop patterns or
+    /// overtake one another, so this can exceed `Gtfs.routes.len()`.
+    pub n_routes: usize,
+    /// Trips kept by the construction date filter (i.e. active on
+    /// the requested service date or any of its overnight days).
+    pub n_trips: usize,
+    /// Trips the publisher flagged `wheelchair_accessible = NotAvailable`.
+    pub n_inaccessible_trips: usize,
+    /// Trips whose `shape_id` is populated and resolves to a shape
+    /// in the source feed. Calling [`GtfsTimetable::shape_for_leg`]
+    /// for a leg of one of these trips returns a polyline.
+    pub n_trips_with_shapes: usize,
+
+    /// `transfers.txt` row counts by `transfer_type`. Computed before
+    /// vulture filters `Impossible` entries out of the footpath graph.
+    pub transfers_by_type: TransfersByType,
+
+    /// Whether [`GtfsTimetable::with_walking_footpaths`] has been
+    /// applied to this timetable (changes during the timetable's
+    /// lifetime).
+    pub walking_footpaths_added: bool,
+    /// Whether the footpath relation is currently marked transitively
+    /// closed (i.e. the runtime takes the single-pass `O(E)` walk
+    /// relaxation).
+    pub footpaths_closed: bool,
+    /// Total directed footpath edges in the relation as it stands
+    /// now, summed across stops.
+    pub n_footpaths: usize,
+}
+
+impl FeedFeatures {
+    /// Heuristic list of vulture knobs that may be worth turning given
+    /// this feed's shape. Strings are advisory one-line pointers (e.g.
+    /// "your `transfers.txt` is empty, consider calling X"), not
+    /// instructions; calling none of them still gives correct results.
+    /// Cheap (a handful of comparisons over the snapshot's fields).
+    ///
+    /// Returns an empty `Vec` when none of the heuristics fire – e.g.
+    /// a publisher-curated feed with no parent stations, no shapes,
+    /// and no wheelchair flags.
+    pub fn suggestions(&self) -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = Vec::new();
+
+        if !self.walking_footpaths_added
+            && self.transfers_by_type.loaded() == 0
+            && self.n_stops_with_coords > 0
+        {
+            out.push(
+                "transfers.txt is empty: call \
+                 GtfsTimetable::with_walking_footpaths(max_distance_m, walking_speed) \
+                 to add coordinate-derived walking edges between nearby stops.",
+            );
+        }
+
+        if !self.walking_footpaths_added
+            && self.transfers_by_type.loaded() > 0
+            && !self.footpaths_closed
+        {
+            out.push(
+                "transfers.txt is non-empty but the relation is not marked closed: \
+                 if your transfers.txt is publisher-curated and known to be \
+                 transitively closed, call GtfsTimetable::assert_footpaths_closed \
+                 for the single-pass O(E) footpath relaxation.",
+            );
+        }
+
+        if self.n_parent_stations > 0 {
+            out.push(
+                "feed has parent stations: queries rooted at a parent station \
+                 return zero journeys – expand via GtfsTimetable::station_stops(parent_id) \
+                 and pass the returned platforms as Query::from / Query::to endpoints.",
+            );
+        }
+
+        if self.n_trips_with_shapes > 0 {
+            out.push(
+                "feed has trip shapes: call GtfsTimetable::shape_for_leg(...) to get \
+                 a polyline along the actual route rather than a stop-to-stop \
+                 straight line.",
+            );
+        }
+
+        if self.n_inaccessible_trips + self.n_inaccessible_stops > 0 {
+            out.push(
+                "feed marks some trips or stops wheelchair-inaccessible: pass \
+                 Query::require_wheelchair_accessible(true) to filter them out \
+                 of the search.",
+            );
+        }
+
+        out
+    }
+}
+
 /// A [`Timetable`] implementation that wraps a parsed GTFS feed.
 ///
 /// Constructed via [`GtfsTimetable::new`], which validates the feed,
@@ -260,6 +441,10 @@ impl OvernightDays {
 /// - [`GtfsTimetable::routes_for_gtfs_id`] – enumerate the synthetic
 ///   [`RouteIdx`]s produced from a single GTFS `route_id` (one per
 ///   distinct, non-overtaking stop-pattern equivalence class).
+/// - [`GtfsTimetable::features`] – snapshot of the loaded feed's
+///   shape (counts, transfer-type breakdown, footpath state); paired
+///   with [`FeedFeatures::suggestions`] for an advisory list of
+///   vulture knobs worth turning given the snapshot.
 pub struct GtfsTimetable {
     // Forward tables: idx -> owned String (original GTFS IDs cloned at
     // construction so the timetable doesn't borrow from the source
@@ -318,6 +503,15 @@ pub struct GtfsTimetable {
     /// (each paired with a default zero walk time, ready to pass to
     /// `Query::from` / `Query::to` as a multi-source/multi-target query).
     station_children: HashMap<String, Vec<(StopIdx, Duration)>>,
+
+    // Feed-features bookkeeping, surfaced via [`GtfsTimetable::features`].
+    // Counts are computed once at construction; the
+    // `walking_footpaths_added` flag flips in [`with_walking_footpaths`].
+    n_stops_with_coords: usize,
+    n_parent_stations: usize,
+    n_trips_with_shapes: usize,
+    transfers_by_type: TransfersByType,
+    walking_footpaths_added: bool,
 }
 
 impl GtfsTimetable {
@@ -395,12 +589,20 @@ impl GtfsTimetable {
         let mut stop_ids: Vec<String> = Vec::with_capacity(gtfs.stops.len());
         let mut stop_by_id: HashMap<String, StopIdx> = HashMap::with_capacity(gtfs.stops.len());
         let mut inaccessible_stops: HashSet<StopIdx> = HashSet::new();
+        let mut n_stops_with_coords: usize = 0;
+        let mut n_parent_stations: usize = 0;
         for (stop_id, stop) in &gtfs.stops {
             let idx = StopIdx::new(stop_ids.len() as u32);
             stop_ids.push(stop_id.clone());
             stop_by_id.insert(stop_id.clone(), idx);
             if matches!(stop.wheelchair_boarding, Availability::NotAvailable) {
                 inaccessible_stops.insert(idx);
+            }
+            if stop.latitude.is_some() && stop.longitude.is_some() {
+                n_stops_with_coords += 1;
+            }
+            if matches!(stop.location_type, gtfs_structures::LocationType::StopArea) {
+                n_parent_stations += 1;
             }
         }
 
@@ -583,6 +785,7 @@ impl GtfsTimetable {
         let mut footpaths_for_stops: Vec<SmallVec<[StopIdx; TYPICAL_TRANSFERS_PER_STOP]>> =
             vec![SmallVec::new(); stop_ids.len()];
         let mut transfer_times: HashMap<(StopIdx, StopIdx), Duration> = HashMap::new();
+        let mut transfers_by_type = TransfersByType::default();
         for (stop_id, stop) in &gtfs.stops {
             if stop.transfers.is_empty() {
                 continue;
@@ -590,17 +793,29 @@ impl GtfsTimetable {
             let from_idx = *stop_by_id
                 .get(stop_id.as_str())
                 .expect("every stop_id was interned by the stops loop at the start of new()");
-            // Skip transfer_type=3 ("Impossible"); the publisher is
-            // explicitly forbidding the transfer (typically used for
-            // geographically close stops that aren't connected by
-            // walkable infrastructure, e.g. opposite sides of a
-            // motorway). Other types (Recommended, Timed, MinTime,
-            // StayOnBoard, MustReboard) all create a footpath.
-            let usable = stop
-                .transfers
-                .iter()
-                .filter(|t| t.transfer_type != gtfs_structures::TransferType::Impossible);
-            for t in usable {
+            for t in &stop.transfers {
+                match t.transfer_type {
+                    gtfs_structures::TransferType::Recommended => {
+                        transfers_by_type.recommended += 1;
+                    }
+                    gtfs_structures::TransferType::Timed => transfers_by_type.timed += 1,
+                    gtfs_structures::TransferType::MinTime => transfers_by_type.min_time += 1,
+                    gtfs_structures::TransferType::Impossible => {
+                        transfers_by_type.impossible += 1;
+                        // Skip type 3: the publisher is explicitly
+                        // forbidding the transfer (typically for
+                        // geographically close stops that aren't
+                        // connected by walkable infrastructure, e.g.
+                        // opposite sides of a motorway).
+                        continue;
+                    }
+                    gtfs_structures::TransferType::StayOnBoard => {
+                        transfers_by_type.stay_on_board += 1;
+                    }
+                    gtfs_structures::TransferType::MustAlight => {
+                        transfers_by_type.must_alight += 1;
+                    }
+                }
                 let Some(&to_idx) = stop_by_id.get(t.to_stop_id.as_str()) else {
                     continue;
                 };
@@ -626,6 +841,19 @@ impl GtfsTimetable {
             }
         }
 
+        // 6. Count how many of the kept trips have a populated shape that
+        //    actually resolves in `gtfs.shapes`. This is what
+        //    `shape_for_leg` will return polylines for.
+        let mut n_trips_with_shapes: usize = 0;
+        for trip_id in &trip_ids {
+            if let Some(trip) = gtfs.trips.get(trip_id)
+                && let Some(shape_id) = trip.shape_id.as_deref()
+                && gtfs.shapes.contains_key(shape_id)
+            {
+                n_trips_with_shapes += 1;
+            }
+        }
+
         Ok(Self {
             stop_ids,
             route_ids,
@@ -648,6 +876,11 @@ impl GtfsTimetable {
             no_drop_off,
             inaccessible_trips,
             inaccessible_stops,
+            n_stops_with_coords,
+            n_parent_stations,
+            n_trips_with_shapes,
+            transfers_by_type,
+            walking_footpaths_added: false,
         })
     }
 
@@ -794,6 +1027,7 @@ impl GtfsTimetable {
         // "max walking distance per leg" semantic – see the doc comment
         // above for why this is sound for R-tree-derived edges.
         self.transfers_closed = true;
+        self.walking_footpaths_added = true;
         self
     }
 
@@ -801,6 +1035,36 @@ impl GtfsTimetable {
     /// trips that survived calendar filtering at construction).
     pub fn n_trips(&self) -> usize {
         self.trip_ids.len()
+    }
+
+    /// Returns a [`FeedFeatures`] snapshot describing what's in this
+    /// timetable: stop / trip / route counts, `transfers.txt` shape,
+    /// shape-availability, and the current state of the footpath
+    /// graph. Cheap (linear in the footpath edge count to fold
+    /// `n_footpaths`; everything else is precomputed).
+    ///
+    /// See [`FeedFeatures::suggestions`] for an advisory list of
+    /// vulture knobs that may be worth turning given the snapshot.
+    pub fn features(&self) -> FeedFeatures {
+        let n_footpaths = self
+            .footpaths_for_stops
+            .iter()
+            .map(|v| v.len())
+            .sum::<usize>();
+        FeedFeatures {
+            n_stops: self.stop_ids.len(),
+            n_stops_with_coords: self.n_stops_with_coords,
+            n_parent_stations: self.n_parent_stations,
+            n_inaccessible_stops: self.inaccessible_stops.len(),
+            n_routes: self.route_ids.len(),
+            n_trips: self.trip_ids.len(),
+            n_inaccessible_trips: self.inaccessible_trips.len(),
+            n_trips_with_shapes: self.n_trips_with_shapes,
+            transfers_by_type: self.transfers_by_type,
+            walking_footpaths_added: self.walking_footpaths_added,
+            footpaths_closed: self.transfers_closed,
+            n_footpaths,
+        }
     }
 
     /// Returns the original GTFS `stop_id` for the given index.
@@ -1802,5 +2066,298 @@ mod tests {
             "M is within 400 m of both S and T, got {:?}",
             from_m,
         );
+    }
+
+    /// `features()` must report the input-derived counts (stops with
+    /// coords, parent stations, transfer-type breakdown, shaped trips)
+    /// and reflect the dynamic state correctly before and after
+    /// `with_walking_footpaths`.
+    #[test]
+    fn features_reports_input_counts_and_dynamic_state() {
+        use gtfs_structures::{LocationType, Route, Shape, Stop, StopTransfer, TransferType, Trip};
+        use std::sync::Arc;
+
+        let mut g = weekday_only_feed();
+
+        let stop_parent = Arc::new(Stop {
+            id: "P".into(),
+            location_type: LocationType::StopArea,
+            latitude: Some(0.0),
+            longitude: Some(0.0),
+            ..Default::default()
+        });
+        // Two boardable platforms with coordinates ~400 m apart;
+        // one is wheelchair-inaccessible, the other has no coords
+        // at all.
+        let stop_a = Arc::new(Stop {
+            id: "A".into(),
+            parent_station: Some("P".into()),
+            latitude: Some(0.0),
+            longitude: Some(0.0),
+            wheelchair_boarding: Availability::NotAvailable,
+            transfers: vec![
+                StopTransfer {
+                    to_stop_id: "B".into(),
+                    transfer_type: TransferType::Recommended,
+                    min_transfer_time: Some(60),
+                },
+                StopTransfer {
+                    to_stop_id: "C".into(),
+                    transfer_type: TransferType::Impossible,
+                    min_transfer_time: None,
+                },
+            ],
+            ..Default::default()
+        });
+        let stop_b = Arc::new(Stop {
+            id: "B".into(),
+            parent_station: Some("P".into()),
+            latitude: Some(400.0 / 111_320.0),
+            longitude: Some(0.0),
+            ..Default::default()
+        });
+        let stop_c = Arc::new(Stop {
+            id: "C".into(),
+            // intentionally no coords – exercises n_stops_with_coords.
+            ..Default::default()
+        });
+        g.stops.insert("P".into(), Arc::clone(&stop_parent));
+        g.stops.insert("A".into(), Arc::clone(&stop_a));
+        g.stops.insert("B".into(), Arc::clone(&stop_b));
+        g.stops.insert("C".into(), Arc::clone(&stop_c));
+
+        // Shape that the trip below references; counts toward
+        // `n_trips_with_shapes`.
+        g.shapes.insert(
+            "shape-1".into(),
+            vec![
+                Shape {
+                    id: "shape-1".into(),
+                    latitude: 0.0,
+                    longitude: 0.0,
+                    sequence: 0,
+                    dist_traveled: Some(0.0),
+                },
+                Shape {
+                    id: "shape-1".into(),
+                    latitude: 400.0 / 111_320.0,
+                    longitude: 0.0,
+                    sequence: 1,
+                    dist_traveled: Some(400.0),
+                },
+            ],
+        );
+
+        g.routes.insert(
+            "R".into(),
+            Route {
+                id: "R".into(),
+                ..Default::default()
+            },
+        );
+        // Trip on R with a shape; second trip without a shape and with
+        // wheelchair_accessible = NotAvailable to exercise inaccessible
+        // counts.
+        g.trips.insert(
+            "T1".into(),
+            Trip {
+                id: "T1".into(),
+                service_id: "weekday".into(),
+                route_id: "R".into(),
+                shape_id: Some("shape-1".into()),
+                stop_times: vec![
+                    StopTime {
+                        arrival_time: Some(6 * 3600),
+                        departure_time: Some(6 * 3600),
+                        stop: Arc::clone(&stop_a),
+                        ..Default::default()
+                    },
+                    StopTime {
+                        arrival_time: Some(6 * 3600 + 600),
+                        departure_time: Some(6 * 3600 + 600),
+                        stop: Arc::clone(&stop_b),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        );
+        g.trips.insert(
+            "T2".into(),
+            Trip {
+                id: "T2".into(),
+                service_id: "weekday".into(),
+                route_id: "R".into(),
+                wheelchair_accessible: Availability::NotAvailable,
+                stop_times: vec![
+                    StopTime {
+                        arrival_time: Some(7 * 3600),
+                        departure_time: Some(7 * 3600),
+                        stop: Arc::clone(&stop_a),
+                        ..Default::default()
+                    },
+                    StopTime {
+                        arrival_time: Some(7 * 3600 + 600),
+                        departure_time: Some(7 * 3600 + 600),
+                        stop: Arc::clone(&stop_b),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        );
+
+        let tt = GtfsTimetable::new(&g, ymd_jiff(2026, 5, 4)).unwrap();
+        let f = tt.features();
+
+        assert_eq!(f.n_stops, 4, "P, A, B, C");
+        assert_eq!(f.n_stops_with_coords, 3, "P, A, B have coords; C does not");
+        assert_eq!(f.n_parent_stations, 1, "P");
+        assert_eq!(f.n_inaccessible_stops, 1, "A");
+        assert_eq!(f.n_trips, 2);
+        assert_eq!(f.n_inaccessible_trips, 1);
+        assert_eq!(f.n_trips_with_shapes, 1);
+        assert_eq!(f.transfers_by_type.recommended, 1);
+        assert_eq!(f.transfers_by_type.impossible, 1);
+        assert_eq!(f.transfers_by_type.total(), 2);
+        assert_eq!(f.transfers_by_type.loaded(), 1);
+        assert!(!f.walking_footpaths_added);
+        assert!(!f.footpaths_closed);
+        // One footpath: the Recommended A→B; Impossible was filtered.
+        assert_eq!(f.n_footpaths, 1);
+
+        let tt = tt.with_walking_footpaths(&g, 500.0, 1.4);
+        let f = tt.features();
+        assert!(f.walking_footpaths_added);
+        assert!(f.footpaths_closed);
+        // After R-tree augmentation, A↔B is still a single edge in
+        // each direction (the publisher entry preempted the R-tree
+        // entry one way); P is also within 400 m of A and B so it
+        // gains edges. The exact count depends on which pairs the
+        // R-tree picks up, but it must strictly exceed the baseline.
+        assert!(
+            f.n_footpaths > 1,
+            "with_walking_footpaths should add edges, got {}",
+            f.n_footpaths,
+        );
+    }
+
+    fn contains_substr(needle: &str, haystack: &[&'static str]) -> bool {
+        haystack.iter().any(|s| s.contains(needle))
+    }
+
+    #[test]
+    fn suggestions_advise_walking_footpaths_when_transfers_empty() {
+        let f = FeedFeatures {
+            n_stops: 100,
+            n_stops_with_coords: 100,
+            ..Default::default()
+        };
+        let s = f.suggestions();
+        assert!(contains_substr("with_walking_footpaths", &s), "got {:?}", s);
+        assert!(
+            !contains_substr("assert_footpaths_closed", &s),
+            "got {:?}",
+            s
+        );
+    }
+
+    #[test]
+    fn suggestions_skip_walking_footpaths_when_no_coords_available() {
+        let f = FeedFeatures {
+            n_stops: 100,
+            n_stops_with_coords: 0,
+            ..Default::default()
+        };
+        let s = f.suggestions();
+        assert!(
+            !contains_substr("with_walking_footpaths", &s),
+            "got {:?}",
+            s,
+        );
+    }
+
+    #[test]
+    fn suggestions_advise_assert_closed_when_transfers_present_and_open() {
+        let f = FeedFeatures {
+            n_stops: 100,
+            transfers_by_type: TransfersByType {
+                recommended: 50,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let s = f.suggestions();
+        assert!(
+            contains_substr("assert_footpaths_closed", &s),
+            "got {:?}",
+            s
+        );
+    }
+
+    #[test]
+    fn suggestions_skip_assert_closed_when_already_closed_or_walking_added() {
+        let base = FeedFeatures {
+            n_stops: 100,
+            transfers_by_type: TransfersByType {
+                recommended: 50,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let s = FeedFeatures {
+            footpaths_closed: true,
+            ..base.clone()
+        }
+        .suggestions();
+        assert!(
+            !contains_substr("assert_footpaths_closed", &s),
+            "got {:?}",
+            s,
+        );
+        let s = FeedFeatures {
+            walking_footpaths_added: true,
+            ..base
+        }
+        .suggestions();
+        assert!(
+            !contains_substr("assert_footpaths_closed", &s),
+            "got {:?}",
+            s,
+        );
+    }
+
+    #[test]
+    fn suggestions_call_out_parent_stations_shapes_and_wheelchair_flags() {
+        let f = FeedFeatures {
+            n_stops: 100,
+            n_parent_stations: 3,
+            n_trips_with_shapes: 50,
+            n_inaccessible_trips: 1,
+            ..Default::default()
+        };
+        let s = f.suggestions();
+        assert!(contains_substr("station_stops", &s), "got {:?}", s);
+        assert!(contains_substr("shape_for_leg", &s), "got {:?}", s);
+        assert!(
+            contains_substr("require_wheelchair_accessible", &s),
+            "got {:?}",
+            s,
+        );
+    }
+
+    #[test]
+    fn suggestions_empty_when_feed_is_in_happy_state() {
+        let f = FeedFeatures {
+            n_stops: 100,
+            n_stops_with_coords: 100,
+            transfers_by_type: TransfersByType {
+                recommended: 50,
+                ..Default::default()
+            },
+            footpaths_closed: true,
+            ..Default::default()
+        };
+        assert!(f.suggestions().is_empty(), "got {:?}", f.suggestions());
     }
 }
