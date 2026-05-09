@@ -145,7 +145,7 @@ let results: Vec<_> = queries.par_iter().map(|q| {
 }).collect();
 ```
 
-The pool's `checkout()` returns an RAII guard that returns the cache on drop; same pool serves any number of threads with no per-thread bookkeeping.
+`pool.checkout()` returns a `PooledCache` handle that owns a cache for its scope; the cache goes back to the pool when the handle is dropped. The same pool serves any number of threads with no per-thread bookkeeping.
 
 ### Runnable examples
 
