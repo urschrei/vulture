@@ -59,42 +59,52 @@ pub(crate) enum Step {
 /// `BTreeMap` while FxHash wins across the board).
 pub(crate) type BoardingTree = FxHashMap<(K, StopIdx, SecondOfDay), Step>;
 
-/// Returns the minimum of `best_arrival[t].min_arrival() + w` across
-/// all `(t, w)` in `targets`, saturating on overflow. Returns
-/// `SecondOfDay::MAX` if every target is unreached.
+/// Builds the Pareto front of *effective* target labels: for each
+/// `(t, w)` in `targets`, every label in `best_arrival[t]` is extended
+/// by walking from `t` to `t` for duration `w` (the user's target
+/// walk-offset), and the results are merged into a single `LabelBag`.
+///
+/// For single-criterion `ArrivalTime` the resulting bag has exactly one
+/// entry whose arrival equals the previous scalar `pt_threshold` value.
+/// For multi-criterion labels the bag preserves Pareto-incomparable
+/// front entries so that the algorithm's pruning sites can reject only
+/// labels that are weakly dominated by *some* known better target label,
+/// not labels merely worse on a single criterion.
 pub(crate) fn best_to_any_target<L: Label>(
+    ctx: &L::Ctx,
     best_arrival: &[LabelBag<L>],
     targets: &[(StopIdx, Duration)],
-) -> SecondOfDay {
-    targets
-        .iter()
-        .map(|&(t, w)| best_arrival[t.idx()].min_arrival() + w)
-        .min()
-        .unwrap_or(SecondOfDay::MAX)
+) -> LabelBag<L> {
+    let mut bag = LabelBag::new();
+    for &(t, w) in targets {
+        for label in best_arrival[t.idx()].iter() {
+            let extended = label.extend_by_footpath(ctx, t, t, w);
+            bag.insert(extended);
+        }
+    }
+    bag
 }
 
-/// Tighten `pt_threshold` if `stop` is one of the query's targets and
-/// the inserted label improves on the current bound. The
-/// `is_dest` bitset short-circuits the common non-target path with a
-/// single bit-test; the linear scan over `targets` only runs when the
-/// bit is set, and queries typically have a handful of targets at most.
+/// Tighten the `pt_threshold` Pareto-front bag when `stop` is one of the
+/// query's targets. For each matching `(stop, w)` in `targets`, the new
+/// label is extended by the target walk-offset `w` via `extend_by_footpath`
+/// and inserted into the bag; `LabelBag::insert` handles Pareto pruning
+/// (drops dominated entries, keeps Pareto-incomparable ones).
 ///
-/// Only safe to call from the route-scan inner loop. The route-scan
-/// guard (`arr >= time_to_beat`) already drops alights that wouldn't
-/// improve the bag's arrival minimum, so inserts that reach this
-/// helper do strictly improve the target's bag arrival, making it
-/// sound to feed the new arrival back into the threshold for the
-/// rest of the same scan. Footpath relaxation does *not* hold this
-/// invariant: a Pareto-incomparable multi-criterion label can
-/// successfully insert at a target with arrival worse than the bag
-/// minimum (better in some other criterion). Calling
-/// `tighten_pt_threshold` there would tighten on the first target
-/// arrival the relax pass produces, then cause `insert_into_bag` to
-/// reject every later Pareto-incomparable insert at the same target
-/// (`arrival >= pt_threshold`), silently dropping multi-criterion
-/// front entries.
+/// The `is_dest` bitset short-circuits the common non-target path with a
+/// single bit-test; the linear scan over `targets` only runs when the bit
+/// is set, and queries typically have a handful of targets at most.
+///
+/// Safe to call from both route-scan and footpath-relax: with the bag-
+/// valued threshold, multi-criterion Pareto-incomparable inserts are
+/// preserved, so tightening from either pass cannot silently drop a
+/// front entry. (The scalar-threshold predecessor was unsafe to call
+/// from footpath relax for exactly that reason — the first target
+/// arrival the relax pass produced would tighten the scalar bound and
+/// reject every later Pareto-incomparable insert.)
 pub(crate) fn tighten_pt_threshold<L: Label>(
-    pt_threshold: &mut SecondOfDay,
+    ctx: &L::Ctx,
+    pt_threshold: &mut LabelBag<L>,
     stop: StopIdx,
     label: &L,
     is_dest: &FixedBitSet,
@@ -105,11 +115,8 @@ pub(crate) fn tighten_pt_threshold<L: Label>(
     }
     for &(t, w) in targets {
         if t == stop {
-            let candidate = label.arrival() + w;
-            if candidate < *pt_threshold {
-                *pt_threshold = candidate;
-            }
-            return;
+            let extended = label.extend_by_footpath(ctx, t, t, w);
+            pt_threshold.insert(extended);
         }
     }
 }

@@ -59,6 +59,18 @@ impl<L: Label> LabelBag<L> {
             .unwrap_or(SecondOfDay::MAX)
     }
 
+    /// Returns `true` if any item in the bag weakly dominates `candidate`.
+    /// Equivalent to "this candidate would be rejected by `insert` because
+    /// the bag already has something at least as good". Used by the
+    /// algorithm's pruning sites to skip exploring a label that is already
+    /// dominated by a known better one, avoiding the cost of `extend_*` /
+    /// boarding-tree insertion. For single-criterion `ArrivalTime` the bag
+    /// is size 1 and this reduces to one `<=` comparison; for multi-
+    /// criterion impls the comparison is Pareto-aware via `Label::dominates`.
+    pub(crate) fn dominates_label(&self, candidate: &L) -> bool {
+        self.items.iter().any(|item| item.dominates(candidate))
+    }
+
     pub(crate) fn clear(&mut self) {
         self.items.clear();
     }
@@ -74,17 +86,15 @@ impl<L: Label> Default for LabelBag<L> {
 /// boarding tree. Updates `best_arrival[stop]` and marks the stop
 /// in `out`. Returns `true` if any insertion happened.
 ///
-/// Labels with `arrival() >= pt_threshold` are rejected before the
-/// bag insert: such a label cannot lead to a Pareto-optimal journey
-/// at any target (its arrival is already worse than the best known
-/// effective arrival across the whole target set), so any boarding
-/// tree entry it would produce is a ghost step that reconstruction
-/// would later surface as a dominated journey. The route-scan inner
-/// loop applies the same guard (`arr >= time_to_beat`); without it
-/// here the footpath-relax path silently re-introduces dominated
-/// journeys whenever a multi-target query has one target reachable
-/// via a faster walk-only path than another target's trip-based
-/// arrival.
+/// Labels weakly dominated by the `pt_threshold` bag are rejected before
+/// the bag insert: such a label cannot lead to a Pareto-optimal journey
+/// at any target (a known better label already exists at some target),
+/// so any boarding-tree entry it would produce is a ghost step that
+/// reconstruction would later surface as a dominated journey. The route-
+/// scan inner loop applies the same Pareto-aware guard; without it here
+/// the footpath-relax path silently re-introduces dominated journeys
+/// whenever a multi-target query has one target reachable via a faster
+/// walk-only path than another target's trip-based arrival.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_into_bag<L: Label>(
     labels: &mut [Vec<LabelBag<L>>],
@@ -92,13 +102,13 @@ pub(crate) fn insert_into_bag<L: Label>(
     board_detail: &mut BoardingTree,
     out: &mut Vec<StopIdx>,
     ever_reached: &mut FixedBitSet,
-    pt_threshold: SecondOfDay,
+    pt_threshold: &LabelBag<L>,
     k: K,
     stop: StopIdx,
     label: L,
     step: Step,
 ) -> bool {
-    if label.arrival() >= pt_threshold {
+    if pt_threshold.dominates_label(&label) {
         return false;
     }
     let added = labels[k][stop.idx()].insert(label);

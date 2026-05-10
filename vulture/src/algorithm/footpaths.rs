@@ -36,7 +36,7 @@ pub(crate) fn relax_footpaths_round_closed<T: Timetable + ?Sized, L: Label>(
     best_arrival: &mut [LabelBag<L>],
     board_detail: &mut BoardingTree,
     sources: &FixedBitSet,
-    pt_threshold: SecondOfDay,
+    pt_threshold: &LabelBag<L>,
     out: &mut Vec<StopIdx>,
     ever_reached: &mut FixedBitSet,
 ) {
@@ -103,7 +103,7 @@ pub(crate) fn relax_footpaths_round<T: Timetable + ?Sized, L: Label>(
     best_arrival: &mut [LabelBag<L>],
     board_detail: &mut BoardingTree,
     sources: &FixedBitSet,
-    pt_threshold: SecondOfDay,
+    pt_threshold: &LabelBag<L>,
     out: &mut Vec<StopIdx>,
     heap: &mut BinaryHeap<Reverse<(SecondOfDay, u32)>>,
     ever_reached: &mut FixedBitSet,

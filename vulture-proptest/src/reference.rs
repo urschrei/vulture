@@ -317,12 +317,11 @@ pub fn reference_solve(
 /// bag pruning is component-wise on `(walk_time, trips)` at fixed
 /// `(stop, raw_arrival)`.
 ///
-/// Mirrors vulture's `pt_threshold` rule (`label_bag.rs::insert_into_bag`):
-/// labels with `raw_arrival >= pt_threshold` are dropped, where
-/// `pt_threshold` is the minimum effective arrival reachable at any
-/// target. The check is on raw arrival only, so a Pareto-incomparable
-/// multi-criterion label (lower walk_time, higher arrival) can be
-/// dropped — replicating the documented multi-criterion incompleteness.
+/// Pure brute force: no `pt_threshold` pruning is applied. Every reachable
+/// `(stop, raw_arrival, walk_time, trips)` tuple at a target stop becomes
+/// a candidate; the algorithm's `pt_threshold` bag is a pruning
+/// optimisation that does not change the final per-target Pareto front,
+/// so brute force can ignore it and Pareto-filter at output.
 ///
 /// Walk-only journeys (`k = 0`) are not emitted, matching RAPTOR's
 /// empty-plan filter.
@@ -423,47 +422,24 @@ pub fn reference_solve_arrival_and_walk(
         }
     }
 
-    // pt_threshold = min effective arrival across all reachable labels at any
-    // target (walk-only or trip-based). Mirrors vulture's tightening: the
-    // initial value is best across round-0; the final value after all rounds
-    // includes trip-based tightening. We compute it as the post-search global
-    // minimum across every (target, label) pair.
-    let mut pt_threshold: u32 = u32::from(u16::MAX);
-    for &(target_stop, target_walk) in targets {
-        for (&(s, t), bag) in &bags {
-            if s != target_stop {
-                continue;
-            }
-            if bag.is_empty() {
-                continue;
-            }
-            let eff = u32::from(t) + u32::from(target_walk);
-            if eff < pt_threshold {
-                pt_threshold = eff;
-            }
-        }
-    }
-    let pt_threshold = u16::try_from(pt_threshold).unwrap_or(u16::MAX);
-
-    // Per-target collection of trip-based labels. The algorithm extends the
-    // label by `target_walk` via `extend_by_footpath` before emitting
-    // (boarding.rs:230), which for `ArrivalAndWalk` adds `target_walk` to
-    // both arrival and walk_time. Drop any whose raw arrival is ≥
-    // pt_threshold (mirroring `insert_into_bag`'s check, on raw arrival
-    // before target-walk extension). k = 0 walk-only entries are not emitted.
+    // Per-target collection of every reachable label, including k = 0
+    // walk-only entries. The algorithm extends each label by `target_walk`
+    // via `extend_by_footpath` before emitting (boarding.rs:230), which
+    // for `ArrivalAndWalk` adds `target_walk` to both arrival and
+    // walk_time. k = 0 entries are kept in the Pareto comparison because
+    // they can weakly dominate trip-based candidates (the canonical case
+    // is origin == target with no movement: the seed `(arr=tau,
+    // walk_time=0)` Pareto-dominates any trip-based journey that ends
+    // back at the start). RAPTOR rejects such journeys; the reference
+    // mirrors by including walk-only labels in the dominance filter,
+    // then dropping k = 0 from the *output* (RAPTOR's empty-plan filter).
     let mut candidates: Vec<(u16, u16, u8)> = Vec::new();
     for &(target_stop, target_walk) in targets {
         for (&(s, t), bag) in &bags {
             if s != target_stop {
                 continue;
             }
-            if t >= pt_threshold {
-                continue;
-            }
             for &(w, k) in bag {
-                if k == 0 {
-                    continue;
-                }
                 let eff_arrival = t.saturating_add(target_walk);
                 let eff_walk_time = w.saturating_add(target_walk);
                 candidates.push((eff_arrival, eff_walk_time, k));
@@ -473,7 +449,8 @@ pub fn reference_solve_arrival_and_walk(
 
     // 3-D Pareto filter: keep `c` iff no other `c'` weakly dominates `c` on
     // every component AND strictly dominates on at least one. Equal triples
-    // collapse via `BTreeSet::insert`.
+    // collapse via `BTreeSet::insert`. After filtering, drop k = 0 from the
+    // output to match RAPTOR's empty-plan emission rule.
     let mut front: BTreeSet<(u16, u16, u8)> = BTreeSet::new();
     'outer: for &c in &candidates {
         for &other in &candidates {
@@ -483,6 +460,9 @@ pub fn reference_solve_arrival_and_walk(
             if other.0 <= c.0 && other.1 <= c.1 && other.2 <= c.2 {
                 continue 'outer;
             }
+        }
+        if c.2 == 0 {
+            continue;
         }
         front.insert(c);
     }

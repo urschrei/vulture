@@ -262,20 +262,7 @@ fn parallel_naive_matches_serial_rrap(tc: hegel::TestCase) {
 /// walking accumulates non-trivially) but neither fares nor accessibility
 /// flags, keeping the property focused on `ArrivalAndWalk`'s arithmetic
 /// and dominance behaviour.
-///
-/// **Currently `#[ignore]`d**: the algorithm has single-criterion-only
-/// pruning sites (`per_call.rs:194` route-scan check, `label_bag.rs:101`
-/// `insert_into_bag` pt_threshold check, scalar `pt_threshold` mechanism
-/// in `boarding.rs`) that reject Pareto-incomparable multi-criterion
-/// labels. The minimal counterexample is a parallel footpath and trip
-/// arriving at the same target stop at the same time but with different
-/// walk_time: the trip-based label is dropped by the route-scan check
-/// `arr >= best_to_pi.min_arrival()` even though it strictly dominates
-/// the walk-only label on walk_time. The reference solver in
-/// `reference.rs` is the infrastructure a follow-up fix can use to
-/// validate that the algorithm-level pruning is made Pareto-aware.
 #[hegel::test(crate::proptest_settings(), test_cases = 500)]
-#[ignore = "exposes per_call.rs:194 / label_bag.rs:101 multi-criterion pruning gap; tracked separately"]
 fn arrival_and_walk_matches_reference(tc: hegel::TestCase) {
     let spec = tc.draw(spec::network_spec(spec::layer2_bounds()));
     let timetable = spec::render(&spec);
