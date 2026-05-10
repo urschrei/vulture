@@ -22,6 +22,7 @@ Six `#[hegel::test]` properties live in [`src/lib.rs`](src/lib.rs):
 | `parallel_naive_matches_serial_rrap` | Serial rRAPTOR (`.run()`), `.run_par()`, and `.run_with_pool()` produce byte-identical Pareto profiles for the same range query. Catches both rRAPTOR-specialisation bugs and parallel-batch races. |
 | `range_query_matches_reference` | Range-query output equals an independent brute-force reference: per-`τ` solve plus the same 3-D Pareto filter (`later depart, fewer transfers, earlier arrival`) vulture's `filter_range_pareto_front` uses. |
 | `fare_label_matches_per_leg_sum` | The `ArrivalAndFare` label's accumulated `fare` equals the manual per-leg sum of route fares for every returned journey. Validates that the `Label::Ctx`-threaded `extend_by_trip` keeps fare state in sync with the plan. |
+| `arrival_and_walk_matches_reference` *(ignored)* | The `ArrivalAndWalk` Pareto front of `(arrival, walk_time, trip_count)` equals a brute-force reference's. Currently `#[ignore]`d: surfaces a real algorithm-level pruning gap where single-criterion-only checks in the route scan and `insert_into_bag` drop Pareto-incomparable multi-criterion labels. The reference solver is the validation infrastructure for the upcoming fix. |
 
 ## Generator layers
 

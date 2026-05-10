@@ -305,6 +305,190 @@ pub fn reference_solve(
     pareto
 }
 
+/// Brute-force reference for the `ArrivalAndWalk` two-criterion label.
+/// Returns the Pareto front of `(effective_arrival, walk_time, trip_count)`
+/// reachable from any origin to any target, departing at `tau`, capped at
+/// `max_trips`.
+///
+/// State space is `(stop, raw_arrival)` keyed Pareto bags of
+/// `(walk_time, trips)`. Walk edges add `walk_dur` to both `raw_arrival`
+/// and `walk_time`; ride edges advance `raw_arrival` to the trip's
+/// alighting time and leave `walk_time` unchanged. Pareto dominance for
+/// bag pruning is component-wise on `(walk_time, trips)` at fixed
+/// `(stop, raw_arrival)`.
+///
+/// Mirrors vulture's `pt_threshold` rule (`label_bag.rs::insert_into_bag`):
+/// labels with `raw_arrival >= pt_threshold` are dropped, where
+/// `pt_threshold` is the minimum effective arrival reachable at any
+/// target. The check is on raw arrival only, so a Pareto-incomparable
+/// multi-criterion label (lower walk_time, higher arrival) can be
+/// dropped — replicating the documented multi-criterion incompleteness.
+///
+/// Walk-only journeys (`k = 0`) are not emitted, matching RAPTOR's
+/// empty-plan filter.
+pub fn reference_solve_arrival_and_walk(
+    spec: &NetworkSpec,
+    origins: &[(u8, u16)],
+    targets: &[(u8, u16)],
+    tau: u16,
+    max_trips: u8,
+    require_wheelchair_accessible: bool,
+) -> BTreeSet<(u16, u16, u8)> {
+    let nominal_start = origins.first().map(|&(s, _)| s).unwrap_or(0);
+    let prep = Prep::build(spec, nominal_start, tau);
+    let inaccessible_stops = &spec.inaccessible_stops;
+
+    // Per-(stop, raw_arrival) Pareto bag of (walk_time, trips). An insert
+    // succeeds when the new pair is not weakly dominated; previously-bagged
+    // pairs weakly dominated by the new one are evicted.
+    let mut bags: BTreeMap<(u8, u16), Vec<(u16, u8)>> = BTreeMap::new();
+
+    fn try_insert(bag: &mut Vec<(u16, u8)>, new: (u16, u8)) -> bool {
+        for &existing in bag.iter() {
+            if existing.0 <= new.0 && existing.1 <= new.1 {
+                return false;
+            }
+        }
+        bag.retain(|&existing| !(new.0 <= existing.0 && new.1 <= existing.1));
+        bag.push(new);
+        true
+    }
+
+    let mut queue: Vec<(u8, u16, u16, u8)> = Vec::new();
+    for &(origin, walk) in origins {
+        let start_t = tau.saturating_add(walk);
+        let bag = bags.entry((origin, start_t)).or_default();
+        if try_insert(bag, (0, 0)) {
+            queue.push((origin, start_t, 0, 0));
+        }
+    }
+
+    while let Some((stop, t, w, k)) = queue.pop() {
+        // Validate label is still present in its bag (may have been evicted
+        // by a later dominating insert).
+        let still_present = bags
+            .get(&(stop, t))
+            .map(|b| b.contains(&(w, k)))
+            .unwrap_or(false);
+        if !still_present {
+            continue;
+        }
+
+        // Walk edges (transitively-closed footpath matrix).
+        for to in 0..prep.n_stops {
+            if to == stop {
+                continue;
+            }
+            if let Some(walk_dur) = prep.footpaths[stop as usize][to as usize]
+                && let Some(new_t) = t.checked_add(walk_dur)
+            {
+                let new_w = w.saturating_add(walk_dur);
+                let bag = bags.entry((to, new_t)).or_default();
+                if try_insert(bag, (new_w, k)) {
+                    queue.push((to, new_t, new_w, k));
+                }
+            }
+        }
+
+        // Ride edges: atomic board+ride-segment, +1 trip.
+        if k < max_trips {
+            for (trip_idx, sched) in prep.trips.iter().enumerate() {
+                if require_wheelchair_accessible && !prep.trip_wheelchair[trip_idx] {
+                    continue;
+                }
+                for i in 0..sched.len() {
+                    let (board_stop, _, board_dep, no_pickup, _) = sched[i];
+                    if board_stop != stop || board_dep < t {
+                        continue;
+                    }
+                    if no_pickup {
+                        continue;
+                    }
+                    for &(alight_stop, alight_arr, _, _, no_drop_off) in &sched[i + 1..] {
+                        if no_drop_off {
+                            continue;
+                        }
+                        if require_wheelchair_accessible
+                            && inaccessible_stops.contains(&alight_stop)
+                        {
+                            continue;
+                        }
+                        let bag = bags.entry((alight_stop, alight_arr)).or_default();
+                        if try_insert(bag, (w, k + 1)) {
+                            queue.push((alight_stop, alight_arr, w, k + 1));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // pt_threshold = min effective arrival across all reachable labels at any
+    // target (walk-only or trip-based). Mirrors vulture's tightening: the
+    // initial value is best across round-0; the final value after all rounds
+    // includes trip-based tightening. We compute it as the post-search global
+    // minimum across every (target, label) pair.
+    let mut pt_threshold: u32 = u32::from(u16::MAX);
+    for &(target_stop, target_walk) in targets {
+        for (&(s, t), bag) in &bags {
+            if s != target_stop {
+                continue;
+            }
+            if bag.is_empty() {
+                continue;
+            }
+            let eff = u32::from(t) + u32::from(target_walk);
+            if eff < pt_threshold {
+                pt_threshold = eff;
+            }
+        }
+    }
+    let pt_threshold = u16::try_from(pt_threshold).unwrap_or(u16::MAX);
+
+    // Per-target collection of trip-based labels. The algorithm extends the
+    // label by `target_walk` via `extend_by_footpath` before emitting
+    // (boarding.rs:230), which for `ArrivalAndWalk` adds `target_walk` to
+    // both arrival and walk_time. Drop any whose raw arrival is ≥
+    // pt_threshold (mirroring `insert_into_bag`'s check, on raw arrival
+    // before target-walk extension). k = 0 walk-only entries are not emitted.
+    let mut candidates: Vec<(u16, u16, u8)> = Vec::new();
+    for &(target_stop, target_walk) in targets {
+        for (&(s, t), bag) in &bags {
+            if s != target_stop {
+                continue;
+            }
+            if t >= pt_threshold {
+                continue;
+            }
+            for &(w, k) in bag {
+                if k == 0 {
+                    continue;
+                }
+                let eff_arrival = t.saturating_add(target_walk);
+                let eff_walk_time = w.saturating_add(target_walk);
+                candidates.push((eff_arrival, eff_walk_time, k));
+            }
+        }
+    }
+
+    // 3-D Pareto filter: keep `c` iff no other `c'` weakly dominates `c` on
+    // every component AND strictly dominates on at least one. Equal triples
+    // collapse via `BTreeSet::insert`.
+    let mut front: BTreeSet<(u16, u16, u8)> = BTreeSet::new();
+    'outer: for &c in &candidates {
+        for &other in &candidates {
+            if other == c {
+                continue;
+            }
+            if other.0 <= c.0 && other.1 <= c.1 && other.2 <= c.2 {
+                continue 'outer;
+            }
+        }
+        front.insert(c);
+    }
+    front
+}
+
 /// Range-query reference: runs `reference_solve` once per departure
 /// and applies the same 3-D Pareto filter vulture's
 /// `filter_range_pareto_front` uses — drop any `(depart, arrival, k)`
