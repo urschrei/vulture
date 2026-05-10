@@ -405,6 +405,10 @@ pub struct LayerBounds {
     /// accessibility and pickup/drop-off flags. Layer 1 + 2 keep this off
     /// to isolate the core algorithm; only layer 3 exercises the gating.
     pub accessibility_flags: bool,
+    /// Inclusive upper bound on the drawn `max_transfers`. Higher caps
+    /// admit deeper Pareto fronts at the cost of more reference-solver
+    /// work per case.
+    pub max_transfers_max: u8,
 }
 
 pub fn layer1_bounds() -> LayerBounds {
@@ -418,6 +422,7 @@ pub fn layer1_bounds() -> LayerBounds {
         allow_footpaths: false,
         allow_loops: false,
         accessibility_flags: false,
+        max_transfers_max: 5,
     }
 }
 
@@ -432,6 +437,7 @@ pub fn layer2_bounds() -> LayerBounds {
         allow_footpaths: true,
         allow_loops: false,
         accessibility_flags: false,
+        max_transfers_max: 5,
     }
 }
 
@@ -439,13 +445,14 @@ pub fn layer3_bounds() -> LayerBounds {
     LayerBounds {
         n_stops_min: 2,
         n_stops_max: 6,
-        routes_max: 4,
-        trips_max: 3,
-        footpaths_max: 6,
+        routes_max: 8,
+        trips_max: 4,
+        footpaths_max: 8,
         stop_seq_max: 4,
         allow_footpaths: true,
         allow_loops: true,
         accessibility_flags: true,
+        max_transfers_max: 7,
     }
 }
 
@@ -651,7 +658,11 @@ pub fn network_spec(tc: hegel::TestCase, bounds: LayerBounds) -> NetworkSpec {
         targets.push((s, w));
     }
     let tau = tc.draw(generators::integers::<u16>().min_value(0).max_value(500));
-    let max_transfers = tc.draw(generators::integers::<u8>().min_value(1).max_value(5));
+    let max_transfers = tc.draw(
+        generators::integers::<u8>()
+            .min_value(1)
+            .max_value(bounds.max_transfers_max),
+    );
 
     // Layer-3 only: a sparse subset of stops marked wheelchair-inaccessible,
     // and a 50/50 toss for whether the query opts into the filter. Lower

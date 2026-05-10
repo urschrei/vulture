@@ -28,16 +28,22 @@ Six `#[hegel::test]` properties live in [`src/lib.rs`](src/lib.rs):
 Specs are drawn at one of three difficulty layers, each tuning what
 the random generator can sample:
 
-| Layer | Stops | Routes | Trips/route | Footpaths | Extras |
-|-------|-------|--------|-------------|-----------|--------|
-| 1     | 2..=4 | 1..=2  | 1..=2       | 0         | – |
-| 2     | 2..=5 | 1..=3  | 1..=2       | 1..=4     | – |
-| 3     | 2..=6 | 1..=4  | 1..=3       | 0..=6     | per-route fares (0..=200), accessibility flags |
+| Layer | Stops | Routes | Trips/route | Footpaths | `max_transfers` | Extras |
+|-------|-------|--------|-------------|-----------|-----------------|--------|
+| 1     | 2..=4 | 1..=2  | 1..=2       | 0         | 1..=5           | – |
+| 2     | 2..=5 | 1..=3  | 1..=2       | 1..=4     | 1..=5           | – |
+| 3     | 2..=6 | 1..=8  | 1..=4       | 0..=8     | 1..=7           | per-route fares (0..=200), accessibility flags, loop routes |
 
 Multi-source / multi-target queries (1–3 origins and 1–3 targets,
 each with an optional walk offset 0..=20 s) are drawn at every
 layer; the brute-force reference solver mirrors by seeding Dijkstra
 from every origin and applying the Pareto filter across every target.
+
+Layer 3 also allows loop routes: a single route's `stop_sequence`
+may revisit the same stop. The reference solver iterates by position
+within the trip's schedule rather than by stop id, so the position-
+aware `Timetable` accessors (`stop_at`, `get_arrival_time(trip, pos)`)
+are exercised against ground truth.
 
 ## Conventions
 
