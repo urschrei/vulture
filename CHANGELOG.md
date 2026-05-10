@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Multi-criterion: Pareto-aware `pt_threshold`
+
+The algorithm's `pt_threshold` mechanism was previously a scalar `SecondOfDay` tracking the best effective arrival at any target. Three pruning sites checked candidate labels against it on arrival alone: the route-scan inner loop (`per_call.rs`), `insert_into_bag` (`label_bag.rs`), and `tighten_pt_threshold` (`boarding.rs`). For single-criterion `ArrivalTime` the checks were correctness-equivalent to Pareto dominance; for multi-criterion labels (`ArrivalAndWalk`, `ArrivalAndFare`, custom impls) they could reject labels that were Pareto-incomparable on the second criterion, dropping front entries the algorithm should have surfaced.
+
+`pt_threshold` is now `LabelBag<L>`: a Pareto front of effective target labels rather than a scalar arrival. `LabelBag` gains a `dominates_label(&L) -> bool` method that returns true when any bag entry weakly dominates the candidate. All three pruning sites use the new Pareto-aware check. The route-scan inner loop now computes `new_label` via `extend_by_trip` *before* the dominance check, rather than gating on raw arrival; for `ArrivalTime` that extra call is a one-field copy, so single-criterion perf is unchanged (the perf-smoke bench shows no change across the three Delhi queries).
+
+The output filter in `run_per_call_query` now also filters trip-based journeys against walk-only comparator labels (`labels[0][target]` extended by `target_walk`). This closes a residual gap where a multi-criterion label survives the bag-valued threshold check on its raw form but becomes Pareto-dominated by a walk-only path at another target once extended by `target_walk` at emission. RAPTOR's empty-plan filter is unchanged — walk-only journeys are still not emitted; they only participate in dominance.
+
+The `arrival_and_walk_matches_reference` property in `vulture-proptest` is now active and passing on 500 cases at layer 2.
+
+**Behaviour change for callers.** Multi-criterion queries (`query_with_label::<ArrivalAndWalk>()`, `query_with_label::<ArrivalAndFare>()`, custom `Label` impls) now return strictly more Pareto-non-dominated journeys than before, and no longer return trip-based journeys that are Pareto-dominated by walk-only paths. Single-criterion `ArrivalTime` queries are unchanged.
+
+**Alternative considered.** A `const SINGLE_CRITERION: bool` associated constant on the `Label` trait, with the pruning sites branching on it: fast scalar path for `ArrivalTime`, Pareto-aware path for everything else. Discarded because the bag-valued threshold is cleaner (single uniform code path, no dead-code branches) and the perf cost for `ArrivalTime` is bounded by one extra one-field-copy call per rejected route-scan iteration — empirically zero in the smoke bench.
+
 ## 0.23.0
 
 ### Perf: boarding tree `BTreeMap` → `FxHashMap`
