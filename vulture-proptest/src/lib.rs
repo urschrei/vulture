@@ -19,6 +19,7 @@ pub mod spec;
 use std::collections::BTreeSet;
 
 use vulture::Journey;
+use vulture::labels::ArrivalAndWalk;
 
 /// Project the algorithm's `Vec<Journey>` to a Pareto front of
 /// `(arrival, trip_count)`, sorted by trip count ascending, keeping only
@@ -48,6 +49,36 @@ pub fn raptor_front(journeys: &[Journey]) -> BTreeSet<(u16, u8)> {
         }
     }
     out
+}
+
+/// Project an `ArrivalAndWalk` journey list to its 3-D Pareto front of
+/// `(effective_arrival, effective_walk_time, trip_count)`. The algorithm
+/// emits one entry per `(round, target, bag-label)` triple, unfiltered;
+/// this helper applies the strict Pareto filter the harness uses to
+/// compare against the reference.
+pub fn arrival_and_walk_front(journeys: &[Journey<ArrivalAndWalk>]) -> BTreeSet<(u16, u16, u8)> {
+    let triples: Vec<(u16, u16, u8)> = journeys
+        .iter()
+        .map(|j| {
+            let arr = u16::try_from(j.label.arrival.0).expect("arrival fits u16 in proptest");
+            let walk = u16::try_from(j.label.walk_time.0).expect("walk_time fits u16 in proptest");
+            let k = u8::try_from(j.plan.len()).expect("plan length fits u8 in proptest");
+            (arr, walk, k)
+        })
+        .collect();
+    let mut front = BTreeSet::new();
+    'outer: for &c in &triples {
+        for &other in &triples {
+            if other == c {
+                continue;
+            }
+            if other.0 <= c.0 && other.1 <= c.1 && other.2 <= c.2 {
+                continue 'outer;
+            }
+        }
+        front.insert(c);
+    }
+    front
 }
 
 #[cfg(test)]
@@ -222,6 +253,71 @@ fn parallel_naive_matches_serial_rrap(tc: hegel::TestCase) {
         assert_eq!(s.journey.plan, p.journey.plan);
         assert_eq!(s.journey.plan, pool_entry.journey.plan);
     }
+}
+
+/// Property check for the [`ArrivalAndWalk`] label: vulture's
+/// `query_with_label::<ArrivalAndWalk>()` Pareto front of
+/// `(arrival, walk_time, trip_count)` must equal the brute-force
+/// reference's. Stays on `layer2_bounds`: layer 2 has footpaths (so
+/// walking accumulates non-trivially) but neither fares nor accessibility
+/// flags, keeping the property focused on `ArrivalAndWalk`'s arithmetic
+/// and dominance behaviour.
+///
+/// **Currently `#[ignore]`d**: the algorithm has single-criterion-only
+/// pruning sites (`per_call.rs:194` route-scan check, `label_bag.rs:101`
+/// `insert_into_bag` pt_threshold check, scalar `pt_threshold` mechanism
+/// in `boarding.rs`) that reject Pareto-incomparable multi-criterion
+/// labels. The minimal counterexample is a parallel footpath and trip
+/// arriving at the same target stop at the same time but with different
+/// walk_time: the trip-based label is dropped by the route-scan check
+/// `arr >= best_to_pi.min_arrival()` even though it strictly dominates
+/// the walk-only label on walk_time. The reference solver in
+/// `reference.rs` is the infrastructure a follow-up fix can use to
+/// validate that the algorithm-level pruning is made Pareto-aware.
+#[hegel::test(crate::proptest_settings(), test_cases = 500)]
+#[ignore = "exposes per_call.rs:194 / label_bag.rs:101 multi-criterion pruning gap; tracked separately"]
+fn arrival_and_walk_matches_reference(tc: hegel::TestCase) {
+    let spec = tc.draw(spec::network_spec(spec::layer2_bounds()));
+    let timetable = spec::render(&spec);
+
+    let origins: Vec<(vulture::StopIdx, Duration)> = spec
+        .query
+        .origins
+        .iter()
+        .map(|&(s, w)| (timetable.stop_idx_of(&s), Duration(u32::from(w))))
+        .collect();
+    let targets: Vec<(vulture::StopIdx, Duration)> = spec
+        .query
+        .targets
+        .iter()
+        .map(|&(s, w)| (timetable.stop_idx_of(&s), Duration(u32::from(w))))
+        .collect();
+
+    let ours: Vec<Journey<ArrivalAndWalk>> = timetable
+        .query_with_label::<ArrivalAndWalk>()
+        .from(origins.as_slice())
+        .to(targets.as_slice())
+        .max_transfers(spec.query.max_transfers as usize as u8)
+        .depart_at(SecondOfDay(spec.query.tau as u32))
+        .run();
+
+    let our_front = arrival_and_walk_front(&ours);
+    let theirs = reference::reference_solve_arrival_and_walk(
+        &spec,
+        &spec.query.origins,
+        &spec.query.targets,
+        spec.query.tau,
+        spec.query.max_transfers,
+        spec.query.require_wheelchair_accessible,
+    );
+
+    if our_front != theirs {
+        tc.note(&format!("spec: {:#?}", spec));
+        tc.note(&format!("raptor:     {:?}", ours));
+        tc.note(&format!("ours_front: {:?}", our_front));
+        tc.note(&format!("theirs:     {:?}", theirs));
+    }
+    assert_eq!(our_front, theirs);
 }
 
 /// Property check for the [`ArrivalAndFare`] label: every journey
