@@ -202,6 +202,18 @@ Single-query latency, warm `RaptorCache`, M-series Apple Silicon, single thread.
 
 For range-query latencies (serial rRAPTOR vs parallel naïve batch), see the [bench source](vulture/benches/gtfs.rs) and the linked benchmark page. For a head-to-head against an independent RAPTOR implementation (the TypeScript [`raptor-journey-planner`](https://github.com/planarnetwork/raptor)) on the same four feeds – including the correctness diff and a diagnosed timezone bug in the upstream library – see [`docs/cross-impl-comparison.md`](docs/cross-impl-comparison.md).
 
+### Consumer build profile
+
+The numbers above are measured with `lto = true` and `codegen-units = 1` in this workspace's `[profile.release]`. Cargo does not propagate workspace profile settings to downstream crates, so a vanilla `cargo add vulture` build inherits Cargo's defaults (`lto = false`, `codegen-units = 16`); only `opt-level = 3` is shared by default. Consumers that want to match the numbers above should set the same in their own `Cargo.toml`:
+
+```toml
+[profile.release]
+lto = true
+codegen-units = 1
+```
+
+Cross-crate inlining (`lto = true`) is the larger of the two effects; `codegen-units = 1` makes the inliner's job easier and trims a few more percent.
+
 ## Soundness
 
 For an issue-by-issue walk through the algorithmic correctness of the implementation against the paper – including the historical record of bugs found and fixed – see [`docs/soundness.md`](docs/soundness.md). The [`vulture-proptest`](vulture-proptest/) harness runs the algorithm against a brute-force reference solver on every test invocation as live validation.

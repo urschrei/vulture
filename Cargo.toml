@@ -5,17 +5,26 @@ resolver = "3"
 [profile.dev]
 debug = "full"
 
-# Native release: standard runtime optimisation for binaries,
-# examples, benches, and downstream consumers pulling `vulture` in
-# as a dependency. `opt-level = "z"` here used to apply to every
-# native release build for the sake of the vulture-wasm blob; that
-# was a 70-80 % native-query regression for callers who never see
-# the wasm. The wasm size budget is now served by wasm-opt -Oz on
-# the wasm-pack output (see `vulture-wasm/Cargo.toml`).
+# Native release: standard runtime optimisation for in-workspace
+# builds (binaries, examples, benches, the cross-impl harness).
+# Crates.io consumers get their own `[profile.release]`; Cargo
+# does not propagate workspace profile settings to downstream
+# dependents, so the only setting they inherit by default is
+# Cargo's own `opt-level = 3`. See the README `## Perf` section
+# for the consumer profile we recommend if callers want to match
+# the numbers quoted there.
 #
-# `codegen-units = 1` and `lto = true` are kept: they shrink both
-# native binary size and wasm output size, and both feeds gain from
-# the cross-crate inlining LTO permits at this codegen-units count.
+# History: `opt-level = "z"` here used to apply to every native
+# release build for the sake of the vulture-wasm blob; that was a
+# 70-80 % regression on this workspace's native query benchmarks
+# (vulture-wasm itself never minded). The wasm size budget is now
+# served by wasm-opt -Oz on the wasm-pack output (see
+# `vulture-wasm/Cargo.toml`).
+#
+# `codegen-units = 1` and `lto = true` are kept: they shrink
+# native binary size and wasm output size, and both feeds gain
+# from the cross-crate inlining LTO permits at this codegen-units
+# count. In-workspace builds only.
 [profile.release]
 opt-level = 3
 lto = true
