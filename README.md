@@ -206,7 +206,9 @@ For range-query latencies (serial rRAPTOR vs parallel naïve batch), see the [be
 
 For an issue-by-issue walk through the algorithmic correctness of the implementation against the paper – including the historical record of bugs found and fixed – see [`docs/soundness.md`](docs/soundness.md). The [`vulture-proptest`](vulture-proptest/) harness runs the algorithm against a brute-force reference solver on every test invocation as live validation.
 
-## How Vulture is tested
+## Testing
+
+### Correctness
 
 Three overlapping layers, all run by `cargo nextest r` on every PR:
 
@@ -224,6 +226,22 @@ The proptest harness ships three generator layers – Layer 1 (1–2 routes, 2�
 | `fare_label_matches_per_leg_sum` | The `ArrivalAndFare` label's accumulated fare equals the per-leg sum of fares on every returned journey. |
 
 Hegel persists shrunk failing seeds to `.hegel/` so failures are deterministically reproducible. See [`vulture-proptest/README.md`](vulture-proptest/README.md) for the layer/issue map and instructions for adding a new layer or property.
+
+### Perf regressions
+
+The full criterion suite (`cargo bench --features gtfs-bench`) takes around five minutes; running it on every change is friction enough that perf regressions slip through. The May 2026 `opt-level = "z"` regression (changelog: "Perf: native release back to opt-level = 3") was a 70-80 % slowdown on real-feed queries that lived on `main` for several commits before it was caught.
+
+A smoke wrapper exists for the case where you want a quick "did I break the hot path" check before finalising a feature:
+
+```
+scripts/perf-smoke.sh
+```
+
+It runs the Delhi `gtfs_query` group from [`vulture/benches/gtfs.rs`](vulture/benches/gtfs.rs) in criterion `--quick` mode against the last saved baseline in `target/criterion/`. Wall time is ~2 s with no source change, ~24 s after a source edit (the release profile's `lto = true` plus `codegen-units = 1` link cost dominates re-link). Criterion prints "Performance has regressed." when the median moves past noise; on the missed-regression case above it would have flagged `transfer_2trip` immediately.
+
+The first run on a fresh checkout has no prior baseline; run it twice to start the comparison stream, or pass `--save-baseline <name>` through to criterion (extra arguments are forwarded). Skip only if the change cannot affect runtime (docs, comments, CI config). The full criterion suite remains the right thing to run before tagging a release.
+
+When the smoke check flags a regression, [`vulture/examples/profile-delhi.rs`](vulture/examples/profile-delhi.rs) is the next step down: a tight loop over the same three Delhi queries with no criterion-harness overhead, sized for `samply` / `cargo-flamegraph`. Build with `cargo build --profile profiling --example profile-delhi` (the workspace `[profile.profiling]` block keeps release codegen but adds DWARF + a packed `.dSYM`), then `samply record -- target/profiling/examples/profile-delhi`.
 
 ## Cargo features
 
