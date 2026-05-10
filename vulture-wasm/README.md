@@ -1,10 +1,10 @@
 # vulture-wasm
 
-WebAssembly bindings for [vulture](https://github.com/urschrei/vulture) – a Rust implementation of RAPTOR public-transit routing – exposed as a single browser-friendly ES module via [wasm-bindgen](https://rustwasm.github.io/wasm-bindgen/) and [wasm-pack](https://rustwasm.github.io/wasm-pack/).
+WebAssembly bindings for [vulture](https://github.com/urschrei/vulture) – a Rust implementation of [RAPTOR](https://www.microsoft.com/en-us/research/publication/round-based-public-transit-routing/) (Delling, Pajor, Werneck) public-transit routing – exposed as a single browser-friendly ES module via [wasm-bindgen](https://rustwasm.github.io/wasm-bindgen/) and [wasm-pack](https://rustwasm.github.io/wasm-pack/).
 
 The JS side fetches a GTFS zip with `fetch()`, hands the bytes to `new VultureTimetable(zipBytes, "YYYY-MM-DD")`, and runs queries against it. There is no HTTP code inside the wasm blob.
 
-The wasm bundle is currently ~700 KB raw, ~275 KB gzipped.
+The wasm bundle is currently ~700 KB raw, ~290 KB gzipped.
 
 ## Install
 
@@ -52,6 +52,8 @@ const tt = new VultureTimetable(
 - `tt.stationStops(parentId)` — given a parent station's GTFS id, returns a `Uint32Array` of the platform stop indices that hang off it. Pass the result as `originStops` / `targetStops` to query against every platform of a station; queries rooted at a `location_type = 1` stop return zero journeys without this expansion, because in GTFS vehicles only board at platform-level stops.
 - `tt.withWalkingFootpaths(maxDistMeters, walkSpeedMetersPerSec)` — replace the footpath set with one derived from stop coordinates.
 - `tt.resetFootpaths()` — restore the original `transfers.txt` set.
+- `tt.features()` — snapshot of the loaded feed as a JS object with camelCase fields: stop / route / trip counts, breakdown of `transfers.txt` rows by GTFS `transfer_type`, parent-station and shaped-trip counts, wheelchair-flag counts, and the current state of the footpath graph (`walkingFootpathsAdded`, `footpathsClosed`, `nFootpaths`). Counts are computed once at construction; footpath fields update as you mutate the timetable.
+- `tt.suggestions()` — JS array of advisory strings derived from the same snapshot, e.g. `"transfers.txt is empty: call withWalkingFootpaths(...)"`. Heuristic, not instructions; an empty array means the feed is in a happy-path state.
 
 Free functions:
 
@@ -61,6 +63,17 @@ Free functions:
 Each leg in `journey.legs` is `{board_stop, alight_stop, route, trip, route_id, depart, arrive, shape}`. `shape` is a `[lat, lon][]` polyline for that leg's segment of the trip's `shapes.txt` geometry, or `null` if the feed has no shape for the trip.
 
 `originStops` / `targetStops` / `departures` are `Uint32Array`s; times are seconds since midnight on the service date. Full type signatures are in the bundled `vulture_wasm.d.ts`.
+
+## Native-only features
+
+The wasm bindings cover the routing surface most browser / Node consumers need. A few features from the native [`vulture`](https://crates.io/crates/vulture) crate have no wasm equivalent, either because they don't translate across the wasm boundary or because they're irrelevant in a browser:
+
+- **Custom `Label` impls** and the bundled **`ArrivalAndWalk`** / **`ArrivalAndFare`** labels. Generics monomorphise per call-site, so a wasm binding can only ship pre-baked label types. `runArrival` / `runRange` use the default arrival-time label.
+- **`assert_footpaths_closed()`** — the closed-footpath single-pass `O(E)` relaxation. The wasm side always treats `transfers.txt` as the publisher gave it.
+- **`new_with_overnight_days(...)`** — multi-day load for "last train home" queries that need to spill across the day boundary.
+- **`RaptorCachePool`** — pool-based parallel fan-out. Browsers don't expose rayon-style threading by default.
+
+If you need any of these, build against the native [`vulture`](https://crates.io/crates/vulture) crate directly.
 
 ## Examples
 
@@ -226,6 +239,16 @@ console.log(`${journeys.length} journey(s) across all platform combinations`);
 
 The same `endpointsFor(stop)` helper is what the bundled demo uses across all three panels.
 
+## Perf
+
+There is no automated browser benchmark for vulture-wasm yet. The [live demo](https://urschrei.github.io/vulture/) loads the bundled Delhi Metro feed and runs stop-to-stop, range-window, and walking-footpath queries entirely client-side; open your browser's performance panel to time it on your own hardware.
+
+For a sense of what the underlying engine is capable of, the native single-query latency table is in the [main README](https://github.com/urschrei/vulture#perf): a few microseconds for a small metro feed (Delhi, 262 stops), single-digit milliseconds for a large multi-modal regional feed (Berlin, ~42k stops), low-tens of milliseconds for the heaviest feeds (Paris IDFM, ~54k stops). Browser numbers are slower than native at the same workload; how much slower depends on the engine and the JIT.
+
+## Soundness
+
+The Rust engine is validated by a property-based test harness ([`vulture-proptest`](https://github.com/urschrei/vulture/tree/main/vulture-proptest)) that compares the algorithm's output against a brute-force reference solver on every test invocation, alongside an issue-by-issue audit of correctness against the original RAPTOR paper (see [`docs/soundness.md`](https://github.com/urschrei/vulture/blob/main/docs/soundness.md) in the repo). The wasm bindings ship the same algorithm; the bindings layer itself is exercised by `vulture-wasm/tests/smoke.mjs`.
+
 ## Build from source
 
 ```sh
@@ -268,3 +291,11 @@ node vulture-wasm/tests/smoke.mjs
 `docs/demo/` is a vanilla-JS / vanilla-CSS demo with three panels – stop-to-stop, departure window, walking-footpath comparison – running entirely client-side against the bundled Delhi Metro feed. Live at <https://urschrei.github.io/vulture/>.
 
 The demo also renders each journey on a MapLibre dark basemap, using `leg.shape` from `runArrival` / `runRange` for the polyline geometry and `route.route_color` / `route.route_type` for the per-mode colour. See `docs/demo/app.js` (`drawJourney`) for the rendering wiring — roughly 80 lines of GeoJSON sources + circle/line layers with a halo+stroke pattern for legibility on the dark tiles.
+
+## Changelog
+
+Per-version notes are in the repo's [CHANGELOG](https://github.com/urschrei/vulture/blob/main/CHANGELOG.md). The native `vulture` crate and the `vulture-wasm` npm package have independent version streams (currently `vulture` 0.23.x, `vulture-wasm` 0.5.x); behaviour-changing entries note both numbers when the bindings move with the engine.
+
+## License
+
+[Apache-2.0](https://github.com/urschrei/vulture/blob/main/LICENSE.md). Same as the underlying [`vulture`](https://github.com/urschrei/vulture) crate.
