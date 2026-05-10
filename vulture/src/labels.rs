@@ -1,29 +1,26 @@
 //! Canned [`Label`] implementations.
 //!
-//! Single-criterion routing uses [`crate::ArrivalTime`] (re-exported at
-//! the crate root). For multi-criterion routing, this module ships a
-//! small set of vetted impls users can drive the algorithm with via
+//! Single-criterion routing uses [`crate::ArrivalTime`] (re-exported at the
+//! crate root). For multi-criterion routing, this module ships vetted impls
+//! drivable via
 //! [`Timetable::query_with_label`](crate::Timetable::query_with_label).
-//!
-//! Custom impls live in user code – see the [`Label`]
-//! trait docs for the requirements.
+//! Custom impls live in user code; see the [`Label`] trait docs.
 
 use std::collections::HashMap;
 
 use crate::label::TripContext;
 use crate::{Duration, Label, RouteIdx, SecondOfDay, StopIdx};
 
-/// Two-criterion label tracking arrival time *and* accumulated walking
-/// time. Trip rides preserve the boarding label's walking time;
-/// footpath relaxations add the walk's duration to both arrival and
-/// the running walking-time component.
+/// Two-criterion label tracking arrival time and accumulated walking time.
+/// Trip rides preserve the boarding label's walking time; footpath
+/// relaxations add the walk duration to both the arrival and the running
+/// walking-time component.
 ///
-/// Pareto dominance is the obvious component-wise relation: `self`
-/// dominates `other` iff its arrival is `≤` and its walking time is
-/// `≤`. The algorithm maintains a Pareto front per stop, so a query
-/// with this label can return multiple journeys at the same target —
-/// for example, a faster one with more walking and a slower one with
-/// less.
+/// Pareto dominance is component-wise: `self` dominates `other` iff
+/// `self.arrival ≤ other.arrival` and `self.walk_time ≤ other.walk_time`.
+/// The algorithm maintains a Pareto front per stop, so a query can return
+/// multiple journeys at the same target (e.g. a faster one with more
+/// walking and a slower one with less).
 ///
 /// ```no_run
 /// use vulture::{Journey, StopIdx, SecondOfDay, Timetable};
@@ -134,15 +131,14 @@ impl FromIterator<(RouteIdx, u32)> for FareTable {
     }
 }
 
-/// Two-criterion label tracking arrival time *and* accumulated fare.
-/// Each trip ride adds the route's fare from the
-/// [`FareTable`] context; footpaths advance arrival but not fare.
+/// Two-criterion label tracking arrival time and accumulated fare. Each
+/// trip ride adds the route's fare from the [`FareTable`] context;
+/// footpaths advance arrival but not fare.
 ///
 /// Pareto dominance is component-wise: `self` dominates `other` iff
-/// its arrival is `≤` and its fare is `≤`. The Pareto front at a
-/// target stop returns multiple journeys — typically a fastest-but-
-/// expensive option and a slower-but-cheaper option, with whatever
-/// trade-offs lie in between.
+/// `self.arrival ≤ other.arrival` and `self.fare ≤ other.fare`. The Pareto
+/// front at a target typically surfaces a fastest-but-expensive option
+/// alongside slower-but-cheaper alternatives.
 ///
 /// ```no_run
 /// use std::collections::HashMap;

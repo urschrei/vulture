@@ -14,15 +14,13 @@ use crate::time::SecondOfDay;
 
 /// A journey found by the RAPTOR algorithm.
 ///
-/// Each journey consists of a sequence of (route, alight stop) steps and a
-/// final label. Multiple journeys may be returned for a single query,
-/// representing pareto-optimal trade-offs between fewer transfers and earlier
-/// arrival.
+/// A sequence of (route, alight stop) steps plus a final label. A single
+/// query may return multiple journeys, each a Pareto trade-off between
+/// fewer transfers and earlier arrival.
 ///
-/// `origin` is whichever of the user-supplied origin stops this journey
-/// actually started from – relevant for multi-source queries (e.g. "any
-/// platform of this station") where the algorithm picks the best origin
-/// internally. Similarly `target` is the target stop reached.
+/// `origin` and `target` are the stops the algorithm actually picked from
+/// the user-supplied origin / target sets (relevant for multi-source /
+/// multi-target queries such as parent-station expansion).
 ///
 /// `L` defaults to [`ArrivalTime`] for single-criterion routing.
 #[derive(Debug, Clone)]
@@ -47,48 +45,40 @@ pub struct Journey<L: Label = ArrivalTime> {
 }
 
 impl<L: Label> Journey<L> {
-    /// Convenience accessor: `self.label.arrival()`. The effective
-    /// arrival time at the chosen target, with the target's
-    /// walk-time offset already applied.
+    /// Convenience accessor for `self.label.arrival()`: the effective
+    /// arrival at the chosen target, with the target's walk-time offset
+    /// already applied.
     pub fn arrival(&self) -> SecondOfDay {
         self.label.arrival()
     }
 
-    /// Walk the plan against `tt` to recover the specific trip ridden
-    /// for each leg, plus per-leg departure and arrival times.
-    /// `depart` is the original query departure time and `origin_walk`
-    /// is the walk-time offset for `self.origin` from the original
-    /// origins slice (typically [`Duration::ZERO`] for single-stop
-    /// queries).
+    /// Walk the plan against `tt` to recover the specific trip ridden and
+    /// the per-leg depart / arrive times for each leg. `depart` is the
+    /// original query departure time; `origin_walk` is the walk offset for
+    /// `self.origin` from the original origins slice ([`Duration::ZERO`]
+    /// for single-stop queries).
     ///
-    /// Each returned [`TimedLeg`] reports the route, boarding stop,
-    /// alighting stop, the specific [`TripIdx`] caught, and the
-    /// boarding / alighting times. If the previous leg's alight
-    /// stop is not directly served by the next leg's route, this
-    /// scans the previous alight stop's direct footpath neighbours
-    /// for one that *is* served, walks there, and uses that as the
-    /// next leg's `board`. The walking time advances `depart`
-    /// without producing a separate leg – callers detect a walking
+    /// Each [`TimedLeg`] reports the route, boarding stop, alighting stop,
+    /// [`TripIdx`], and times. When the previous alight stop is not on the
+    /// next route, this walks one direct footpath hop to find a serving
+    /// neighbour and uses it as the next `board`. The walk time advances
+    /// `depart` without producing a separate leg; callers detect a walking
     /// transfer by comparing `legs[n].alight` with `legs[n+1].board`.
     ///
     /// # Errors
     ///
-    /// Returns a [`TimingError`] when the plan can't be matched
-    /// against `tt`. For a `Journey` produced by the same `tt` and
-    /// `depart`, the only realistic failure is
-    /// [`TimingError::NoBoardingStop`] when a transfer would need a
-    /// walk chain longer than one direct footpath hop (multi-hop
-    /// walk reconstruction is not implemented). The other variants
-    /// are soundness escape hatches that indicate a programmer
-    /// error or a `Journey` that was matched against a different
-    /// timetable.
+    /// Returns a [`TimingError`] when the plan can't be matched against
+    /// `tt`. For a `Journey` produced by the same `tt` and `depart`, the
+    /// realistic failure is [`TimingError::NoBoardingStop`] when a transfer
+    /// would need a walk chain longer than one direct footpath hop
+    /// (multi-hop walk reconstruction is not implemented). The remaining
+    /// variants indicate a programmer error or mismatched timetable.
     ///
-    /// **Loop routes:** if `route` revisits the boarding stop on
-    /// its sequence, this picks the *earliest* qualifying position
-    /// (matching what [`Timetable::get_routes_serving_stop`]
-    /// reports). For non-loop routes (the common case) this is
-    /// unambiguous; for loop-heavy networks the reconstructed trip
-    /// matches the algorithm's choice in practice.
+    /// **Loop routes:** when `route` revisits the boarding stop, the
+    /// *earliest* qualifying position is picked, matching
+    /// [`Timetable::get_routes_serving_stop`]. For non-loop routes this is
+    /// unambiguous; for loop-heavy networks the reconstructed trip matches
+    /// the algorithm's choice in practice.
     pub fn with_timing<T: Timetable>(
         &self,
         tt: &T,

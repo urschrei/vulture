@@ -1,7 +1,6 @@
-//! [`Query`] – the typestate builder used to configure and run a
-//! RAPTOR call – plus the marker types ([`NeedsDeparture`],
-//! [`SingleDeparture`], [`RangeDeparture`]) that drive the typestate
-//! transitions and the [`RangeJourney`] returned by range queries.
+//! [`Query`] – typestate builder for a RAPTOR call. The marker types
+//! ([`NeedsDeparture`], [`SingleDeparture`], [`RangeDeparture`]) drive the
+//! typestate transitions; [`RangeJourney`] is returned by range queries.
 
 use std::marker::PhantomData;
 
@@ -21,17 +20,16 @@ use crate::label::Label;
 use crate::time::SecondOfDay;
 use crate::time::Transfers;
 
-/// One entry in a range-query profile: a departure time paired with
-/// the [`Journey`] it produces. Returned by [`Query::run`] /
-/// [`Query::run_with_cache`] when the builder was configured with
+/// One entry in a range-query profile: a departure time paired with the
+/// [`Journey`] it produces. Returned by [`Query::run`] /
+/// [`Query::run_with_cache`] on builders configured with
 /// [`Query::depart_in_window`].
 #[derive(Debug, Clone)]
 pub struct RangeJourney<L: Label = ArrivalTime> {
-    /// The departure time this journey assumes – the user leaves the
-    /// origin (or starts the origin walk) at this time.
+    /// Departure time this journey assumes (origin or start of origin walk).
     pub depart: SecondOfDay,
-    /// The journey itself, as if `depart` had been passed to
-    /// [`Query::depart_at`] directly.
+    /// The journey, as if `depart` had been passed to [`Query::depart_at`]
+    /// directly.
     pub journey: Journey<L>,
 }
 
@@ -95,17 +93,14 @@ where
     pub(crate) origins: Endpoints,
     pub(crate) targets: Endpoints,
     pub(crate) max_transfers: Transfers,
-    /// When `true`, the algorithm filters out trips for which
-    /// [`Timetable::trip_wheelchair_accessible`] returns `false` and
-    /// stops for which [`Timetable::stop_wheelchair_accessible`] returns
-    /// `false`. Defaults to `false` (no filtering).
+    /// When `true`, the algorithm filters trips and stops whose wheelchair
+    /// flags return `false` from [`Timetable::trip_wheelchair_accessible`]
+    /// / [`Timetable::stop_wheelchair_accessible`]. Default `false`.
     pub(crate) require_wheelchair_accessible: bool,
-    /// Sidecar data threaded into every [`Label`] call. For
-    /// `L::Ctx = ()` (the default for `ArrivalTime` and
-    /// `ArrivalAndWalk`) this is zero-sized and free; custom labels
-    /// like a fare-aware `ArrivalAndFare` use it to carry per-route
-    /// fare tables, stop → zone maps, etc. Replace via
-    /// [`Query::with_context`].
+    /// Sidecar data threaded into every [`Label`] call. Zero-sized and free
+    /// for `L::Ctx = ()` (the default for `ArrivalTime` and
+    /// `ArrivalAndWalk`); custom labels can carry per-route fare tables,
+    /// stop → zone maps, and so on. Replace via [`Query::with_context`].
     pub(crate) ctx: L::Ctx,
     pub(crate) mode: M,
     pub(crate) _label: PhantomData<L>,
@@ -131,11 +126,10 @@ where
         self
     }
 
-    /// Cap the number of transit boardings the algorithm explores.
-    /// The default is 10. Accepts any [`Into<Transfers>`] —
-    /// `.max_transfers(10)` works directly via the
-    /// [`From<u8>`](Transfers#impl-From<u8>-for-Transfers) impl, and
-    /// you can pass an existing [`Transfers`] value too.
+    /// Cap the number of transit boardings the algorithm explores. Default
+    /// 10. Accepts any [`Into<Transfers>`]; `.max_transfers(10)` works via
+    /// the [`From<u8>`](Transfers#impl-From<u8>-for-Transfers) impl, or pass
+    /// an existing [`Transfers`].
     pub fn max_transfers(mut self, n: impl Into<Transfers>) -> Self {
         self.max_transfers = n.into();
         self

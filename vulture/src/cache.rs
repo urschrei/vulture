@@ -1,6 +1,6 @@
-//! [`RaptorCache`] – reusable scratch buffers for repeated queries —
-//! plus the `Sync` freelist variant [`RaptorCachePool`] and the
-//! [`PooledCache`] handle returned from [`RaptorCachePool::checkout`].
+//! [`RaptorCache`] – reusable scratch buffers for repeated queries. Plus
+//! the `Sync` freelist variant [`RaptorCachePool`] and the [`PooledCache`]
+//! handle returned by [`RaptorCachePool::checkout`].
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -21,11 +21,10 @@ use crate::time::SecondOfDay;
 
 /// Reusable scratch buffers for [`Query::run_with_cache`](crate::Query::run_with_cache).
 ///
-/// `Query::run` allocates a fresh cache on every call. For workloads that
-/// run many queries against the same timetable (a server, a batch job),
-/// allocate a `RaptorCache` once and pass `&mut cache` to
-/// [`Query::run_with_cache`](crate::Query::run_with_cache) at the end of each builder chain – the
-/// timetable-sized buffers get reset rather than reallocated between queries.
+/// `Query::run` allocates a fresh cache per call. For repeated queries against
+/// the same timetable, allocate a `RaptorCache` once and pass `&mut cache` to
+/// [`Query::run_with_cache`](crate::Query::run_with_cache); timetable-sized
+/// buffers are reset between queries instead of reallocated.
 ///
 /// ```no_run
 /// # use vulture::{RaptorCache, SecondOfDay, Timetable};
@@ -41,12 +40,11 @@ use crate::time::SecondOfDay;
 /// # }
 /// ```
 ///
-/// A cache is sized for a specific timetable's `n_stops` / `n_routes`;
-/// passing it to a query against a differently-sized timetable panics on
-/// entry. Use [`RaptorCache::with_capacity`] when the timetable isn't yet in
-/// scope.
+/// A cache is sized for one timetable's `n_stops` / `n_routes`; passing it
+/// to a query against a differently-sized timetable panics on entry. Use
+/// [`RaptorCache::with_capacity`] when the timetable isn't yet in scope.
 ///
-/// `RaptorCache` is `!Sync` – give each worker its own, or use
+/// `RaptorCache` is `!Sync`. Give each worker its own, or use
 /// [`RaptorCachePool`] (the `Sync` freelist variant).
 pub struct RaptorCache<L: Label = ArrivalTime> {
     pub(crate) n_stops: u32,
@@ -168,27 +166,21 @@ impl<L: Label> RaptorCache<L> {
     }
 }
 
-/// A `Sync` pool of [`RaptorCache`]s sized for one timetable. Hand it
-/// to multiple threads (or a Rayon worker pool) and have each thread
-/// `checkout()` a cache for the duration of one query.
+/// A `Sync` pool of [`RaptorCache`]s sized for one timetable. Each worker
+/// calls `checkout()` for the duration of one query.
 ///
-/// Backed by a mutex-protected freelist; the lock is only held long
-/// enough to pop or push, never during the query itself. Caches grow
-/// lazily – the pool starts empty and allocates a fresh cache when a
-/// thread checks out and the freelist is empty. Returned caches are
-/// reused by the next checkout.
+/// Backed by a mutex-protected freelist; the lock is held only across pop
+/// and push, never during the query. Caches are allocated lazily on first
+/// checkout when the freelist is empty.
 ///
-/// Construct with [`RaptorCachePool::for_timetable`] (or
-/// [`RaptorCachePool::with_capacity`] when you don't have the timetable
-/// in scope yet). Like [`RaptorCache`] itself, a pool is sized for one
-/// specific timetable's `n_stops`/`n_routes` and panics on dimension
-/// mismatch when its caches are used.
+/// Construct with [`RaptorCachePool::for_timetable`] or
+/// [`RaptorCachePool::with_capacity`]. Caches drawn from a pool panic on
+/// dimension mismatch, same as [`RaptorCache`].
 ///
 /// ```no_run
 /// # use vulture::{RaptorCachePool, SecondOfDay, Timetable};
 /// # fn ex<T: Timetable + Sync>(tt: &T, queries: &[(vulture::StopIdx, vulture::StopIdx)]) {
 /// let pool = RaptorCachePool::for_timetable(tt);
-/// // Sequential or parallel – same code:
 /// for &(start, end) in queries {
 ///     let mut cache = pool.checkout();
 ///     let _ = tt.query()
@@ -223,16 +215,14 @@ impl<L: Label> RaptorCachePool<L> {
         }
     }
 
-    /// Borrow a cache from the pool. Allocates a fresh one if the pool
-    /// is empty. The returned guard returns the cache to the pool when
-    /// dropped, ready for the next checkout.
+    /// Borrow a cache from the pool. Allocates a fresh one when the pool
+    /// is empty. The returned guard returns the cache to the pool on drop.
     ///
     /// # Panics
     ///
-    /// Panics if the internal mutex is poisoned (i.e. another thread
-    /// panicked while holding it). In normal use this does not occur:
-    /// the lock is only held long enough to pop or push the freelist,
-    /// never across a query.
+    /// Panics if the internal mutex is poisoned (another thread panicked
+    /// while holding it). The lock is held only across pop / push, so this
+    /// does not occur in normal use.
     pub fn checkout(&self) -> PooledCache<'_, L> {
         let cache = self
             .pool
@@ -258,10 +248,10 @@ impl<L: Label> std::fmt::Debug for RaptorCachePool<L> {
     }
 }
 
-/// Scoped handle handed out by [`RaptorCachePool::checkout`] that
-/// owns a [`RaptorCache`] for its lifetime and returns it to the pool
-/// when dropped. Derefs to [`RaptorCache`]; pass `&mut pooled_cache`
-/// wherever a `&mut RaptorCache` is wanted.
+/// Scoped handle from [`RaptorCachePool::checkout`]. Owns a [`RaptorCache`]
+/// for its lifetime and returns it to the pool on drop. Derefs to
+/// [`RaptorCache`]; pass `&mut pooled_cache` where `&mut RaptorCache` is
+/// wanted.
 pub struct PooledCache<'p, L: Label = ArrivalTime> {
     pool: &'p RaptorCachePool<L>,
     cache: Option<RaptorCache<L>>,

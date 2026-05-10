@@ -7,12 +7,9 @@ use crate::ids::{RouteIdx, StopIdx, TripIdx};
 use crate::time::Duration;
 use crate::time::SecondOfDay;
 
-/// Per-trip context passed to [`Label::extend_by_trip`]. Bundles the
-/// boarding-and-alighting information so the trait method has a
-/// single sidecar argument rather than an eight-positional signature
-/// — single-criterion labels ignore most of it; multi-criterion
-/// impls (fare-aware, route-preference, transfer-penalty) read the
-/// fields they need to evaluate per-trip criteria.
+/// Per-trip context passed to [`Label::extend_by_trip`]. Single-criterion
+/// labels read only `arrival`; multi-criterion impls (fare-aware,
+/// route-preference, transfer-penalty) draw on the remaining fields.
 #[derive(Debug, Clone, Copy)]
 pub struct TripContext {
     /// The trip the rider is alighting from.
@@ -31,56 +28,43 @@ pub struct TripContext {
     /// The position of `alight_stop` within the route's stop
     /// sequence.
     pub alight_pos: u32,
-    /// The trip's arrival time at `alight_pos`. The most-frequently
-    /// read field — single-criterion labels copy this into their
-    /// arrival component.
+    /// Trip arrival time at `alight_pos`. Single-criterion labels copy
+    /// this into their arrival component.
     pub arrival: SecondOfDay,
 }
 
 /// A label attached to a `(round, stop)` cell during the RAPTOR scan.
 ///
-/// **Most users can ignore this trait.** [`Timetable::query`](crate::Timetable::query) uses
-/// [`ArrivalTime`] (single-criterion: minimise arrival time, fewest
-/// transfers), which is what the original RAPTOR paper describes and
-/// what almost every routing application wants.
+/// Most callers can ignore this trait. [`Timetable::query`](crate::Timetable::query)
+/// uses [`ArrivalTime`] (single-criterion: minimise arrival time, fewest
+/// transfers), matching the original RAPTOR paper.
 ///
-/// The trait exists so the algorithm can be reused for *multi-criterion*
-/// routing – minimising arrival time *and* something else at the same
-/// time, returning a Pareto front of trade-offs. Reach for it when a
-/// single "best" answer is the wrong shape: e.g. a fare-aware query
-/// that should also report the cheapest journey alongside the fastest.
-/// The bundled
-/// [`ArrivalAndWalk`](crate::labels::ArrivalAndWalk) (arrival vs.
-/// walking time) and
-/// [`ArrivalAndFare`](crate::labels::ArrivalAndFare) (arrival vs.
-/// accumulated fare from a route → fare table threaded via [`Label::Ctx`])
-/// are worked examples; see [`Timetable::query_with_label`](crate::Timetable::query_with_label)
-/// for the builder entry point and [`Query::with_context`](crate::Query::with_context)
-/// for supplying lookup tables.
+/// The trait exists for *multi-criterion* routing: minimising arrival time
+/// alongside another criterion and returning a Pareto front of trade-offs.
+/// [`ArrivalAndWalk`](crate::labels::ArrivalAndWalk) (arrival vs walking
+/// time) and [`ArrivalAndFare`](crate::labels::ArrivalAndFare) (arrival vs
+/// accumulated fare via [`Label::Ctx`]) are worked examples. The builder
+/// entry points are
+/// [`Timetable::query_with_label`](crate::Timetable::query_with_label) and
+/// [`Query::with_context`](crate::Query::with_context).
 ///
 /// The algorithm maintains a Pareto front (a *bag* of mutually
-/// non-dominated labels) per `(round, stop)`, so multi-criterion impls
-/// produce real Pareto fronts at the targets rather than a single
-/// tiebroken label. Single-criterion `ArrivalTime` bags stay size 1,
-/// with no behaviour change versus a non-bag implementation.
+/// non-dominated labels) per `(round, stop)`. Multi-criterion impls produce
+/// Pareto fronts at the targets; single-criterion `ArrivalTime` bags stay
+/// size 1.
 ///
 /// # Defining a custom label
 ///
-/// The example below sketches a *route-preference* label: every route
-/// has an integer "badness" score (lower = nicer route — perhaps more
-/// scenic, better A/C, fewer crowds) and the algorithm should return
-/// a Pareto front of `(arrival_time, worst_score_on_journey)`
-/// trade-offs. The fast journey may pick the worst route; a slightly
-/// slower journey may avoid it entirely.
+/// The example below sketches a route-preference label. Every route has an
+/// integer "badness" score (lower is preferred); the algorithm returns a
+/// Pareto front of `(arrival_time, worst_score_on_journey)`.
 ///
-/// 1. Define your label `struct` and a `Ctx` carrying the lookup
-///    table. `Ctx` is borrowed immutably by every callback, so put
-///    your big tables here rather than cloning them into the label.
-/// 2. Implement [`Label`]. The per-trip context passed to
-///    [`Label::extend_by_trip`] gives you `route` and `trip` to look
-///    up scores; [`Label::extend_by_footpath`] is the place to
-///    accumulate walk-side criteria.
-/// 3. At query time, build the `Ctx` once and supply it via
+/// 1. Define the label `struct` and a `Ctx` carrying the lookup table.
+///    `Ctx` is borrowed immutably by every callback; put heavy tables here.
+/// 2. Implement [`Label`]. [`Label::extend_by_trip`] receives `route` and
+///    `trip` for score lookups; [`Label::extend_by_footpath`] is the place
+///    for walk-side criteria.
+/// 3. Build the `Ctx` once and supply it via
 ///    [`Query::with_context`](crate::Query::with_context) before
 ///    `.depart_at(...)`.
 ///
@@ -161,13 +145,11 @@ pub struct TripContext {
 /// # }
 /// ```
 pub trait Label: Copy + std::fmt::Debug {
-    /// User-supplied sidecar data the algorithm threads into every
-    /// `extend_*` / `from_departure` call. Use this to carry tables
-    /// the label needs to evaluate per-trip / per-footpath criteria
-    /// (a fare table keyed on [`RouteIdx`], a stop → zone map, an
-    /// agency → preference rank). The label itself stays `Copy` and
-    /// cheap to duplicate; the (typically heavy) lookup data lives
-    /// in `Ctx` and is borrowed immutably.
+    /// User-supplied sidecar data threaded into every `extend_*` /
+    /// `from_departure` call. Carries lookup tables for per-trip /
+    /// per-footpath criteria (fare table keyed by [`RouteIdx`], stop →
+    /// zone map, agency → preference rank). The label itself stays `Copy`;
+    /// heavy data lives in `Ctx` and is borrowed immutably.
     ///
     /// `Ctx` must implement [`Default`] so [`crate::Timetable::query`]
     /// /  [`crate::Timetable::query_with_label`] can construct a

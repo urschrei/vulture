@@ -1,9 +1,7 @@
-//! [`Timetable`] – the trait adapters implement to plug a transit
-//! network into the RAPTOR algorithm. The trait carries only the data
-//! accessors, the closure-of-footpaths declaration, and the
-//! [`Timetable::query`] / [`Timetable::query_with_label`] entry points
-//! into the typestate builder. The algorithm itself lives in
-//! [`crate::algorithm`].
+//! [`Timetable`] – the adapter trait for plugging a transit network into
+//! RAPTOR. Carries the data accessors, the closure-of-footpaths
+//! declaration, and the [`Timetable::query`] / [`Timetable::query_with_label`]
+//! entry points. The algorithm lives in [`crate::algorithm`].
 
 use std::marker::PhantomData;
 
@@ -21,39 +19,34 @@ use crate::time::Transfers;
 
 /// Models a route-based transit network for the RAPTOR algorithm.
 ///
-/// Implement this trait to describe your transit network's topology and
-/// schedule. The algorithm itself is invoked via the
-/// [`Timetable::query`] builder.
+/// The algorithm is invoked via the [`Timetable::query`] builder.
 ///
 /// Identifiers are dense `u32` indices ([`StopIdx`], [`RouteIdx`],
-/// [`TripIdx`]). Adapters intern from external IDs (e.g. GTFS string IDs)
-/// at construction time.
+/// [`TripIdx`]). Adapters intern external IDs (e.g. GTFS string IDs) at
+/// construction.
 ///
 /// # Footpaths
 ///
-/// The footpath relation returned by [`get_footpaths_from`] is the
-/// *direct* walking edges only. A relation is *transitively closed*
-/// when every walk reachable through a chain of direct edges is
-/// already present as a single direct edge: i.e. if `A → B` and
-/// `B → C` are both in the relation, then `A → C` is too, with the
-/// combined walk time ([Wikipedia][tc]). The algorithm does **not**
-/// require closure – it chains direct walks within a single round
-/// using multi-source Dijkstra, so a non-closed relation produces
-/// correct answers; closure is purely an optimisation that lets the
-/// algorithm switch to a cheaper single-pass `O(E)` relaxation. See
-/// [`footpaths_are_transitively_closed`] for the opt-in.
+/// [`get_footpaths_from`] returns *direct* walking edges only. A relation is
+/// *transitively closed* when every walk reachable through a chain of direct
+/// edges is also present as a single direct edge: if `A → B` and `B → C` are
+/// in the relation, so is `A → C` with the combined walk time
+/// ([Wikipedia][tc]). The algorithm does **not** require closure; it chains
+/// direct walks within a round via multi-source Dijkstra. Closure is an
+/// optimisation that switches the relaxation to single-pass `O(E)`; see
+/// [`footpaths_are_transitively_closed`].
 ///
 /// [tc]: https://en.wikipedia.org/wiki/Transitive_closure
 /// [`footpaths_are_transitively_closed`]: Timetable::footpaths_are_transitively_closed
 ///
 /// # No overtaking within a route
 ///
-/// All trips returned by [`get_earliest_trip`] for a given route must
-/// share a stop sequence and pairwise must not overtake. The algorithm
-/// uses a binary search by departure time at intermediate stops, which
-/// is only sound when the trip ordering is monotone at every stop.
-/// Adapters that ingest data with multiple stop patterns or overtaking
-/// should split such groups into separate routes at construction.
+/// Trips returned by [`get_earliest_trip`] for a given route must share a
+/// stop sequence and pairwise must not overtake. The algorithm uses binary
+/// search by departure time at intermediate stops, which is only sound when
+/// the trip ordering is monotone at every stop. Adapters ingesting data with
+/// multiple stop patterns or overtaking should split such groups into
+/// separate routes at construction.
 ///
 /// [`get_footpaths_from`]: Timetable::get_footpaths_from
 /// [`get_earliest_trip`]: Timetable::get_earliest_trip
@@ -287,16 +280,15 @@ pub trait Timetable {
         }
     }
 
-    /// Like [`Timetable::query`] but with a custom [`Label`] type for
-    /// multi-criterion routing. `Vec<Journey<L>>` and `Vec<RangeJourney<L>>`
-    /// come back from the corresponding `.run()`, with each entry on the
-    /// returned Pareto front a different trade-off across `L`'s criteria.
+    /// Like [`Timetable::query`] but parameterised on a custom [`Label`].
+    /// `.run()` returns `Vec<Journey<L>>` or `Vec<RangeJourney<L>>`; each
+    /// entry on the Pareto front is a different trade-off across `L`'s
+    /// criteria.
     ///
-    /// You only need this if [`ArrivalTime`] (the default) is the wrong
-    /// shape for your problem – e.g. you want to surface a slower route
-    /// with less walking. The bundled [`labels::ArrivalAndWalk`](crate::labels::ArrivalAndWalk)
-    /// does exactly that. See the [`Label`] trait for what's involved in
-    /// writing your own.
+    /// Use when [`ArrivalTime`] is the wrong shape for the problem (e.g.
+    /// surfacing a slower route with less walking). [`labels::ArrivalAndWalk`](crate::labels::ArrivalAndWalk)
+    /// is the bundled two-criterion impl; see the [`Label`] trait for
+    /// custom impls.
     ///
     /// ```no_run
     /// # use vulture::{Timetable, SecondOfDay, StopIdx};

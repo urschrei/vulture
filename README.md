@@ -2,13 +2,11 @@
 
 Rust implementation of [RAPTOR](https://www.microsoft.com/en-us/research/publication/round-based-public-transit-routing/) (Delling, Pajor, Werneck): given a public transit network, find all Pareto-optimal journeys between two stops, trading fewer transfers against earlier arrival.
 
-**[Browser demo](https://urschrei.github.io/vulture/)**: vulture compiled to WASM (~290 KB gzipped) running in the browser: stop-to-stop routing, depart-in-window Pareto profile, walking-footpath augmentation. See [`vulture-wasm/`](vulture-wasm/) for the bindings.
-
-**JS / browser bindings on npm:** [`vulture-wasm`](https://www.npmjs.com/package/vulture-wasm): `npm install vulture-wasm`.
+**Browser demo:** <https://urschrei.github.io/vulture/>. WASM bindings (~290 KB gzipped) in [`vulture-wasm/`](vulture-wasm/), on npm as [`vulture-wasm`](https://www.npmjs.com/package/vulture-wasm).
 
 ## Quick start
 
-The `gtfs` module wraps a parsed GTFS feed and implements the `Timetable` trait. The repo bundles `aux/dmrc_gtfs.zip` (Delhi Metro) so you can run the example without downloading anything:
+The `gtfs` adapter implements `Timetable` over a parsed GTFS feed. `aux/dmrc_gtfs.zip` (Delhi Metro) is bundled.
 
 ```rust
 use gtfs_structures::Gtfs;
@@ -35,42 +33,42 @@ for j in &journeys {
 }
 ```
 
-Runnable as `cargo run --example gtfs-timetable -- aux/dmrc_gtfs.zip 2024-01-15 1 44`.
+Runnable: `cargo run --example gtfs-timetable -- aux/dmrc_gtfs.zip 2024-01-15 1 44`.
 
-A returned `Journey` has `plan: Vec<(RouteIdx, StopIdx)>` ("take this route, get off at this stop"), an `origin` and `target` (relevant when the query supplies multiple of either), and a `label` carrying the criterion under optimisation. `journey.arrival()` reads it as a `SecondOfDay`. See [`Journey`](https://docs.rs/vulture/latest/vulture/struct.Journey.html) for the full contract; for trip IDs and per-leg depart/arrive times see [`Journey::with_timing`](https://docs.rs/vulture/latest/vulture/struct.Journey.html#method.with_timing).
+Each `Journey` carries `plan: Vec<(RouteIdx, StopIdx)>`, an `origin`, a `target`, and a `label`. `journey.arrival()` returns the `SecondOfDay`. For trip IDs and per-leg times, see [`Journey::with_timing`](https://docs.rs/vulture/latest/vulture/struct.Journey.html#method.with_timing).
 
-`Gtfs::new(path)` is the local-file form; the same `gtfs-structures` API also exposes [`Gtfs::from_url`](https://docs.rs/gtfs-structures/latest/gtfs_structures/structures/gtfs/struct.Gtfs.html#method.from_url) (`reqwest`-backed sync fetch), [`Gtfs::from_url_async`](https://docs.rs/gtfs-structures/latest/gtfs_structures/structures/gtfs/struct.Gtfs.html#method.from_url_async), and [`Gtfs::from_reader`](https://docs.rs/gtfs-structures/latest/gtfs_structures/structures/gtfs/struct.Gtfs.html#method.from_reader) (any `Read + Seek`), all returning the same `Gtfs` value `GtfsTimetable::new` consumes:
+`Gtfs::new(path)` reads from disk. `gtfs-structures` also exposes [`Gtfs::from_url`](https://docs.rs/gtfs-structures/latest/gtfs_structures/structures/gtfs/struct.Gtfs.html#method.from_url), [`Gtfs::from_url_async`](https://docs.rs/gtfs-structures/latest/gtfs_structures/structures/gtfs/struct.Gtfs.html#method.from_url_async), and [`Gtfs::from_reader`](https://docs.rs/gtfs-structures/latest/gtfs_structures/structures/gtfs/struct.Gtfs.html#method.from_reader); all yield a `Gtfs` that `GtfsTimetable::new` accepts.
 
 ```rust,ignore
 let gtfs = Gtfs::from_url("https://example.org/feed/gtfs.zip")?;
 let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?;
 ```
 
-> **`from_url` requires the `read-url` feature on `gtfs-structures`.** Since v0.19, vulture depends on `gtfs-structures` with `default-features = false` (so wasm and minimal native builds don't drag in `reqwest` / `tokio`). To use the URL-loading paths, add `gtfs-structures` directly to your `Cargo.toml`: `gtfs-structures = { version = "0.47", features = ["read-url"] }`. `Gtfs::new(path)` and `Gtfs::from_reader` (any `Read + Seek`) need no extra features.
+> `from_url` requires the `read-url` feature on `gtfs-structures`. vulture pulls it with `default-features = false`; for the URL paths, depend on `gtfs-structures` directly: `gtfs-structures = { version = "0.47", features = ["read-url"] }`.
 
 ## Worked examples
 
 ### Berlin VBB: station-level query
 
-A station like Berlin Hbf has hundreds of platforms; you don't usually care which one. `GtfsTimetable::station_stops(parent_id)` expands a parent station to its child platforms and the multi-source/multi-target search picks the best combination:
+`GtfsTimetable::station_stops(parent_id)` expands a parent station into its child platforms. Passing the result to `.from(...)` / `.to(...)` runs a multi-source / multi-target search.
 
 ```rust,ignore
 let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?;
 
 let journeys = tt
     .query()
-    .from(tt.station_stops("de:11000:900003201"))   // Hbf – ~301 platforms
-    .to(tt.station_stops("de:11000:900100003"))     // Alex – ~50 platforms
+    .from(tt.station_stops("de:11000:900003201"))   // Hbf, ~301 platforms
+    .to(tt.station_stops("de:11000:900100003"))     // Alex, ~50 platforms
     .max_transfers(10)
     .depart_at(SecondOfDay::hms(9, 0, 0))
     .run();
 ```
 
-Returns a direct S-Bahn boarding at 09:01, arriving Alex at 09:07 – across a feed of ~42k stops, ~71k active trips, in ~385 µs.
+Berlin VBB (~42k stops, ~71k active trips): 385 µs.
 
 ### Helsinki HSL: augmenting sparse footpaths
 
-HSL ships an empty `transfers.txt`, so out of the box no walking transfers exist between physical stops. Build coordinate-derived walking edges before querying:
+HSL ships an empty `transfers.txt`. Build coordinate-derived walking edges before querying:
 
 ```rust,ignore
 let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?
@@ -85,15 +83,15 @@ let journeys = tt
     .run();
 ```
 
-`with_walking_footpaths` uses an R-tree over an equirectangular projection (~0.5% accurate at city scale) and preserves any pre-existing `transfers.txt` entries.
+`with_walking_footpaths` builds bidirectional R-tree edges and preserves existing `transfers.txt` entries.
 
 ### Paris IDFM: expensive case
 
-Châtelet → Versailles Rive Droite crosses the IDFM region: the expanded RER feed has ~54k stops, ~146k active trips per weekday, and the optimal journey involves the RER C from Saint-Michel-Notre-Dame:
+Paris IDFM is the largest of the bundled benchmark feeds (~54k stops, ~146k active trips per weekday). `assert_footpaths_closed()` opts into the single-pass `O(E)` footpath relaxation when `transfers.txt` is publisher-curated.
 
 ```rust,ignore
 let tt = GtfsTimetable::new(&gtfs, date(2026, 5, 4))?
-    .assert_footpaths_closed();   // IDFM's transfers.txt is publisher-curated
+    .assert_footpaths_closed();
 
 let journeys = tt
     .query()
@@ -104,7 +102,7 @@ let journeys = tt
     .run();
 ```
 
-Returns in ~17 ms. Smaller cross-Paris queries (Châtelet → Gare du Nord, Châtelet → La Défense) come back in under 1 ms. See [`docs/cross-city-benchmarks.md`](docs/cross-city-benchmarks.md) for the full numbers and methodology.
+Châtelet → Versailles RD: ~17 ms. Shorter cross-Paris queries (Châtelet → Gare du Nord, Châtelet → La Défense): under 1 ms. See [`docs/cross-city-benchmarks.md`](docs/cross-city-benchmarks.md) for the full table and methodology.
 
 ### Range queries: "leave between X and Y"
 
@@ -122,11 +120,11 @@ let profile = tt
     .run();
 ```
 
-Returns `Vec<RangeJourney>` – each entry is a `(depart, journey)` pair, Pareto-filtered on `(later depart, fewer transfers, earlier arrival)`. Serial uses [rRAPTOR](https://docs.rs/vulture/latest/vulture/trait.Timetable.html#method.query) (single reverse-chronological scan reusing labels across departures); `.run_par()` spreads the per-departure work across a Rayon thread pool.
+Returns `Vec<RangeJourney>`: `(depart, journey)` pairs Pareto-filtered on `(later depart, fewer transfers, earlier arrival)`. Serial `.run()` is [rRAPTOR](https://docs.rs/vulture/latest/vulture/trait.Timetable.html#method.query); `.run_par()` fans the per-departure work across a Rayon thread pool.
 
 ### Server workload: many queries, multi-threaded
 
-Allocate a `RaptorCachePool` once and have each thread check out a cache:
+Allocate a `RaptorCachePool` once; each worker checks out a cache for the scope of one query.
 
 ```rust,ignore
 use rayon::prelude::*;
@@ -145,32 +143,32 @@ let results: Vec<_> = queries.par_iter().map(|q| {
 }).collect();
 ```
 
-`pool.checkout()` returns a `PooledCache` handle that owns a cache for its scope; the cache goes back to the pool when the handle is dropped. The same pool serves any number of threads with no per-thread bookkeeping.
+`pool.checkout()` returns a `PooledCache` handle; the cache returns to the pool on drop.
 
 ### Runnable examples
 
-The `vulture/examples/` directory has four self-contained, synthetic-network examples covering the patterns above:
+Synthetic-network examples in `vulture/examples/`:
 
-- `cargo run --release --example custom_label` – defines a custom `Label` (route-preference scoring) with its own `Ctx`, builds the lookup table, runs a query, and inspects the Pareto front.
-- `cargo run --release --example fare_aware` – fare-aware Pareto routing using the bundled `ArrivalAndFare` and a `FareTable` context.
-- `cargo run --release --example range_query` – `depart_in_window(...)` over a window of departure times; runs both serial rRAPTOR and the parallel naïve batch, asserts they agree.
-- `cargo run --release --example cache_reuse` – `RaptorCache` reuse across many queries; asserts cached results match one-shot results.
+- `cargo run --release --example custom_label` – custom `Label` with its own `Ctx`, route-preference scoring.
+- `cargo run --release --example fare_aware` – fare-aware Pareto routing via `ArrivalAndFare` and a `FareTable` context.
+- `cargo run --release --example range_query` – `depart_in_window(...)`; serial rRAPTOR vs parallel naïve batch, with an equality assertion.
+- `cargo run --release --example cache_reuse` – `RaptorCache` reuse with an equality assertion against one-shot results.
 
 ## Features
 
-- **`Timetable` trait** – describes a transit network. Use the bundled [`GtfsTimetable`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html) for any GTFS feed, or [implement directly](https://docs.rs/vulture/latest/vulture/trait.Timetable.html) for non-GTFS data.
-- **Typestate query builder** – `tt.query().from(...).to(...).max_transfers(...).depart_at(...).run()`. Compile-time enforced order; `.depart_at(...)` and `.depart_in_window(...)` switch the return type.
-- **Multi-source / multi-target** – `.from(...)` and `.to(...)` accept a `StopIdx`, a slice, a `Vec`, or `(stop, walk_offset)` pairs. Pair with `station_stops(parent_id)` for "any platform of this station" queries.
-- **Range queries** – `.depart_in_window(times)` returns a Pareto profile; serial path uses rRAPTOR, `.run_par()` and `.run_with_pool(&pool)` use a parallel naïve batch.
-- **`Label` trait** – single-criterion [`ArrivalTime`](https://docs.rs/vulture/latest/vulture/struct.ArrivalTime.html) is the default. [`vulture::labels`](https://docs.rs/vulture/latest/vulture/labels/index.html) ships [`ArrivalAndWalk`](https://docs.rs/vulture/latest/vulture/labels/struct.ArrivalAndWalk.html) (arrival vs. walking) and [`ArrivalAndFare`](https://docs.rs/vulture/latest/vulture/labels/struct.ArrivalAndFare.html) (arrival vs. accumulated fare from a route → fare table) for trade-off queries. Implement [`Label`](https://docs.rs/vulture/latest/vulture/trait.Label.html) directly for custom criteria, threading lookup tables through [`Query::with_context`](https://docs.rs/vulture/latest/vulture/struct.Query.html#method.with_context).
-- **Walking footpaths from coordinates** – [`with_walking_footpaths(&gtfs, max_dist_m, speed_m_per_s)`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html#method.with_walking_footpaths) builds bidirectional R-tree walking edges, preserving any existing `transfers.txt`.
-- **Closed-footpath fast path** – if your `transfers.txt` is the entire intended relation, [`assert_footpaths_closed()`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html#method.assert_footpaths_closed) opts into a single-pass O(E) relaxation instead of Dijkstra.
-- **`RaptorCache`** – reusable scratch allocations across queries against one timetable. **`RaptorCachePool`** is the `Sync` variant for thread pools.
-- **Per-leg timing** – [`journey.with_timing(&tt, depart, origin_walk)`](https://docs.rs/vulture/latest/vulture/struct.Journey.html#method.with_timing) reconstructs trip IDs and per-leg depart/arrive times. `Journey.plan` alone is just topology.
-- **Wheelchair-accessibility filter** – chain [`require_wheelchair_accessible()`](https://docs.rs/vulture/latest/vulture/struct.Query.html#method.require_wheelchair_accessible) on the query builder to skip trips where `trips.wheelchair_accessible = 2` and stops where `stops.wheelchair_boarding = 2`. Default behaviour is unchanged.
-- **Multi-day search** – [`GtfsTimetable::new_with_overnight_days(&gtfs, date, OvernightDays(n))`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html#method.new_with_overnight_days) loads `n` additional service days after the base date, shifting day-`d` trips into a single time axis so a 23:00 query can catch tomorrow morning's first train.
-- **Per-leg shape access** – [`GtfsTimetable::shape_for_leg(&gtfs, trip_id, board, alight)`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html#method.shape_for_leg) returns the polyline points (lat, lon) for one journey leg, sliced exactly when `shape_dist_traveled` is present and projected onto the polyline as a fallback. Used by the [live demo](https://urschrei.github.io/vulture/) to draw journeys on a MapLibre map.
-- **Feed introspection** – [`GtfsTimetable::features()`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html#method.features) returns a [`FeedFeatures`](https://docs.rs/vulture/latest/vulture/gtfs/struct.FeedFeatures.html) snapshot (stop / trip / route counts, `transfers.txt` breakdown by `transfer_type`, parent stations, shaped trips, wheelchair flags, current footpath state) so callers can describe a feed without reaching back to the source `Gtfs`. [`FeedFeatures::suggestions()`](https://docs.rs/vulture/latest/vulture/gtfs/struct.FeedFeatures.html#method.suggestions) returns a heuristic, advisory list of vulture features that might be useful given the snapshot (e.g. "transfers.txt is empty: call `with_walking_footpaths`"). The bundled demo shows both under each loaded feed.
+- **`Timetable` trait** – the network abstraction. [`GtfsTimetable`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html) covers GTFS; [implement directly](https://docs.rs/vulture/latest/vulture/trait.Timetable.html) for non-GTFS data.
+- **Typestate query builder** – `tt.query().from(...).to(...).max_transfers(...).depart_at(...).run()`. Order is compile-time enforced; `.depart_at(...)` / `.depart_in_window(...)` switch the return type.
+- **Multi-source / multi-target** – `.from(...)` / `.to(...)` accept a `StopIdx`, a slice, a `Vec`, or `(stop, walk_offset)` pairs. Use `station_stops(parent_id)` for any-platform queries.
+- **Range queries** – `.depart_in_window(times)` returns a Pareto profile. Serial path is rRAPTOR; `.run_par()` / `.run_with_pool(&pool)` use a parallel naïve batch.
+- **`Label` trait** – default [`ArrivalTime`](https://docs.rs/vulture/latest/vulture/struct.ArrivalTime.html) for single-criterion. [`vulture::labels`](https://docs.rs/vulture/latest/vulture/labels/index.html) ships [`ArrivalAndWalk`](https://docs.rs/vulture/latest/vulture/labels/struct.ArrivalAndWalk.html) (arrival vs walking time) and [`ArrivalAndFare`](https://docs.rs/vulture/latest/vulture/labels/struct.ArrivalAndFare.html) (arrival vs accumulated fare). Custom impls plug in via [`Query::with_context`](https://docs.rs/vulture/latest/vulture/struct.Query.html#method.with_context).
+- **Walking footpaths from coordinates** – [`with_walking_footpaths(&gtfs, max_dist_m, speed_m_per_s)`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html#method.with_walking_footpaths) builds bidirectional R-tree edges, preserving existing `transfers.txt`.
+- **Closed-footpath fast path** – [`assert_footpaths_closed()`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html#method.assert_footpaths_closed) opts into single-pass `O(E)` relaxation instead of Dijkstra.
+- **`RaptorCache`** – reusable scratch allocations per timetable. **`RaptorCachePool`** is the `Sync` variant.
+- **Per-leg timing** – [`journey.with_timing(&tt, depart, origin_walk)`](https://docs.rs/vulture/latest/vulture/struct.Journey.html#method.with_timing) attaches trip IDs and per-leg depart / arrive times to a `Journey`.
+- **Wheelchair-accessibility filter** – [`require_wheelchair_accessible()`](https://docs.rs/vulture/latest/vulture/struct.Query.html#method.require_wheelchair_accessible) skips trips and stops flagged `NotAvailable` in GTFS.
+- **Multi-day search** – [`GtfsTimetable::new_with_overnight_days(&gtfs, date, OvernightDays(n))`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html#method.new_with_overnight_days) loads `n` additional service days, shifting day-`d` trips by `d × 86 400` seconds onto one time axis.
+- **Per-leg shape access** – [`GtfsTimetable::shape_for_leg(&gtfs, trip_id, board, alight)`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html#method.shape_for_leg) returns the polyline points for one leg, sliced via `shape_dist_traveled` when present.
+- **Feed introspection** – [`GtfsTimetable::features()`](https://docs.rs/vulture/latest/vulture/gtfs/struct.GtfsTimetable.html#method.features) returns a [`FeedFeatures`](https://docs.rs/vulture/latest/vulture/gtfs/struct.FeedFeatures.html) snapshot. [`FeedFeatures::suggestions()`](https://docs.rs/vulture/latest/vulture/gtfs/struct.FeedFeatures.html#method.suggestions) returns an advisory string list mapping the snapshot to relevant vulture knobs.
 
 ## When To Use What
 
@@ -191,7 +189,7 @@ The `vulture/examples/` directory has four self-contained, synthetic-network exa
 
 ## Perf
 
-Single-query latency, warm `RaptorCache`, M-series Apple Silicon, single thread. Full numbers (load times, multi-trip queries, methodology) in [`docs/cross-city-benchmarks.md`](docs/cross-city-benchmarks.md):
+Single-query latency. Warm `RaptorCache`; M-series Apple Silicon; single thread. Full table and methodology in [`docs/cross-city-benchmarks.md`](docs/cross-city-benchmarks.md).
 
 | Feed | Stops | Trips/day | Representative query | Latency |
 | --- | ---: | ---: | --- | ---: |
@@ -200,11 +198,11 @@ Single-query latency, warm `RaptorCache`, M-series Apple Silicon, single thread.
 | Berlin VBB | 42,000 | 71,000 | Hbf → Alex (station-to-station) | 576 µs |
 | Paris IDFM | 54,000 | 146,000 | Châtelet → Versailles RD | 19 ms |
 
-For range-query latencies (serial rRAPTOR vs parallel naïve batch), see the [bench source](vulture/benches/gtfs.rs) and the linked benchmark page. For a head-to-head against an independent RAPTOR implementation (the TypeScript [`raptor-journey-planner`](https://github.com/planarnetwork/raptor)) on the same four feeds – including the correctness diff and a diagnosed timezone bug in the upstream library – see [`docs/cross-impl-comparison.md`](docs/cross-impl-comparison.md).
+Range-query numbers (serial rRAPTOR vs parallel naïve batch): see the [bench source](vulture/benches/gtfs.rs) and the linked benchmarks page. Head-to-head against the TypeScript [`raptor-journey-planner`](https://github.com/planarnetwork/raptor): [`docs/cross-impl-comparison.md`](docs/cross-impl-comparison.md).
 
 ### Consumer build profile
 
-The numbers above are measured with `lto = true` and `codegen-units = 1` in this workspace's `[profile.release]`. Cargo does not propagate workspace profile settings to downstream crates, so a vanilla `cargo add vulture` build inherits Cargo's defaults (`lto = false`, `codegen-units = 16`); only `opt-level = 3` is shared by default. Consumers that want to match the numbers above should set the same in their own `Cargo.toml`:
+The numbers above are measured with `lto = true` and `codegen-units = 1` in this workspace's `[profile.release]`. Cargo does not propagate workspace profile settings to downstream crates; a vanilla `cargo add vulture` build inherits Cargo's defaults (`lto = false`, `codegen-units = 16`, `opt-level = 3`). To match these numbers from a downstream crate, set:
 
 ```toml
 [profile.release]
@@ -212,54 +210,44 @@ lto = true
 codegen-units = 1
 ```
 
-Cross-crate inlining (`lto = true`) is the larger of the two effects; `codegen-units = 1` makes the inliner's job easier and trims a few more percent.
-
 ## Soundness
 
-For an issue-by-issue walk through the algorithmic correctness of the implementation against the paper – including the historical record of bugs found and fixed – see [`docs/soundness.md`](docs/soundness.md). The [`vulture-proptest`](vulture-proptest/) harness runs the algorithm against a brute-force reference solver on every test invocation as live validation.
+[`docs/soundness.md`](docs/soundness.md) audits the implementation issue-by-issue against the paper. The [`vulture-proptest`](vulture-proptest/) harness runs the algorithm against a brute-force reference solver on every test invocation.
 
 ## Testing
 
 ### Correctness
 
-Three overlapping layers, all run by `cargo nextest r` on every PR:
+Three layers, all run by `cargo nextest r` on every PR:
 
-- **Unit tests** in `vulture/src/test.rs` cover the algorithm (single-source, multi-source, range queries, footpath relaxation, wheelchair filtering, multi-day overnight) and the GTFS adapter against hand-built `SimpleTimetable` fixtures and the bundled Delhi Metro feed.
-- **Doctests** on every public type with a non-trivial contract (`Label`, `Query`, `Journey`, `RaptorCache`, `GtfsTimetable::station_stops`, etc.)
-- **Property-based tests** in [`vulture-proptest`](vulture-proptest/) generate random transit networks and check the algorithm against a brute-force reference solver. Powered by [Hegel](https://github.com/hegeldev/hegel-rust).
+- **Unit tests** in `vulture/src/test.rs` cover the algorithm (single-source, multi-source, range, footpath relaxation, wheelchair filtering, overnight) against hand-built `SimpleTimetable` fixtures and the bundled Delhi Metro feed.
+- **Doctests** on every public type with a non-trivial contract (`Label`, `Query`, `Journey`, `RaptorCache`, `GtfsTimetable::station_stops`, etc.).
+- **Property-based tests** in [`vulture-proptest`](vulture-proptest/) generate random transit networks and check the algorithm against a brute-force reference solver, via [Hegel](https://github.com/hegeldev/hegel-rust).
 
-The proptest harness ships three generator layers – Layer 1 (1–2 routes, 2–4 stops, no footpaths), Layer 2 (adds 1–4 footpaths), Layer 3 (1–4 routes, up to 6 stops, optional footpaths, multi-source/multi-target queries with walk offsets, per-route fares for fare-label tests) – and six properties:
+The proptest harness has three generator layers (Layer 1: 1–2 routes, 2–4 stops, no footpaths. Layer 2: adds 1–4 footpaths. Layer 3: 1–4 routes, up to 6 stops, optional footpaths, multi-source / multi-target queries, per-route fares). Properties:
 
 | Property | What it checks |
 | --- | --- |
-| `layer{1,2,3}_matches_reference` | Algorithm output equals the brute-force reference solver's Pareto front of `(arrival, trip_count)` for randomly generated networks at each layer. |
-| `parallel_naive_matches_serial_rrap` | The serial rRAPTOR range path and the parallel naïve batch return the same Pareto profile. |
-| `range_query_matches_reference` | Range-query output equals an independent brute-force reference: per-`τ` solve plus the same 3-D Pareto filter (later depart, fewer transfers, earlier arrival) vulture's `filter_range_pareto_front` uses. |
-| `fare_label_matches_per_leg_sum` | The `ArrivalAndFare` label's accumulated fare equals the per-leg sum of fares on every returned journey. |
+| `layer{1,2,3}_matches_reference` | Algorithm output equals the reference Pareto front of `(arrival, trip_count)` at each layer. |
+| `parallel_naive_matches_serial_rrap` | Serial rRAPTOR range path and parallel naïve batch return the same Pareto profile. |
+| `range_query_matches_reference` | Range-query output equals a per-`τ` reference solve plus the same 3-D Pareto filter `filter_range_pareto_front` uses. |
+| `fare_label_matches_per_leg_sum` | `ArrivalAndFare`'s accumulated fare equals the per-leg fare sum on every returned journey. |
 
-Hegel persists shrunk failing seeds to `.hegel/` so failures are deterministically reproducible. See [`vulture-proptest/README.md`](vulture-proptest/README.md) for the layer/issue map and instructions for adding a new layer or property.
+Hegel persists shrunk failing seeds to `.hegel/`. See [`vulture-proptest/README.md`](vulture-proptest/README.md) for the layer / issue map.
 
 ### Perf regressions
 
-The full criterion suite (`cargo bench --features gtfs-bench`) takes around five minutes; running it on every change is friction enough that perf regressions slip through. The May 2026 `opt-level = "z"` regression (changelog: "Perf: native release back to opt-level = 3") was a 70-80 % slowdown on real-feed queries that lived on `main` for several commits before it was caught.
+Run `scripts/perf-smoke.sh` before finalising any feature or `Cargo.toml` profile change. It runs the Delhi `gtfs_query` group from [`vulture/benches/gtfs.rs`](vulture/benches/gtfs.rs) in criterion `--quick` mode against the last saved baseline in `target/criterion/`. Wall time: ~2 s with no source change, ~24 s after a source edit (the release profile's LTO link dominates). Criterion prints "Performance has regressed." when the median moves past noise.
 
-A smoke wrapper exists for the case where you want a quick "did I break the hot path" check before finalising a feature:
+The first run on a fresh checkout has no prior baseline; run twice, or pass `--save-baseline <name>` through to criterion (extra arguments are forwarded). Skip only when the change cannot affect runtime. The full criterion suite (`cargo bench --features gtfs-bench`, ~5 min) is the right thing to run before tagging a release.
 
-```
-scripts/perf-smoke.sh
-```
-
-It runs the Delhi `gtfs_query` group from [`vulture/benches/gtfs.rs`](vulture/benches/gtfs.rs) in criterion `--quick` mode against the last saved baseline in `target/criterion/`. Wall time is ~2 s with no source change, ~24 s after a source edit (the release profile's `lto = true` plus `codegen-units = 1` link cost dominates re-link). Criterion prints "Performance has regressed." when the median moves past noise; on the missed-regression case above it would have flagged `transfer_2trip` immediately.
-
-The first run on a fresh checkout has no prior baseline; run it twice to start the comparison stream, or pass `--save-baseline <name>` through to criterion (extra arguments are forwarded). Skip only if the change cannot affect runtime (docs, comments, CI config). The full criterion suite remains the right thing to run before tagging a release.
-
-When the smoke check flags a regression, [`vulture/examples/profile-delhi.rs`](vulture/examples/profile-delhi.rs) is the next step down: a tight loop over the same three Delhi queries with no criterion-harness overhead, sized for `samply` / `cargo-flamegraph`. Build with `cargo build --profile profiling --example profile-delhi` (the workspace `[profile.profiling]` block keeps release codegen but adds DWARF + a packed `.dSYM`), then `samply record -- target/profiling/examples/profile-delhi`.
+For diagnosis after a regression: [`vulture/examples/profile-delhi.rs`](vulture/examples/profile-delhi.rs) loops the same three queries with no criterion-harness overhead, sized for `samply` / `cargo-flamegraph`. Build with `cargo build --profile profiling --example profile-delhi`, then `samply record -- target/profiling/examples/profile-delhi`.
 
 ## Cargo features
 
-- `parallel` (default-on) – pulls in `rayon`, enables `Query::run_par` / `Query::run_with_pool`. Opt out with `default-features = false` for wasm or minimal builds; `RaptorCachePool` itself stays available.
-- `gtfs-bench` – enables the `gtfs` criterion benchmark.
-- `internal` – enables the `manual` criterion benchmark over `manual::SimpleTimetable`.
+- `parallel` (default-on) – enables `Query::run_par` / `Query::run_with_pool` via `rayon`. `default-features = false` drops the dependency; `RaptorCachePool` stays available.
+- `gtfs-bench` – the `gtfs` criterion benchmark.
+- `internal` – the `manual` criterion benchmark over `manual::SimpleTimetable`.
 
 ## License
 
