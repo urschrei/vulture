@@ -85,13 +85,6 @@ pub struct RaptorCache<L: Label = ArrivalTime> {
     /// far this query. Used to make per-round carry-forward sparse:
     /// only clone bags at set bits, not all `n_stops`.
     pub(crate) ever_reached: FixedBitSet,
-
-    /// Bitset of target stops for the current query. Re-populated
-    /// once at the start of each query from the targets slice.
-    /// Used by the rounds loop to tighten `pt_threshold`
-    /// incrementally on every successful insert at a destination,
-    /// rather than recomputing the threshold at round boundaries.
-    pub(crate) is_dest: FixedBitSet,
 }
 
 impl<L: Label> RaptorCache<L> {
@@ -117,7 +110,6 @@ impl<L: Label> RaptorCache<L> {
             origin_set: FixedBitSet::with_capacity(n_stops as usize),
             relax_heap: BinaryHeap::new(),
             ever_reached: FixedBitSet::with_capacity(n_stops as usize),
-            is_dest: FixedBitSet::with_capacity(n_stops as usize),
         }
     }
 
@@ -155,7 +147,6 @@ impl<L: Label> RaptorCache<L> {
         self.board_detail.clear();
         self.marked_stops.clear();
         self.ever_reached.clear();
-        self.is_dest.clear();
 
         // Sparse-set reset: walk q_routes, clear corresponding q_entry slots.
         for r in self.q_routes.drain(..) {

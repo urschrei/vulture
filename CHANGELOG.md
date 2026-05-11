@@ -2,28 +2,26 @@
 
 ## Unreleased
 
-### Revert: walk-only output-filter comparator
+### Per-target output + per-target threshold
 
-The "walk-only comparator" addition to `run_per_call_query`'s output Pareto filter (shipped in 0.24.0) is reverted. The filter rejected trip-based journeys whenever a walk-only path to *any* target produced a label that weakly dominated theirs after `target_walk` extension. In single-criterion `ArrivalTime` multi-target queries this drops journeys the existing `pt_threshold` mechanism (and the brute-force reference) accept: trip-based labels tied with walk-only on effective arrival across different targets are kept by the conservative `raw < walk_only_tau_star` rule that `reference_solve` uses.
+The query output is now a per-`(target_stop, target_walk)` Pareto front rather than a cross-target one, and the algorithm's pruning threshold matches the change: a candidate label is rejected only when *every* target slot's `best_arrival` bag already weakly dominates it. Two user-visible effects:
 
-The rest of the `pt_threshold` bag-valued Pareto-aware change from 0.24.0 stays. The multi-criterion correctness improvements for `ArrivalAndWalk` / `ArrivalAndFare` and custom `Label` impls (admitting Pareto-incomparable labels that the old scalar threshold dropped) are unchanged.
+- `Journey<L>` carries a new field `target_walk: Duration`. For a query `.to([(stop_1, 0_s), (stop_1, 30_s)])` the same `target` stop can now appear with different `target_walk`s and produce separate journeys, where the previous output filter collapsed them on `(plan.len, label)`. For a parent-station expansion like `.to(tt.station_stops(parent_id))`, journeys to platforms with different walk-offsets are kept as separate entries.
+- Multi-criterion labels (`ArrivalAndWalk`, `ArrivalAndFare`, custom `Label` impls) get the same per-target treatment plus the bag-aware threshold. Pareto-incomparable labels that the old scalar `pt_threshold` dropped on arrival alone now survive when at least one target's bag does not dominate them.
 
-`vulture-proptest`'s `arrival_and_walk_matches_reference` property is re-`#[ignore]`d. The brute-force reference solver and the harness's `arrival_and_walk_front` projector stay in tree as infrastructure. Successive Hegel runs revealed two further semantic gaps between vulture's emission and a Pareto-correct reference — same-stop-different-walks target collapses in the output filter, and cross-target `pt_threshold` conservatism that interacts with multi-criterion dominance differently than with single-criterion — neither of which is in scope here. The doc comment on the ignored test captures the open shape.
+Implementation:
 
+- `LabelBag::dominates_label(&L) -> bool` (new): true if any bag entry weakly dominates the candidate.
+- `LabelBag` / `algorithm::label_bag::all_targets_dominate(best_arrival, targets, &label)` predicate: true iff every target slot's bag dominates the candidate. The `target_walk` extension cancels out of the dominance comparison (both sides shift by the same amount), so the check operates on raw labels against raw `best_arrival` bags — no separate threshold bag is maintained.
+- The route-scan alight check (`per_call.rs`) and `insert_into_bag` (`label_bag.rs`) both use the new predicate. The scalar / bag-valued `pt_threshold`, `best_to_any_target`, and `tighten_pt_threshold` are removed; the per-`best_arrival[stop]` Pareto check covers the same correctness shape and tracks per-target rather than cross-target.
+- `RaptorCache.is_dest` is removed (it existed to short-circuit `tighten_pt_threshold`).
+- The output Pareto filter in `run_per_call_query` groups by `(target, target_walk)`. `algorithm::range::filter_range_pareto_front` does the same for range queries.
 
-### Multi-criterion: Pareto-aware `pt_threshold`
+**Behaviour change for callers.** Multi-target queries (single-criterion or multi-criterion) now return one Pareto front per `(target_stop, target_walk)` slot rather than a single cross-target front. Single-target queries are unaffected. The new `Journey.target_walk` field is the slot's walk-offset; callers reading the previous `target` field continue to work, with the caveat that two journeys can now share a `target` stop and differ on `target_walk`.
 
-The algorithm's `pt_threshold` mechanism was previously a scalar `SecondOfDay` tracking the best effective arrival at any target. Three pruning sites checked candidate labels against it on arrival alone: the route-scan inner loop (`per_call.rs`), `insert_into_bag` (`label_bag.rs`), and `tighten_pt_threshold` (`boarding.rs`). For single-criterion `ArrivalTime` the checks were correctness-equivalent to Pareto dominance; for multi-criterion labels (`ArrivalAndWalk`, `ArrivalAndFare`, custom impls) they could reject labels that were Pareto-incomparable on the second criterion, dropping front entries the algorithm should have surfaced.
+`vulture-proptest`'s `arrival_and_walk_matches_reference` property is active and passing 500 cases at layer 2. `raptor_front`, `arrival_and_walk_front`, `reference_solve`, `reference_solve_arrival_and_walk`, and `reference_range_solve` all use the per-`(target_stop, target_walk)` keyed output shape.
 
-`pt_threshold` is now `LabelBag<L>`: a Pareto front of effective target labels rather than a scalar arrival. `LabelBag` gains a `dominates_label(&L) -> bool` method that returns true when any bag entry weakly dominates the candidate. All three pruning sites use the new Pareto-aware check. The route-scan inner loop now computes `new_label` via `extend_by_trip` *before* the dominance check, rather than gating on raw arrival; for `ArrivalTime` that extra call is a one-field copy, so single-criterion perf is unchanged (the perf-smoke bench shows no change across the three Delhi queries).
-
-The output filter in `run_per_call_query` now also filters trip-based journeys against walk-only comparator labels (`labels[0][target]` extended by `target_walk`). This closes a residual gap where a multi-criterion label survives the bag-valued threshold check on its raw form but becomes Pareto-dominated by a walk-only path at another target once extended by `target_walk` at emission. RAPTOR's empty-plan filter is unchanged — walk-only journeys are still not emitted; they only participate in dominance.
-
-The `arrival_and_walk_matches_reference` property in `vulture-proptest` is now active and passing on 500 cases at layer 2.
-
-**Behaviour change for callers.** Multi-criterion queries (`query_with_label::<ArrivalAndWalk>()`, `query_with_label::<ArrivalAndFare>()`, custom `Label` impls) now return strictly more Pareto-non-dominated journeys than before, and no longer return trip-based journeys that are Pareto-dominated by walk-only paths. Single-criterion `ArrivalTime` queries are unchanged.
-
-**Alternative considered.** A `const SINGLE_CRITERION: bool` associated constant on the `Label` trait, with the pruning sites branching on it: fast scalar path for `ArrivalTime`, Pareto-aware path for everything else. Discarded because the bag-valued threshold is cleaner (single uniform code path, no dead-code branches) and the perf cost for `ArrivalTime` is bounded by one extra one-field-copy call per rejected route-scan iteration — empirically zero in the smoke bench.
+**Alternative considered.** A `const SINGLE_CRITERION: bool` associated constant on the `Label` trait, branching the pruning sites between a fast scalar path for `ArrivalTime` and a Pareto path for everything else. Discarded for the per-target check above, which is one uniform code path: for single-criterion the per-target bags are size 1, so the dominance check is one `<=` per target — the same cost the old scalar threshold paid (`arr >= pt_threshold` was also linear in target evaluation via `best_to_any_target` at round boundaries).
 
 ## 0.23.0
 

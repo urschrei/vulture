@@ -23,30 +23,48 @@ use crate::time::SecondOfDay;
 /// first (later departure, fewer transfers, earlier arrival), then
 /// sweep with mutual-domination removal.
 pub(crate) fn filter_range_pareto_front<L: Label>(
-    mut all: Vec<RangeJourney<L>>,
+    all: Vec<RangeJourney<L>>,
 ) -> Vec<RangeJourney<L>> {
-    all.sort_by(|a, b| {
-        b.depart
-            .cmp(&a.depart)
-            .then(a.journey.plan.len().cmp(&b.journey.plan.len()))
-            .then(a.journey.arrival().cmp(&b.journey.arrival()))
-    });
-    let mut front: Vec<RangeJourney<L>> = Vec::with_capacity(all.len());
-    'outer: for r in all {
-        for f in &front {
-            if f.depart >= r.depart
-                && f.journey.plan.len() <= r.journey.plan.len()
-                && f.journey.label.dominates(&r.journey.label)
-            {
-                continue 'outer;
-            }
-        }
-        front.retain(|f| {
-            !(r.depart >= f.depart
-                && r.journey.plan.len() <= f.journey.plan.len()
-                && r.journey.label.dominates(&f.journey.label))
+    // Per-`(target_stop, target_walk)` slot Pareto filter. Each slot is
+    // a distinct destination; range entries to different slots are not
+    // directly compared. Within each slot the existing 3-D
+    // (depart desc, plan_len asc, arrival asc) ordering applies.
+    let mut by_slot: std::collections::BTreeMap<
+        (crate::ids::StopIdx, crate::time::Duration),
+        Vec<RangeJourney<L>>,
+    > = std::collections::BTreeMap::new();
+    for r in all {
+        by_slot
+            .entry((r.journey.target, r.journey.target_walk))
+            .or_default()
+            .push(r);
+    }
+    let mut front: Vec<RangeJourney<L>> = Vec::new();
+    for (_, mut slot) in by_slot {
+        slot.sort_by(|a, b| {
+            b.depart
+                .cmp(&a.depart)
+                .then(a.journey.plan.len().cmp(&b.journey.plan.len()))
+                .then(a.journey.arrival().cmp(&b.journey.arrival()))
         });
-        front.push(r);
+        let mut slot_front: Vec<RangeJourney<L>> = Vec::with_capacity(slot.len());
+        'outer: for r in slot {
+            for f in &slot_front {
+                if f.depart >= r.depart
+                    && f.journey.plan.len() <= r.journey.plan.len()
+                    && f.journey.label.dominates(&r.journey.label)
+                {
+                    continue 'outer;
+                }
+            }
+            slot_front.retain(|f| {
+                !(r.depart >= f.depart
+                    && r.journey.plan.len() <= f.journey.plan.len()
+                    && r.journey.label.dominates(&f.journey.label))
+            });
+            slot_front.push(r);
+        }
+        front.extend(slot_front);
     }
     front
 }
@@ -140,18 +158,13 @@ pub(crate) fn raptor_range_rrap_arrival<T: Timetable + ?Sized>(
         origin_set,
         relax_heap,
         ever_reached,
-        is_dest,
         ..
     } = cache;
 
-    // origin_set and is_dest are both constant across τ scans;
-    // populate them once before the scan loop.
+    // origin_set is constant across τ scans; populate once.
     origin_set.clear();
     for &(source, _) in origins {
         origin_set.insert(source.idx());
-    }
-    for &(t, _) in targets {
-        is_dest.insert(t.idx());
     }
 
     let mut output: Vec<RangeJourney<ArrivalTime>> = Vec::new();
@@ -195,7 +208,6 @@ pub(crate) fn raptor_range_rrap_arrival<T: Timetable + ?Sized>(
             walked_buf,
             relax_heap,
             ever_reached,
-            is_dest,
             transfers,
             require_wheelchair_accessible,
             targets,

@@ -83,18 +83,25 @@ impl<L: Label> Default for LabelBag<L> {
 }
 
 /// Try to insert `(label, step)` into `labels[k][stop]` and the
-/// boarding tree. Updates `best_arrival[stop]` and marks the stop
-/// in `out`. Returns `true` if any insertion happened.
+/// boarding tree. Updates `best_arrival[stop]` and marks the stop in
+/// `out`. Returns `true` if any insertion happened.
 ///
-/// Labels weakly dominated by the `pt_threshold` bag are rejected before
-/// the bag insert: such a label cannot lead to a Pareto-optimal journey
-/// at any target (a known better label already exists at some target),
+/// Labels are rejected before the bag insert when *every* target's
+/// `best_arrival` bag already weakly dominates the candidate: such a
+/// label cannot lead to a Pareto-optimal journey at any target slot,
 /// so any boarding-tree entry it would produce is a ghost step that
-/// reconstruction would later surface as a dominated journey. The route-
-/// scan inner loop applies the same Pareto-aware guard; without it here
-/// the footpath-relax path silently re-introduces dominated journeys
-/// whenever a multi-target query has one target reachable via a faster
-/// walk-only path than another target's trip-based arrival.
+/// reconstruction would later surface as a dominated journey.
+///
+/// Crucially the check uses an *all-targets* quantifier, not the older
+/// scalar "min effective" cross-target threshold. With per-target output
+/// semantics, a label that is dominated by one target's best is still
+/// worth keeping if it could lead to a non-dominated journey at *some
+/// other* target (e.g. a walking-footpath label at an intermediate stop
+/// that ends up at a target the label-emitter couldn't reach via
+/// transit). The `target_walk` extension cancels out of the dominance
+/// comparison (extending both sides by the same `target_walk` preserves
+/// the dominance relation), so the check operates on raw labels against
+/// raw `best_arrival` bags.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn insert_into_bag<L: Label>(
     labels: &mut [Vec<LabelBag<L>>],
@@ -102,13 +109,13 @@ pub(crate) fn insert_into_bag<L: Label>(
     board_detail: &mut BoardingTree,
     out: &mut Vec<StopIdx>,
     ever_reached: &mut FixedBitSet,
-    pt_threshold: &LabelBag<L>,
+    targets: &[(StopIdx, crate::time::Duration)],
     k: K,
     stop: StopIdx,
     label: L,
     step: Step,
 ) -> bool {
-    if pt_threshold.dominates_label(&label) {
+    if all_targets_dominate(best_arrival, targets, &label) {
         return false;
     }
     let added = labels[k][stop.idx()].insert(label);
@@ -120,4 +127,20 @@ pub(crate) fn insert_into_bag<L: Label>(
     ever_reached.insert(stop.idx());
     out.push(stop);
     true
+}
+
+/// Returns `true` iff every target slot's `best_arrival` bag weakly
+/// dominates `label`. The per-target pruning predicate used by the
+/// algorithm's insert sites — see [`insert_into_bag`] for context.
+/// Empty `targets` returns `false` (no targets means no slots dominate,
+/// so the label is not pruned).
+pub(crate) fn all_targets_dominate<L: Label>(
+    best_arrival: &[LabelBag<L>],
+    targets: &[(StopIdx, crate::time::Duration)],
+    label: &L,
+) -> bool {
+    !targets.is_empty()
+        && targets
+            .iter()
+            .all(|&(t, _)| best_arrival[t.idx()].dominates_label(label))
 }
