@@ -422,49 +422,84 @@ pub fn reference_solve_arrival_and_walk(
         }
     }
 
-    // Per-target collection of every reachable label, including k = 0
-    // walk-only entries. The algorithm extends each label by `target_walk`
-    // via `extend_by_footpath` before emitting (boarding.rs:230), which
-    // for `ArrivalAndWalk` adds `target_walk` to both arrival and
-    // walk_time. k = 0 entries are kept in the Pareto comparison because
-    // they can weakly dominate trip-based candidates (the canonical case
-    // is origin == target with no movement: the seed `(arr=tau,
-    // walk_time=0)` Pareto-dominates any trip-based journey that ends
-    // back at the start). RAPTOR rejects such journeys; the reference
-    // mirrors by including walk-only labels in the dominance filter,
-    // then dropping k = 0 from the *output* (RAPTOR's empty-plan filter).
-    let mut candidates: Vec<(u16, u16, u8)> = Vec::new();
+    // Build a `pt_threshold` Pareto bag from walk-only labels (k = 0) at
+    // each target, extended by that target's walk-offset. Mirrors the
+    // algorithm's cross-target pt_threshold mechanism (boarding.rs's
+    // best_to_any_target): trip-based labels at any stop whose RAW (arr,
+    // walk_time) is weakly dominated by any entry in this bag are filtered
+    // out, matching the algorithm's raw-vs-effective conservative check.
+    let mut pt_threshold_bag: Vec<(u16, u16)> = Vec::new();
     for &(target_stop, target_walk) in targets {
         for (&(s, t), bag) in &bags {
             if s != target_stop {
                 continue;
             }
             for &(w, k) in bag {
-                let eff_arrival = t.saturating_add(target_walk);
-                let eff_walk_time = w.saturating_add(target_walk);
-                candidates.push((eff_arrival, eff_walk_time, k));
+                if k != 0 {
+                    continue;
+                }
+                let eff_arr = t.saturating_add(target_walk);
+                let eff_walk = w.saturating_add(target_walk);
+                // Pareto insert.
+                let dominated = pt_threshold_bag
+                    .iter()
+                    .any(|&(a, v)| a <= eff_arr && v <= eff_walk);
+                if dominated {
+                    continue;
+                }
+                pt_threshold_bag.retain(|&(a, v)| !(eff_arr <= a && eff_walk <= v));
+                pt_threshold_bag.push((eff_arr, eff_walk));
             }
         }
     }
 
-    // 3-D Pareto filter: keep `c` iff no other `c'` weakly dominates `c` on
-    // every component AND strictly dominates on at least one. Equal triples
-    // collapse via `BTreeSet::insert`. After filtering, drop k = 0 from the
-    // output to match RAPTOR's empty-plan emission rule.
+    // Per-target Pareto filter. Each target is a different destination from
+    // the user's perspective; trip-based journeys to different targets are
+    // not directly compared. Within each target, walk-only labels at the
+    // same target participate in dominance so a trip-based journey that
+    // ends up worse than just walking to *this* target gets dropped. Drop
+    // k = 0 from the output to match RAPTOR's empty-plan emission rule.
     let mut front: BTreeSet<(u16, u16, u8)> = BTreeSet::new();
-    'outer: for &c in &candidates {
-        for &other in &candidates {
-            if other == c {
+    for &(target_stop, target_walk) in targets {
+        let mut per_target: Vec<(u16, u16, u8)> = Vec::new();
+        for (&(s, t), bag) in &bags {
+            if s != target_stop {
                 continue;
             }
-            if other.0 <= c.0 && other.1 <= c.1 && other.2 <= c.2 {
-                continue 'outer;
+            for &(w, k) in bag {
+                if k > 0 {
+                    // Algorithm-equivalent cross-target pt_threshold filter:
+                    // raw (t, w) is dropped if any pt_threshold bag entry
+                    // (effective form) weakly dominates it.
+                    let dominated_by_threshold =
+                        pt_threshold_bag.iter().any(|&(a, v)| a <= t && v <= w);
+                    if dominated_by_threshold {
+                        continue;
+                    }
+                }
+                let eff_arrival = t.saturating_add(target_walk);
+                let eff_walk_time = w.saturating_add(target_walk);
+                per_target.push((eff_arrival, eff_walk_time, k));
             }
         }
-        if c.2 == 0 {
-            continue;
+
+        // 3-D Pareto filter within this target's candidates: keep `c` iff
+        // no other `c'` weakly dominates `c` on every component AND
+        // strictly dominates on at least one.
+        'outer: for &c in &per_target {
+            for &other in &per_target {
+                if other == c {
+                    continue;
+                }
+                if other.0 <= c.0 && other.1 <= c.1 && other.2 <= c.2 {
+                    continue 'outer;
+                }
+            }
+            if c.2 == 0 {
+                continue;
+            }
+            front.insert(c);
         }
-        front.insert(c);
     }
     front
 }

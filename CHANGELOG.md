@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Revert: walk-only output-filter comparator
+
+The "walk-only comparator" addition to `run_per_call_query`'s output Pareto filter (shipped in 0.24.0) is reverted. The filter rejected trip-based journeys whenever a walk-only path to *any* target produced a label that weakly dominated theirs after `target_walk` extension. In single-criterion `ArrivalTime` multi-target queries this drops journeys the existing `pt_threshold` mechanism (and the brute-force reference) accept: trip-based labels tied with walk-only on effective arrival across different targets are kept by the conservative `raw < walk_only_tau_star` rule that `reference_solve` uses.
+
+The rest of the `pt_threshold` bag-valued Pareto-aware change from 0.24.0 stays. The multi-criterion correctness improvements for `ArrivalAndWalk` / `ArrivalAndFare` and custom `Label` impls (admitting Pareto-incomparable labels that the old scalar threshold dropped) are unchanged.
+
+`vulture-proptest`'s `arrival_and_walk_matches_reference` property is re-`#[ignore]`d. The brute-force reference solver and the harness's `arrival_and_walk_front` projector stay in tree as infrastructure. Successive Hegel runs revealed two further semantic gaps between vulture's emission and a Pareto-correct reference — same-stop-different-walks target collapses in the output filter, and cross-target `pt_threshold` conservatism that interacts with multi-criterion dominance differently than with single-criterion — neither of which is in scope here. The doc comment on the ignored test captures the open shape.
+
+
 ### Multi-criterion: Pareto-aware `pt_threshold`
 
 The algorithm's `pt_threshold` mechanism was previously a scalar `SecondOfDay` tracking the best effective arrival at any target. Three pruning sites checked candidate labels against it on arrival alone: the route-scan inner loop (`per_call.rs`), `insert_into_bag` (`label_bag.rs`), and `tighten_pt_threshold` (`boarding.rs`). For single-criterion `ArrivalTime` the checks were correctness-equivalent to Pareto dominance; for multi-criterion labels (`ArrivalAndWalk`, `ArrivalAndFare`, custom impls) they could reject labels that were Pareto-incomparable on the second criterion, dropping front entries the algorithm should have surfaced.
