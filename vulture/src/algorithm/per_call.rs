@@ -427,26 +427,6 @@ pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
     let mut journeys =
         extract_target_journeys(ctx, labels, board_detail, origin_set, targets, transfers);
 
-    // Walk-only comparators: the extended effective labels reachable at
-    // any target with `k = 0` (no transit boarding). RAPTOR's empty-plan
-    // filter drops these from the output, but they still participate in
-    // dominance: a trip-based journey is not worth emitting if a walk-
-    // only path produces a Pareto-equivalent-or-better label at *any*
-    // target (including this journey's target with its own walk offset
-    // and any other target the rider could have reached just by
-    // walking). For single-criterion `ArrivalTime` this duplicates the
-    // `pt_threshold` insert-time prune; for multi-criterion impls it
-    // closes the gap where a label at a non-target stop survives the
-    // Pareto-aware threshold check on its raw form but becomes
-    // dominated once extended by `target_walk` at emission.
-    let mut walk_only_comparators: SmallVec<[L; 8]> = SmallVec::new();
-    for &(target, walk) in targets {
-        for raw_label in labels[0][target.idx()].iter() {
-            let extended = raw_label.extend_by_footpath(ctx, target, target, walk);
-            walk_only_comparators.push(extended);
-        }
-    }
-
     // Output-side Pareto filter on (trip count, label). For any two
     // returned journeys neither weakly dominates the other on the
     // pair (plan.len, label). For single-criterion `ArrivalTime`
@@ -457,14 +437,17 @@ pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
     //
     // Sorted by plan.len ascending, then by `arrival()` ascending
     // as a tiebreaker so the iteration order is deterministic.
+    //
+    // Cross-target dominance is intentionally NOT applied: each target
+    // represents a different destination from the user's perspective,
+    // and a journey to one destination is not dominated by a faster
+    // journey to a different destination. The pt_threshold mechanism
+    // already drops trip-based journeys that cannot beat *any* walk-
+    // only path at insert time (single-criterion-conservative), so
+    // surviving journeys are per-target Pareto-non-dominated.
     journeys.sort_by_key(|j| (j.plan.len(), j.arrival()));
     let mut front: Vec<Journey<L>> = Vec::with_capacity(journeys.len());
     'outer: for j in journeys {
-        for c in &walk_only_comparators {
-            if c.dominates(&j.label) {
-                continue 'outer;
-            }
-        }
         for f in &front {
             if f.plan.len() <= j.plan.len() && f.label.dominates(&j.label) {
                 continue 'outer;

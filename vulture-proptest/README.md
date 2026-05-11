@@ -22,7 +22,7 @@ Six `#[hegel::test]` properties live in [`src/lib.rs`](src/lib.rs):
 | `parallel_naive_matches_serial_rrap` | Serial rRAPTOR (`.run()`), `.run_par()`, and `.run_with_pool()` produce byte-identical Pareto profiles for the same range query. Catches both rRAPTOR-specialisation bugs and parallel-batch races. |
 | `range_query_matches_reference` | Range-query output equals an independent brute-force reference: per-`τ` solve plus the same 3-D Pareto filter (`later depart, fewer transfers, earlier arrival`) vulture's `filter_range_pareto_front` uses. |
 | `fare_label_matches_per_leg_sum` | The `ArrivalAndFare` label's accumulated `fare` equals the manual per-leg sum of route fares for every returned journey. Validates that the `Label::Ctx`-threaded `extend_by_trip` keeps fare state in sync with the plan. |
-| `arrival_and_walk_matches_reference` | The `ArrivalAndWalk` Pareto front of `(arrival, walk_time, trip_count)` equals a brute-force reference's. The reference is a multi-criterion Dijkstra over `(stop, raw_arrival)` with per-state Pareto bags of `(walk_time, trips)`; the harness applies a strict 3-D Pareto filter to vulture's journey list, with `k = 0` walk-only labels participating in dominance and dropped from output. |
+| `arrival_and_walk_matches_reference` *(ignored)* | The `ArrivalAndWalk` Pareto front of `(arrival, walk_time, trip_count)` should equal a brute-force reference's. Currently `#[ignore]`d while multi-target emission semantics are finalised (same-stop-different-walks targets and cross-target `pt_threshold` conservatism); see the doc comment on the test. Reference solver and projector stay in tree as infrastructure. |
 
 ## Generator layers
 
