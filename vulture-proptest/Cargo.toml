@@ -3,7 +3,7 @@ name = "vulture-proptest"
 version = "0.0.0"
 edition = "2024"
 description = "Property-based test harness for the vulture crate, using a brute-force reference solver"
-license = "Apache-2.0"
+license = "Apache-2.0 OR BlueOak-1.0.0"
 repository = "https://github.com/urschrei/vulture"
 publish = false
 

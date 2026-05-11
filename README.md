@@ -254,4 +254,11 @@ For diagnosis after a regression: [`vulture/examples/profile-delhi.rs`](vulture/
 
 ## License
 
-Apache-2.0
+Dual-licensed under either of:
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [Blue Oak Model License 1.0.0](LICENSE-BLUEOAK)
+
+at your option. SPDX expression: `Apache-2.0 OR BlueOak-1.0.0`.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this work shall be dual-licensed as above, without any additional terms or conditions.

@@ -2,6 +2,8 @@
 name = "vulture-dotgraph"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0 OR BlueOak-1.0.0"
+publish = false
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

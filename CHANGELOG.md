@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Licensing
+
+Dual-licensed under `Apache-2.0 OR BlueOak-1.0.0`. The repository's prior single license (Apache-2.0) remains available; the Blue Oak Model License 1.0.0 is offered as an additional option. Downstream users may choose either. `LICENSE.md` has been renamed to `LICENSE-APACHE`; the Blue Oak text is in `LICENSE-BLUEOAK`.
+
 ## 0.24.0
 
 ### Per-target output + per-target threshold
