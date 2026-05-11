@@ -13,4 +13,4 @@ path = "src/lib.rs"
 
 [dependencies]
 vulture = { workspace = true }
-hegel = { git = "https://github.com/hegeldev/hegel-rust", package = "hegeltest" }
+hegel = { git = "https://github.com/hegeldev/hegel-rust", rev = "e8e0192b6ca5004a1230ec1eda336ad25a345a53", package = "hegeltest" }

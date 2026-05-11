@@ -22,7 +22,7 @@ Six `#[hegel::test]` properties live in [`src/lib.rs`](src/lib.rs):
 | `parallel_naive_matches_serial_rrap` | Serial rRAPTOR (`.run()`), `.run_par()`, and `.run_with_pool()` produce byte-identical Pareto profiles for the same range query. Catches both rRAPTOR-specialisation bugs and parallel-batch races. |
 | `range_query_matches_reference` | Range-query output equals an independent brute-force reference: per-`τ` solve plus the same 3-D Pareto filter (`later depart, fewer transfers, earlier arrival`) vulture's `filter_range_pareto_front` uses. |
 | `fare_label_matches_per_leg_sum` | The `ArrivalAndFare` label's accumulated `fare` equals the manual per-leg sum of route fares for every returned journey. Validates that the `Label::Ctx`-threaded `extend_by_trip` keeps fare state in sync with the plan. |
-| `arrival_and_walk_matches_reference` *(ignored)* | The `ArrivalAndWalk` Pareto front of `(arrival, walk_time, trip_count)` should equal a brute-force reference's. Currently `#[ignore]`d while multi-target emission semantics are finalised (same-stop-different-walks targets and cross-target `pt_threshold` conservatism); see the doc comment on the test. Reference solver and projector stay in tree as infrastructure. |
+| `arrival_and_walk_matches_reference` | The `ArrivalAndWalk` per-`(target_stop, target_walk)` Pareto front of `(arrival, walk_time, trip_count)` equals the brute-force reference's. Runs on `layer2_bounds`: footpaths active (walking accumulates non-trivially), no fares or accessibility flags, so the property stays focused on the label's arithmetic and dominance. |
 
 ## Generator layers
 

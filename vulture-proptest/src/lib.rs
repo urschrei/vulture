@@ -30,6 +30,13 @@ use vulture::labels::ArrivalAndWalk;
 /// strictly less than the best seen so far within the slot are kept.
 ///
 /// Output tuple: `(target_stop, target_walk_secs, arrival, trip_count)`.
+///
+/// `arrival` is a `u16` because the reference solver in `reference.rs` is
+/// u16-native throughout, and the two outputs must share a type to be
+/// comparable. The generator currently caps `tau` and trip times well
+/// below `u16::MAX`; if you ever widen those, widen this and the
+/// reference solver's `u16` time type together — otherwise the
+/// `u16::try_from` below will panic on the first oversized arrival.
 pub fn raptor_front(journeys: &[Journey]) -> BTreeSet<(u32, u32, u16, u8)> {
     let mut by_slot: std::collections::BTreeMap<(u32, u32), Vec<(u16, u8)>> =
         std::collections::BTreeMap::new();
@@ -138,7 +145,7 @@ fn run_property(tc: &hegel::TestCase, spec: &spec::NetworkSpec) {
         .query()
         .from(origins.as_slice())
         .to(targets.as_slice())
-        .max_transfers(spec.query.max_transfers as usize as u8);
+        .max_transfers(spec.query.max_transfers);
     if spec.query.require_wheelchair_accessible {
         q = q.require_wheelchair_accessible();
     }
@@ -161,13 +168,13 @@ fn run_property(tc: &hegel::TestCase, spec: &spec::NetworkSpec) {
     assert_eq!(our_front, theirs);
 }
 
-#[hegel::test(crate::proptest_settings())]
+#[hegel::test(crate::proptest_settings(), test_cases = 500)]
 fn layer1_matches_reference(tc: hegel::TestCase) {
     let spec = tc.draw(spec::network_spec(spec::layer1_bounds()));
     run_property(&tc, &spec);
 }
 
-#[hegel::test(crate::proptest_settings())]
+#[hegel::test(crate::proptest_settings(), test_cases = 500)]
 fn layer2_matches_reference(tc: hegel::TestCase) {
     let spec = tc.draw(spec::network_spec(spec::layer2_bounds()));
     run_property(&tc, &spec);
@@ -177,6 +184,225 @@ fn layer2_matches_reference(tc: hegel::TestCase) {
 fn layer3_matches_reference(tc: hegel::TestCase) {
     let spec = tc.draw(spec::network_spec(spec::layer3_bounds()));
     run_property(&tc, &spec);
+}
+
+/// Builder idempotence: registering every footpath a second time via
+/// `SimpleTimetable::footpath()` should not change the user-visible query
+/// result. The builder pushes unconditionally into the from-stop's
+/// adjacency list (`manual/mod.rs::footpath`), so a duplicate call leaves
+/// a duplicate `StopIdx` in `footpaths[a_idx]`. RAPTOR's footpath
+/// relaxation iterates that list; duplicates there should be redundant
+/// but harmless. This property surfaces that — if duplicates ever change
+/// the output, we want to know.
+#[hegel::test(crate::proptest_settings(), test_cases = 500)]
+fn duplicate_footpaths_preserve_query_result(tc: hegel::TestCase) {
+    let spec = tc.draw(spec::network_spec(spec::layer2_bounds()));
+    let single = spec::render(&spec);
+    let double = double_footpaths(&spec);
+
+    let run = |tt: &vulture::manual::SimpleTimetable<u8, u8, u16>| {
+        let origins: Vec<(vulture::StopIdx, Duration)> = spec
+            .query
+            .origins
+            .iter()
+            .map(|&(s, w)| (tt.stop_idx_of(&s), Duration(u32::from(w))))
+            .collect();
+        let targets: Vec<(vulture::StopIdx, Duration)> = spec
+            .query
+            .targets
+            .iter()
+            .map(|&(s, w)| (tt.stop_idx_of(&s), Duration(u32::from(w))))
+            .collect();
+        let journeys = tt
+            .query()
+            .from(origins.as_slice())
+            .to(targets.as_slice())
+            .max_transfers(spec.query.max_transfers)
+            .depart_at(SecondOfDay(spec.query.tau as u32))
+            .run();
+        raptor_front(&journeys)
+    };
+
+    let single_front = run(&single);
+    let double_front = run(&double);
+
+    if single_front != double_front {
+        tc.note(&format!("spec: {:#?}", spec));
+        tc.note(&format!("single front: {:?}", single_front));
+        tc.note(&format!("double front: {:?}", double_front));
+    }
+    assert_eq!(single_front, double_front);
+}
+
+#[cfg(test)]
+fn double_footpaths(spec: &spec::NetworkSpec) -> vulture::manual::SimpleTimetable<u8, u8, u16> {
+    // Re-render the spec, then layer a second `.footpath()` call on top
+    // of every transitively-closed edge — leaving each from-stop's
+    // adjacency list with a duplicate StopIdx.
+    let mut tt = spec::render(spec);
+    let closed = spec::close_footpaths(spec);
+    for from in 0..spec.n_stops {
+        for to in 0..spec.n_stops {
+            if from == to {
+                continue;
+            }
+            if closed[from as usize][to as usize].is_some() {
+                tt = tt.footpath(from, to);
+            }
+        }
+    }
+    tt
+}
+
+/// Robustness: the algorithm must not panic for any `depart_at` value in
+/// the full `u32` range — including `0`, `u32::MAX`, and values past the
+/// largest trip departure in the network. No reference solver: this is
+/// pure no-crash coverage of the algorithm's time arithmetic, since the
+/// main suite caps `tau` at 500 via the generator. Real GTFS feeds reach
+/// 86 399 (one second before midnight) and our internal time type is
+/// `u32`, so the algorithm needs to be defined across the whole range.
+#[hegel::test(crate::proptest_settings(), test_cases = 500)]
+fn extreme_tau_does_not_panic(tc: hegel::TestCase) {
+    use hegel::generators;
+
+    let spec = tc.draw(spec::network_spec(spec::layer2_bounds()));
+    let timetable = spec::render(&spec);
+    let tau = tc.draw(generators::integers::<u32>());
+
+    let origins: Vec<(vulture::StopIdx, Duration)> = spec
+        .query
+        .origins
+        .iter()
+        .map(|&(s, w)| (timetable.stop_idx_of(&s), Duration(u32::from(w))))
+        .collect();
+    let targets: Vec<(vulture::StopIdx, Duration)> = spec
+        .query
+        .targets
+        .iter()
+        .map(|&(s, w)| (timetable.stop_idx_of(&s), Duration(u32::from(w))))
+        .collect();
+
+    let _journeys = timetable
+        .query()
+        .from(origins.as_slice())
+        .to(targets.as_slice())
+        .max_transfers(spec.query.max_transfers)
+        .depart_at(SecondOfDay(tau))
+        .run();
+}
+
+/// Adversarial robustness: the `SimpleTimetable` builder accepts shapes
+/// the spec/render path doesn't normally produce — self-loop footpaths,
+/// zero walk times, zero-duration legs. The algorithm must not panic on
+/// any of them. No reference comparison: this is pure no-crash coverage.
+#[hegel::test(crate::proptest_settings(), test_cases = 500)]
+fn adversarial_builder_does_not_panic(tc: hegel::TestCase) {
+    use hegel::generators;
+    use vulture::manual::SimpleTimetable;
+
+    let mut tt: SimpleTimetable<u8, u8, u16> = SimpleTimetable::new();
+    // One route with zero-duration legs (every stop reached at the same
+    // second) — defensible as a degenerate but valid GTFS shape.
+    tt = tt.route(
+        0u8,
+        &[0u8, 1u8, 2u8],
+        &[(
+            0u16,
+            &[
+                (SecondOfDay(0), SecondOfDay(0)),
+                (SecondOfDay(0), SecondOfDay(0)),
+                (SecondOfDay(0), SecondOfDay(0)),
+            ],
+        )],
+    );
+
+    // A scatter of self-loop and zero-walk footpaths.
+    let n_extra = tc.draw(generators::integers::<u8>().min_value(0).max_value(6));
+    for _ in 0..n_extra {
+        let from = tc.draw(generators::integers::<u8>().min_value(0).max_value(2));
+        let to = tc.draw(generators::integers::<u8>().min_value(0).max_value(2));
+        let walk = tc.draw(generators::integers::<u16>().min_value(0).max_value(50));
+        tt = tt.footpath(from, to);
+        tt = tt.transfer_time(from, to, Duration(u32::from(walk)));
+    }
+
+    let origin = tc.draw(generators::integers::<u8>().min_value(0).max_value(2));
+    let target = tc.draw(generators::integers::<u8>().min_value(0).max_value(2));
+    let max_t = tc.draw(generators::integers::<u8>().min_value(0).max_value(5));
+    let tau = tc.draw(generators::integers::<u32>().min_value(0).max_value(1000));
+
+    let _ = tt
+        .query()
+        .from(&[(tt.stop_idx_of(&origin), Duration::ZERO)])
+        .to(&[(tt.stop_idx_of(&target), Duration::ZERO)])
+        .max_transfers(max_t)
+        .depart_at(SecondOfDay(tau))
+        .run();
+}
+
+/// Wheelchair sibling-trip switching: when two trips on the same route
+/// depart in close succession and only the later one is accessible, a
+/// `require_wheelchair_accessible()` query must pick the accessible
+/// trip — even though the earlier sibling is faster. This exercises
+/// `earliest_accessible_trip`'s skip-forward directly; the layer-3
+/// proptest hits the same path only when its ~10% accessibility-flag
+/// roll happens to produce exactly this shape.
+#[hegel::test(crate::proptest_settings(), test_cases = 500)]
+fn wheelchair_picks_accessible_sibling(tc: hegel::TestCase) {
+    use hegel::generators;
+    use vulture::manual::SimpleTimetable;
+
+    let dep1 = tc.draw(generators::integers::<u16>().min_value(0).max_value(200));
+    let leg = tc.draw(generators::integers::<u16>().min_value(1).max_value(50));
+    let gap = tc.draw(generators::integers::<u16>().min_value(1).max_value(30));
+    let dep2 = dep1 + gap;
+    let arr1 = dep1 + leg;
+    let arr2 = dep2 + leg;
+
+    let t = |secs: u16| (SecondOfDay(u32::from(secs)), SecondOfDay(u32::from(secs)));
+    let tt: SimpleTimetable<u8, u8, u16> = SimpleTimetable::new()
+        .route(
+            0u8,
+            &[0u8, 1u8],
+            &[(0u16, &[t(dep1), t(arr1)]), (1u16, &[t(dep2), t(arr2)])],
+        )
+        .no_wheelchair_on_trip(0u16);
+
+    let a = tt.stop_idx_of(&0u8);
+    let b = tt.stop_idx_of(&1u8);
+
+    let plain = tt
+        .query()
+        .from(&[(a, Duration::ZERO)])
+        .to(&[(b, Duration::ZERO)])
+        .max_transfers(1)
+        .depart_at(SecondOfDay(0))
+        .run();
+    let accessible = tt
+        .query()
+        .from(&[(a, Duration::ZERO)])
+        .to(&[(b, Duration::ZERO)])
+        .max_transfers(1)
+        .require_wheelchair_accessible()
+        .depart_at(SecondOfDay(0))
+        .run();
+
+    assert_eq!(plain.len(), 1, "plain query should find 1 journey");
+    assert_eq!(
+        accessible.len(),
+        1,
+        "wheelchair query should find 1 journey"
+    );
+    assert_eq!(
+        plain[0].arrival(),
+        SecondOfDay(u32::from(arr1)),
+        "plain picks earlier (inaccessible) trip"
+    );
+    assert_eq!(
+        accessible[0].arrival(),
+        SecondOfDay(u32::from(arr2)),
+        "wheelchair picks later accessible sibling"
+    );
 }
 
 /// Cross-check the two range-query implementations: the serial path runs
@@ -204,7 +430,7 @@ fn layer3_matches_reference(tc: hegel::TestCase) {
 /// algorithm correctness is already covered by `layer{1,2,3}_matches_reference`;
 /// this is the only test exercising the range-query path, so it must
 /// stay fast enough to run on every commit.
-#[hegel::test(crate::proptest_settings())]
+#[hegel::test(crate::proptest_settings(), test_cases = 500)]
 fn parallel_naive_matches_serial_rrap(tc: hegel::TestCase) {
     use vulture::RaptorCachePool;
 
@@ -218,11 +444,20 @@ fn parallel_naive_matches_serial_rrap(tc: hegel::TestCase) {
     let ps = timetable.stop_idx_of(&ps_raw);
     let pt = timetable.stop_idx_of(&pt_raw);
 
-    // Three-departure window around tau. Saturating sub ensures we
-    // stay non-negative even for tau == 0.
-    let tau = spec.query.tau as u32;
-    let step: u32 = 5;
-    let departures: Vec<SecondOfDay> = (0..3)
+    // Window of 2-5 departures spaced by a hegel-drawn step, descending
+    // from tau. Saturating sub stays non-negative even at tau == 0.
+    let tau = u32::from(spec.query.tau);
+    let n_dep = tc.draw(
+        hegel::generators::integers::<u32>()
+            .min_value(2)
+            .max_value(5),
+    );
+    let step = tc.draw(
+        hegel::generators::integers::<u32>()
+            .min_value(1)
+            .max_value(60),
+    );
+    let departures: Vec<SecondOfDay> = (0..n_dep)
         .map(|i| SecondOfDay(tau.saturating_sub(i * step)))
         .collect();
 
@@ -230,7 +465,7 @@ fn parallel_naive_matches_serial_rrap(tc: hegel::TestCase) {
         .query()
         .from(&[(ps, Duration::ZERO)])
         .to(&[(pt, Duration::ZERO)])
-        .max_transfers(spec.query.max_transfers as usize as u8)
+        .max_transfers(spec.query.max_transfers)
         .depart_in_window(departures.iter().copied())
         .run();
 
@@ -238,7 +473,7 @@ fn parallel_naive_matches_serial_rrap(tc: hegel::TestCase) {
         .query()
         .from(&[(ps, Duration::ZERO)])
         .to(&[(pt, Duration::ZERO)])
-        .max_transfers(spec.query.max_transfers as usize as u8)
+        .max_transfers(spec.query.max_transfers)
         .depart_in_window(departures.iter().copied())
         .run_par();
 
@@ -247,7 +482,7 @@ fn parallel_naive_matches_serial_rrap(tc: hegel::TestCase) {
         .query()
         .from(&[(ps, Duration::ZERO)])
         .to(&[(pt, Duration::ZERO)])
-        .max_transfers(spec.query.max_transfers as usize as u8)
+        .max_transfers(spec.query.max_transfers)
         .depart_in_window(departures.iter().copied())
         .run_with_pool(&pool);
 
@@ -300,7 +535,7 @@ fn arrival_and_walk_matches_reference(tc: hegel::TestCase) {
         .query_with_label::<ArrivalAndWalk>()
         .from(origins.as_slice())
         .to(targets.as_slice())
-        .max_transfers(spec.query.max_transfers as usize as u8)
+        .max_transfers(spec.query.max_transfers)
         .depart_at(SecondOfDay(spec.query.tau as u32))
         .run();
 
@@ -340,7 +575,7 @@ fn arrival_and_walk_matches_reference(tc: hegel::TestCase) {
 /// 2. Wrong `RouteIdx` threaded to `extend_by_trip`: if the
 ///    algorithm passes a wrong route to the label, the fare lookup
 ///    in `FareTable` would miss or pick the wrong route's fare.
-#[hegel::test(crate::proptest_settings())]
+#[hegel::test(crate::proptest_settings(), test_cases = 500)]
 fn fare_label_matches_per_leg_sum(tc: hegel::TestCase) {
     use vulture::labels::{ArrivalAndFare, FareTable};
 
@@ -348,18 +583,14 @@ fn fare_label_matches_per_leg_sum(tc: hegel::TestCase) {
     let timetable = spec::render(&spec);
 
     // Build a FareTable mapping each rendered RouteIdx to the spec's
-    // route fare. Spec routes are emitted in the order produced by
-    // the renderer's `for ((route_id, ..), trips) in groups` loop —
-    // route_idx_of(route_id) is the algorithm-side handle.
+    // route fare. `render` registers every spec route under key u8 = its
+    // enumeration index (it never silently drops; bad routes panic), so
+    // a direct `route_idx_of` lookup is total.
     let mut per_route: std::collections::HashMap<vulture::RouteIdx, u32> =
         std::collections::HashMap::new();
     for (route_id_u8, route) in spec.routes.iter().enumerate() {
         let route_id = u8::try_from(route_id_u8).expect("layer3 route count fits in u8");
-        // Some routes may not be registered if the renderer dropped them
-        // (e.g. zero-stop sequences) — guard with the lookup.
-        if let Some(fares_route_idx) = timetable_route_idx(&timetable, route_id) {
-            per_route.insert(fares_route_idx, route.fare);
-        }
+        per_route.insert(timetable.route_idx_of(&route_id), route.fare);
     }
     let fares = FareTable { per_route };
 
@@ -381,7 +612,7 @@ fn fare_label_matches_per_leg_sum(tc: hegel::TestCase) {
         .with_context(fares.clone())
         .from(origins.as_slice())
         .to(targets.as_slice())
-        .max_transfers(spec.query.max_transfers as usize as u8);
+        .max_transfers(spec.query.max_transfers);
     if spec.query.require_wheelchair_accessible {
         q = q.require_wheelchair_accessible();
     }
@@ -405,23 +636,6 @@ fn fare_label_matches_per_leg_sum(tc: hegel::TestCase) {
     }
 }
 
-#[cfg(test)]
-fn timetable_route_idx<TT>(tt: &TT, route_id: u8) -> Option<vulture::RouteIdx>
-where
-    TT: vulture::Timetable + ?Sized,
-    // Best-effort: in practice the renderer uses SimpleTimetable<u8, u8, u16>
-    // so we have its own `route_idx_of`. The trait surface doesn't expose a
-    // string→idx lookup, so we live with concrete-type access here.
-{
-    let _ = (tt, route_id);
-    // Fallback: every route_id from 0..n_routes is interned, in order.
-    if usize::from(route_id) < tt.n_routes() {
-        Some(vulture::RouteIdx::new(u32::from(route_id)))
-    } else {
-        None
-    }
-}
-
 /// Range-query algorithm correctness against the brute-force
 /// reference solver. Where `parallel_naive_matches_serial_rrap`
 /// only checks rRAPTOR vs the parallel naïve batch (a self-
@@ -432,7 +646,7 @@ where
 /// 3-departure window plus per-departure brute force is `3 ×
 /// reference_solve`, which is comfortable on small networks but
 /// would dominate the run on layer 3.
-#[hegel::test(crate::proptest_settings())]
+#[hegel::test(crate::proptest_settings(), test_cases = 500)]
 fn range_query_matches_reference(tc: hegel::TestCase) {
     let spec = tc.draw(spec::network_spec(spec::layer1_bounds()));
     let timetable = spec::render(&spec);
@@ -449,12 +663,22 @@ fn range_query_matches_reference(tc: hegel::TestCase) {
         .map(|&(s, w)| (timetable.stop_idx_of(&s), Duration(u32::from(w))))
         .collect();
 
-    // Three-departure window around tau, with the first entry pinned
-    // at tau itself so the reference and vulture agree on at least
-    // one anchor.
-    let tau = spec.query.tau as u32;
-    let step: u32 = 5;
-    let raw_departures: Vec<u32> = (0..3).map(|i| tau.saturating_sub(i * step)).collect();
+    // Window of 2-5 departures descending from tau (which is always the
+    // first entry, so vulture and the reference share an anchor). Step
+    // size is hegel-drawn to vary how the window arranges around trip
+    // departures in the rendered network.
+    let tau = u32::from(spec.query.tau);
+    let n_dep = tc.draw(
+        hegel::generators::integers::<u32>()
+            .min_value(2)
+            .max_value(5),
+    );
+    let step = tc.draw(
+        hegel::generators::integers::<u32>()
+            .min_value(1)
+            .max_value(60),
+    );
+    let raw_departures: Vec<u32> = (0..n_dep).map(|i| tau.saturating_sub(i * step)).collect();
     let departures_secondofday: Vec<SecondOfDay> =
         raw_departures.iter().copied().map(SecondOfDay).collect();
     let departures_u16: Vec<u16> = raw_departures
@@ -466,7 +690,7 @@ fn range_query_matches_reference(tc: hegel::TestCase) {
         .query()
         .from(origins.as_slice())
         .to(targets.as_slice())
-        .max_transfers(spec.query.max_transfers as usize as u8)
+        .max_transfers(spec.query.max_transfers)
         .depart_in_window(departures_secondofday.iter().copied())
         .run();
 

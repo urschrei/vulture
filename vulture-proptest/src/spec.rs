@@ -386,6 +386,14 @@ fn render_emits_transitively_closed_footpaths() {
 
 use hegel::generators;
 
+/// Biased coin flip: returns `true` with probability `numerator / 10`.
+/// Used at call sites where the rate is a clear "1-in-10" or "9-in-10"
+/// rather than an even split (use `generators::booleans()` for 50/50).
+#[hegel::composite]
+fn bernoulli_in_10(tc: hegel::TestCase, numerator: u8) -> bool {
+    tc.draw(generators::integers::<u8>().min_value(0).max_value(9)) < numerator
+}
+
 /// Per-layer envelope sizes. Used to parameterize the shared
 /// `network_spec` generator.
 #[derive(Debug, Clone, Copy)]
@@ -519,10 +527,8 @@ fn route_spec(tc: hegel::TestCase, n_stops: u8, bounds: LayerBounds) -> RouteSpe
         let mut np: Vec<bool> = Vec::with_capacity(stop_sequence.len());
         let mut nd: Vec<bool> = Vec::with_capacity(stop_sequence.len());
         for _ in 0..stop_sequence.len() {
-            let p = tc.draw(generators::integers::<u8>().min_value(0).max_value(9));
-            let d = tc.draw(generators::integers::<u8>().min_value(0).max_value(9));
-            np.push(p == 0);
-            nd.push(d == 0);
+            np.push(tc.draw(bernoulli_in_10(1)));
+            nd.push(tc.draw(bernoulli_in_10(1)));
         }
         (np, nd)
     } else {
@@ -535,17 +541,21 @@ fn route_spec(tc: hegel::TestCase, n_stops: u8, bounds: LayerBounds) -> RouteSpe
     let mut trips: Vec<TripSpec> = Vec::with_capacity(trip_count as usize);
     let mut last_dep: u16 = 0;
     for _ in 0..trip_count {
+        // Upper bound on a trip's first departure. Chosen below the
+        // generator's tau cap (500) so most cases still have a catchable
+        // trip; bump this together with `tau`'s max in `network_spec` if
+        // you widen the time range.
         let max_first_dep: u16 = 400;
         let next_dep = tc.draw(
             generators::integers::<u16>()
                 .min_value(last_dep)
                 .max_value(max_first_dep),
         );
-        // Per-trip flag: wheelchair accessibility. Drawn ~1-in-10 to
-        // pressure the gate without rendering most cases infeasible.
+        // Per-trip wheelchair accessibility: 9-in-10 accessible. That ~10%
+        // inaccessibility rate pressures `earliest_accessible_trip`'s
+        // skip-forward without making most cases infeasible.
         let wheelchair_accessible = if bounds.accessibility_flags {
-            let wc_die = tc.draw(generators::integers::<u8>().min_value(0).max_value(9));
-            wc_die != 0
+            tc.draw(bernoulli_in_10(9))
         } else {
             true
         };
@@ -670,12 +680,11 @@ pub fn network_spec(tc: hegel::TestCase, bounds: LayerBounds) -> NetworkSpec {
     let (inaccessible_stops, require_wheelchair_accessible) = if bounds.accessibility_flags {
         let mut iset = BTreeSet::new();
         for s in 0..n_stops {
-            let die = tc.draw(generators::integers::<u8>().min_value(0).max_value(9));
-            if die == 0 {
+            if tc.draw(bernoulli_in_10(1)) {
                 iset.insert(s);
             }
         }
-        let req = tc.draw(generators::integers::<u8>().min_value(0).max_value(1)) == 0;
+        let req = tc.draw(generators::booleans());
         (iset, req)
     } else {
         (BTreeSet::new(), false)
