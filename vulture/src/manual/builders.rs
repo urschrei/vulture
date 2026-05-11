@@ -1,216 +1,158 @@
+//! Synthetic-network builders for the criterion bench harness (and the
+//! `vulture-dotgraph` CLI). Each `build_*` produces a fully-formed
+//! [`SimpleTimetable`] with `usize` keys for stops, routes, and trips, so the
+//! IDs in the rendered output match the indices used in the source.
+
 use super::SimpleTimetable;
+use crate::{Duration, SecondOfDay};
 
-type Tt = SimpleTimetable<usize, usize, usize>;
+type Net = SimpleTimetable<usize, usize, usize>;
 
-/// Single route with `stops` stops and `trips` trips.
-pub fn build_linear(stops: usize, trips: usize) -> Tt {
-    let stop_ids: Vec<usize> = (0..stops).collect();
-    let trip_defs: Vec<(usize, Vec<(crate::SecondOfDay, crate::SecondOfDay)>)> = (0..trips)
-        .map(|t| {
-            let times: Vec<(crate::SecondOfDay, crate::SecondOfDay)> = (0..stops)
-                .map(|s| {
-                    let base = t * stops * 2;
-                    (
-                        crate::SecondOfDay((base + s * 2) as u32),
-                        crate::SecondOfDay((base + s * 2 + 1) as u32),
-                    )
-                })
-                .collect();
-            (t, times)
+/// Per-stop `(arrival, departure)` schedule that starts at `base` seconds,
+/// advances `step` seconds between consecutive stops, and dwells `dwell`
+/// seconds at each stop.
+fn schedule(base: u32, step: u32, dwell: u32, stops: usize) -> Vec<(SecondOfDay, SecondOfDay)> {
+    (0..stops as u32)
+        .map(|i| {
+            let arr = base + i * step;
+            (SecondOfDay(arr), SecondOfDay(arr + dwell))
         })
-        .collect();
+        .collect()
+}
 
-    let mut tt = SimpleTimetable::new();
-    let trip_refs: Vec<(usize, &[(crate::SecondOfDay, crate::SecondOfDay)])> = trip_defs
+/// Single route serving stops `0..stops`, with `trips` back-to-back trips.
+/// Trip `t` occupies the time window `[t * stops * 2, (t + 1) * stops * 2)`.
+pub fn build_linear(stops: usize, trips: usize) -> Net {
+    let stop_keys: Vec<usize> = (0..stops).collect();
+    let trip_times: Vec<Vec<(SecondOfDay, SecondOfDay)>> = (0..trips)
+        .map(|t| schedule((t * stops * 2) as u32, 2, 1, stops))
+        .collect();
+    let trip_specs: Vec<(usize, &[(SecondOfDay, SecondOfDay)])> = trip_times
         .iter()
-        .map(|(id, times)| (*id, times.as_slice()))
+        .enumerate()
+        .map(|(t, times)| (t, times.as_slice()))
         .collect();
-    tt = tt.route(0, &stop_ids, &trip_refs);
-    tt
+    SimpleTimetable::new().route(0, &stop_keys, &trip_specs)
 }
 
-/// `routes` horizontal routes, each with `stops_per_route` stops, plus
-/// `connectors` vertical connector routes linking corresponding stops.
-pub fn build_grid(routes: usize, stops_per_route: usize, connectors: usize) -> Tt {
+/// `routes` horizontal routes (each `stops_per_route` long), joined by
+/// `connectors` vertical connector routes that link the corresponding column
+/// of stops across every horizontal route.
+pub fn build_grid(routes: usize, stops_per_route: usize, connectors: usize) -> Net {
     let mut tt = SimpleTimetable::new();
-    let mut route_id = 0usize;
-    let mut trip_id = 0usize;
+    let mut id = 0usize;
 
-    // Horizontal routes: route r has stops [r*stops_per_route .. (r+1)*stops_per_route)
     for r in 0..routes {
-        let stop_ids: Vec<usize> = (0..stops_per_route)
-            .map(|s| r * stops_per_route + s)
-            .collect();
-        let times: Vec<(crate::SecondOfDay, crate::SecondOfDay)> = (0..stops_per_route)
-            .map(|s| {
-                (
-                    crate::SecondOfDay((s * 10) as u32),
-                    crate::SecondOfDay((s * 10 + 5) as u32),
-                )
-            })
-            .collect();
-        tt = tt.route(route_id, &stop_ids, &[(trip_id, times.as_slice())]);
-        route_id += 1;
-        trip_id += 1;
+        let stops: Vec<usize> = (r * stops_per_route..(r + 1) * stops_per_route).collect();
+        let times = schedule(0, 10, 5, stops_per_route);
+        tt = tt.route(id, &stops, &[(id, times.as_slice())]);
+        id += 1;
     }
 
-    // Vertical connector routes: connect stop `col` across all horizontal routes
-    let connector_step = stops_per_route.max(1) / connectors.max(1);
+    let col_step = stops_per_route.max(1) / connectors.max(1);
     for c in 0..connectors {
-        let col = c * connector_step;
-        let stop_ids: Vec<usize> = (0..routes).map(|r| r * stops_per_route + col).collect();
-        let times: Vec<(crate::SecondOfDay, crate::SecondOfDay)> = (0..routes)
+        let col = c * col_step;
+        let stops: Vec<usize> = (0..routes).map(|r| r * stops_per_route + col).collect();
+        let times: Vec<(SecondOfDay, SecondOfDay)> = (0..routes as u32)
             .map(|r| {
-                let base = col * 10 + r * 3;
-                (
-                    crate::SecondOfDay((base) as u32),
-                    crate::SecondOfDay((base + 1) as u32),
-                )
+                let t = (col * 10) as u32 + r * 3;
+                (SecondOfDay(t), SecondOfDay(t + 1))
             })
             .collect();
-        tt = tt.route(route_id, &stop_ids, &[(trip_id, times.as_slice())]);
-        route_id += 1;
-        trip_id += 1;
+        tt = tt.route(id, &stops, &[(id, times.as_slice())]);
+        id += 1;
     }
 
     tt
 }
 
-/// `hubs` central hub stops, each served by `routes_per_hub` routes radiating out
-/// to `spokes` spoke stops. Hubs are connected by footpaths.
-pub fn build_hub_spoke(hubs: usize, routes_per_hub: usize, spokes: usize) -> Tt {
+/// `hubs` central hub stops, each fed by `routes_per_hub` routes that radiate
+/// out to `spokes` spoke stops. Every distinct pair of hubs is connected by a
+/// 2-second footpath in both directions.
+pub fn build_hub_spoke(hubs: usize, routes_per_hub: usize, spokes: usize) -> Net {
     let mut tt = SimpleTimetable::new();
-    let mut route_id = 0usize;
-    let mut trip_id = 0usize;
-    let mut stop_id = 0usize;
+    let mut id = 0usize;
 
-    // Hub stops: 0..hubs
-    let hub_stops: Vec<usize> = (0..hubs)
-        .map(|_| {
-            let s = stop_id;
-            stop_id += 1;
-            s
-        })
-        .collect();
-
-    for (h, &hub) in hub_stops.iter().enumerate() {
+    // Hub keys are 0..hubs; spoke keys are allocated sequentially after that.
+    let mut next_spoke = hubs;
+    for h in 0..hubs {
         for r in 0..routes_per_hub {
-            let mut stops = vec![hub];
+            let mut stops = Vec::with_capacity(spokes + 1);
+            stops.push(h);
             for _ in 0..spokes {
-                stops.push(stop_id);
-                stop_id += 1;
+                stops.push(next_spoke);
+                next_spoke += 1;
             }
-            let times: Vec<(crate::SecondOfDay, crate::SecondOfDay)> = stops
-                .iter()
-                .enumerate()
-                .map(|(i, _)| {
-                    let base = (h * routes_per_hub + r) * (spokes + 1) * 10;
-                    (
-                        crate::SecondOfDay((base + i * 10) as u32),
-                        crate::SecondOfDay((base + i * 10 + 5) as u32),
-                    )
-                })
-                .collect();
-            tt = tt.route(route_id, &stops, &[(trip_id, times.as_slice())]);
-            route_id += 1;
-            trip_id += 1;
+            let base = ((h * routes_per_hub + r) * (spokes + 1) * 10) as u32;
+            let times = schedule(base, 10, 5, spokes + 1);
+            tt = tt.route(id, &stops, &[(id, times.as_slice())]);
+            id += 1;
         }
     }
 
-    // Connect hubs via footpaths
     for i in 0..hubs {
         for j in 0..hubs {
-            if i != j {
-                tt = tt.footpath(hub_stops[i], hub_stops[j]);
-                tt = tt.transfer_time(hub_stops[i], hub_stops[j], crate::Duration(2));
+            if i == j {
+                continue;
             }
+            tt = tt.footpath(i, j).transfer_time(i, j, Duration(2));
         }
     }
 
     tt
 }
 
-/// N sequential routes forming a chain: route 0 goes A0→A1, route 1 goes A1→A2, etc.
-/// Forces `segments` transfers to get from A0 to A_{segments}.
-pub fn build_chain(segments: usize) -> Tt {
+/// Chain of single-leg routes `0 -> 1 -> 2 -> ...`. Each segment requires its
+/// own transfer, so journeys spanning the chain exercise the multi-round
+/// scanning path.
+pub fn build_chain(segments: usize) -> Net {
     let mut tt = SimpleTimetable::new();
-
     for seg in 0..segments {
-        let from = seg;
-        let to = seg + 1;
-        let base_time = seg * 20;
-        tt = tt.route(
-            seg,
-            &[from, to],
-            &[(
-                seg,
-                &[
-                    (
-                        crate::SecondOfDay(base_time as u32),
-                        crate::SecondOfDay((base_time + 5) as u32),
-                    ),
-                    (
-                        crate::SecondOfDay((base_time + 10) as u32),
-                        crate::SecondOfDay((base_time + 15) as u32),
-                    ),
-                ],
-            )],
-        );
+        let base = (seg * 20) as u32;
+        let times = [
+            (SecondOfDay(base), SecondOfDay(base + 5)),
+            (SecondOfDay(base + 10), SecondOfDay(base + 15)),
+        ];
+        tt = tt.route(seg, &[seg, seg + 1], &[(seg, &times)]);
     }
-
     tt
 }
 
-/// `path_count` parallel paths from stop 0 to a common target stop.
-/// Path i has (i+1) legs, but each successive path is slightly faster overall.
-pub fn build_parallel_paths(path_count: usize, max_legs: usize) -> Tt {
-    let mut tt = SimpleTimetable::new();
-    let mut route_id = 0usize;
-    let mut trip_id = 0usize;
-    // Stop 0 = source, stop 1 = target
-    // Intermediate stops start from 2
-    let mut next_stop = 2usize;
+/// `path_count` parallel paths from stop `0` (source) to stop `1` (target).
+/// Path `p` has `((p % max_legs) + 1).min(max_legs)` legs and a total journey
+/// time of `1000 - p * 50` seconds, so later paths are slightly faster but
+/// require more transfers.
+pub fn build_parallel_paths(path_count: usize, max_legs: usize) -> Net {
+    const SOURCE: usize = 0;
+    const TARGET: usize = 1;
 
-    let source = 0usize;
-    let target = 1usize;
+    let mut tt = SimpleTimetable::new();
+    let mut id = 0usize;
+    let mut next_intermediate = 2usize;
 
     for p in 0..path_count {
         let legs = ((p % max_legs) + 1).min(max_legs);
-        // Total journey time decreases with more legs (faster paths have more transfers)
-        let total_time = 1000 - p * 50;
-        let leg_time = total_time / legs;
+        let leg_time = (1000 - p * 50) / legs;
 
-        let mut prev_stop = source;
+        let mut prev = SOURCE;
         for leg in 0..legs {
-            let is_last = leg == legs - 1;
-            let curr_stop = if is_last { target } else { next_stop };
-            if !is_last {
-                next_stop += 1;
-            }
-
-            let depart = leg * leg_time;
-            let arrive = depart + leg_time - 5;
-
-            tt = tt.route(
-                route_id,
-                &[prev_stop, curr_stop],
-                &[(
-                    trip_id,
-                    &[
-                        (
-                            crate::SecondOfDay(depart as u32),
-                            crate::SecondOfDay((depart + 1) as u32),
-                        ),
-                        (
-                            crate::SecondOfDay(arrive as u32),
-                            crate::SecondOfDay((arrive + 1) as u32),
-                        ),
-                    ],
-                )],
-            );
-            route_id += 1;
-            trip_id += 1;
-            prev_stop = curr_stop;
+            let is_last = leg + 1 == legs;
+            let curr = if is_last {
+                TARGET
+            } else {
+                let s = next_intermediate;
+                next_intermediate += 1;
+                s
+            };
+            let depart = (leg * leg_time) as u32;
+            let arrive = depart + leg_time as u32 - 5;
+            let times = [
+                (SecondOfDay(depart), SecondOfDay(depart + 1)),
+                (SecondOfDay(arrive), SecondOfDay(arrive + 1)),
+            ];
+            tt = tt.route(id, &[prev, curr], &[(id, &times)]);
+            id += 1;
+            prev = curr;
         }
     }
 

@@ -1,158 +1,95 @@
-//! Example showing a multi-route RAPTOR query where a passenger reboards
-//! a shared route at a later stop reached via a faster feeder route.
+//! Reboarding: when a faster feeder route reaches a stop mid-way along a
+//! shared route, the algorithm records the boarding stop as the stop it
+//! was first reached at — not the shared route's earliest call.
+//!
+//! Network:
+//!
+//! ```text
+//!     R1  S ─────────────── A
+//!     R2  S ──── B
+//!     R3          A ─── B ─── C ─── D    (two trips: early, late)
+//! ```
+//!
+//! Two ways from S to D:
+//!
+//! * via R1 to A (arrive 100), catch R3-late from A (departs 105) → D @ 130.
+//! * via R2 to B (arrive 30), catch R3-early from B (departs 30) → D @ 50.
+//!
+//! Option 2 wins. The point is that the boarding stop recorded for the R3
+//! leg is B, not A — even though R3's earliest call is A.
+//!
+//! Run: `cargo run --example reboarding`
 
-use vulture::Duration;
-use vulture::{RouteIdx, SecondOfDay, StopIdx, Timetable, TripIdx};
+use vulture::manual::SimpleTimetable;
+use vulture::{Duration, RouteIdx, SecondOfDay, StopIdx, Timetable};
 
-// Stop indices: S=0, A=1, B=2, C=3, D=4
-// Route indices: R1=0 (S->A), R2=1 (S->B), R3=2 (A->B->C->D)
-// Trip indices: R1T1=0, R2T1=1, R3early=2, R3late=3
-struct ReBoardingTimetable;
-
-const S: StopIdx = StopIdx::new(0);
-const D: StopIdx = StopIdx::new(4);
-
-const R1: RouteIdx = RouteIdx::new(0);
-const R2: RouteIdx = RouteIdx::new(1);
-const R3: RouteIdx = RouteIdx::new(2);
-
-const R1_T1: TripIdx = TripIdx::new(0);
-const R2_T1: TripIdx = TripIdx::new(1);
-const R3_EARLY: TripIdx = TripIdx::new(2);
-const R3_LATE: TripIdx = TripIdx::new(3);
-
-impl Timetable for ReBoardingTimetable {
-    fn n_stops(&self) -> usize {
-        5
-    }
-    fn n_routes(&self) -> usize {
-        3
-    }
-
-    fn get_routes_serving_stop(&self, stop: StopIdx) -> &[(RouteIdx, u32)] {
-        // (route, earliest position of stop on that route)
-        match stop.get() {
-            0 => &[(R1, 0), (R2, 0)], // S
-            1 => &[(R1, 1), (R3, 0)], // A
-            2 => &[(R2, 1), (R3, 1)], // B
-            3 => &[(R3, 2)],          // C
-            4 => &[(R3, 3)],          // D
-            _ => &[],
-        }
-    }
-
-    fn get_stops_after(&self, route: RouteIdx, pos: u32) -> &[StopIdx] {
-        const R1_STOPS: [StopIdx; 2] = [StopIdx::new(0), StopIdx::new(1)]; // S, A
-        const R2_STOPS: [StopIdx; 2] = [StopIdx::new(0), StopIdx::new(2)]; // S, B
-        const R3_STOPS: [StopIdx; 4] = [
-            StopIdx::new(1),
-            StopIdx::new(2),
-            StopIdx::new(3),
-            StopIdx::new(4),
-        ]; // A, B, C, D
-        let order: &[StopIdx] = match route.get() {
-            0 => &R1_STOPS,
-            1 => &R2_STOPS,
-            2 => &R3_STOPS,
-            _ => return &[],
-        };
-        &order[pos as usize..]
-    }
-
-    fn stop_at(&self, route: RouteIdx, pos: u32) -> StopIdx {
-        let stops = self.get_stops_after(route, 0);
-        stops[pos as usize]
-    }
-
-    fn get_earliest_trip(&self, route: RouteIdx, at: SecondOfDay, pos: u32) -> Option<TripIdx> {
-        match route.get() {
-            0 => {
-                // R1: dep at pos 0 (S) = 0; pos 1 (A) is alight, irrelevant
-                let dep = match pos {
-                    0 => SecondOfDay(0),
-                    _ => return None,
-                };
-                (at <= dep).then_some(R1_T1)
-            }
-            1 => {
-                // R2: dep at pos 0 (S) = 0
-                let dep = match pos {
-                    0 => SecondOfDay(0),
-                    _ => return None,
-                };
-                (at <= dep).then_some(R2_T1)
-            }
-            2 => {
-                // R3: pos 0=A dep 25/105, pos 1=B dep 30/110, pos 2=C dep 40/120
-                let (early_dep, late_dep) = match pos {
-                    0 => (SecondOfDay(25), SecondOfDay(105)),
-                    1 => (SecondOfDay(30), SecondOfDay(110)),
-                    2 => (SecondOfDay(40), SecondOfDay(120)),
-                    3 => (SecondOfDay(50), SecondOfDay(130)),
-                    _ => return None,
-                };
-                if at <= early_dep {
-                    Some(R3_EARLY)
-                } else if at <= late_dep {
-                    Some(R3_LATE)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
-    fn get_arrival_time(&self, trip: TripIdx, pos: u32) -> SecondOfDay {
-        match (trip.get(), pos) {
-            (0, 1) => SecondOfDay(100), // R1_T1 at A
-            (1, 1) => SecondOfDay(30),  // R2_T1 at B
-            (3, 1) => SecondOfDay(110),
-            (3, 2) => SecondOfDay(120),
-            (3, 3) => SecondOfDay(130), // R3_LATE
-            (2, 1) => SecondOfDay(30),
-            (2, 2) => SecondOfDay(40),
-            (2, 3) => SecondOfDay(50), // R3_EARLY
-            _ => SecondOfDay::MAX,
-        }
-    }
-
-    fn get_departure_time(&self, trip: TripIdx, pos: u32) -> SecondOfDay {
-        match (trip.get(), pos) {
-            (0, 0) => SecondOfDay(0), // R1_T1 at S
-            (1, 0) => SecondOfDay(0), // R2_T1 at S
-            (3, 0) => SecondOfDay(105),
-            (3, 1) => SecondOfDay(110),
-            (3, 2) => SecondOfDay(120), // R3_LATE
-            (2, 0) => SecondOfDay(25),
-            (2, 1) => SecondOfDay(30),
-            (2, 2) => SecondOfDay(40), // R3_EARLY
-            _ => SecondOfDay::MAX,
-        }
-    }
-
-    fn get_footpaths_from(&self, _: StopIdx) -> &[StopIdx] {
-        &[]
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum Stop {
+    S,
+    A,
+    B,
+    C,
+    D,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum Route {
+    R1,
+    R2,
+    R3,
+}
+
+type Tt = SimpleTimetable<Stop, Route, &'static str>;
+
 fn main() {
-    env_logger::Builder::from_env(
-        env_logger::Env::new().filter_or("RAPTOR_EXAMPLE_LOG_LEVEL", "info"),
-    )
-    .init();
+    use Route::*;
+    use Stop::*;
 
-    println!("Query: S -> D, departure time 0");
-    println!("Expected: S --(R2)--> B --(R3/early)--> D, arrives @ t=50\n");
+    let t = |secs: u32| (SecondOfDay(secs), SecondOfDay(secs));
 
-    let timetable = ReBoardingTimetable;
-    let journeys = timetable
+    let tt: Tt = SimpleTimetable::new()
+        .route(R1, &[S, A], &[("R1T1", &[t(0), t(100)])])
+        .route(R2, &[S, B], &[("R2T1", &[t(0), t(30)])])
+        .route(
+            R3,
+            &[A, B, C, D],
+            &[
+                ("R3early", &[t(25), t(30), t(40), t(50)]),
+                ("R3late", &[t(105), t(110), t(120), t(130)]),
+            ],
+        );
+
+    let journeys = tt
         .query()
-        .from(&[(S, Duration::ZERO)])
-        .to(&[(D, Duration::ZERO)])
+        .from(&[(tt.stop_idx_of(&S), Duration::ZERO)])
+        .to(&[(tt.stop_idx_of(&D), Duration::ZERO)])
         .max_transfers(3)
         .depart_at(SecondOfDay(0))
         .run();
 
-    println!("{journeys:#?}");
+    println!("S → D, departing 00:00:00 — {} journey(s):", journeys.len());
+    for j in &journeys {
+        println!("  arrives {} ({} legs)", j.arrival(), j.plan.len());
+        let mut board = S; // origin
+        for (route_idx, alight_idx) in &j.plan {
+            let route = route_for(&tt, *route_idx);
+            let alight = stop_for(&tt, *alight_idx);
+            println!("    {route:?}: board at {board:?}, alight at {alight:?}");
+            board = alight;
+        }
+    }
+}
+
+fn stop_for(tt: &Tt, idx: StopIdx) -> Stop {
+    [Stop::S, Stop::A, Stop::B, Stop::C, Stop::D]
+        .into_iter()
+        .find(|s| tt.stop_idx_of(s) == idx)
+        .expect("stop index belongs to this network")
+}
+
+fn route_for(tt: &Tt, idx: RouteIdx) -> Route {
+    [Route::R1, Route::R2, Route::R3]
+        .into_iter()
+        .find(|r| tt.route_idx_of(r) == idx)
+        .expect("route index belongs to this network")
 }

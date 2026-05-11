@@ -389,18 +389,15 @@ where
     R: Hash + Eq + Clone + Debug,
     T: Hash + Eq + Clone + Debug,
 {
-    /// Renders the timetable as a Graphviz DOT string.
+    /// Renders the timetable as a Graphviz DOT string. Stops become nodes;
+    /// each route contributes one coloured edge per consecutive stop pair, with
+    /// its trip schedules summarised in the edge label. Footpaths render as
+    /// dashed grey edges.
     pub fn to_dot(&self, name: &str) -> Result<String, std::io::Error> {
         use dot_graph::{Edge, Graph, Kind, Node, Style};
 
-        let mut graph = Graph::new(name, Kind::Digraph);
-
-        for (idx, key) in self.stop_keys.iter().enumerate() {
-            let _ = idx;
-            graph.add_node(Node::new(&format!("s{key}")));
-        }
-
-        const COLORS: &[&str] = &[
+        // Cycle through this palette by `route_idx % len`.
+        const ROUTE_COLOURS: &[&str] = &[
             "red",
             "blue",
             "green",
@@ -413,57 +410,60 @@ where
             "goldenrod",
         ];
 
+        let mut graph = Graph::new(name, Kind::Digraph);
+
+        for key in &self.stop_keys {
+            graph.add_node(Node::new(&format!("s{key}")));
+        }
+
         for (route_idx, route_stops) in self.routes.iter().enumerate() {
-            let color = COLORS[route_idx % COLORS.len()];
-            let route_idx_typed = RouteIdx::new(route_idx as u32);
-            #[allow(clippy::type_complexity)]
-            let route_trips: Vec<(
-                usize,
-                &(RouteIdx, Vec<(SecondOfDay, SecondOfDay)>),
-            )> = self
+            let route_typed = RouteIdx::new(route_idx as u32);
+            let route_key = &self.route_keys[route_idx];
+            let colour = ROUTE_COLOURS[route_idx % ROUTE_COLOURS.len()];
+
+            // Trips on this route (in TripIdx order), keyed by their trip key
+            // and paired with the (arr, dep) schedule along the route's stops.
+            let trips_on_route: Vec<(&T, &[(SecondOfDay, SecondOfDay)])> = self
                 .trips
                 .iter()
                 .enumerate()
-                .filter_map(|(i, slot)| slot.as_ref().map(|entry| (i, entry)))
-                .filter(|(_, (r, _))| *r == route_idx_typed)
+                .filter_map(|(trip_idx, slot)| {
+                    let (route, times) = slot.as_ref()?;
+                    (*route == route_typed).then(|| (&self.trip_keys[trip_idx], times.as_slice()))
+                })
                 .collect();
 
-            for (i, window) in route_stops.windows(2).enumerate() {
-                let from_key = &self.stop_keys[window[0].idx()];
-                let to_key = &self.stop_keys[window[1].idx()];
-                let route_key = &self.route_keys[route_idx];
+            for (seg, pair) in route_stops.windows(2).enumerate() {
+                let from_key = &self.stop_keys[pair[0].idx()];
+                let to_key = &self.stop_keys[pair[1].idx()];
                 let mut label = format!("R{route_key:?}");
-                for (trip_idx, (_, times)) in &route_trips {
-                    let trip_key = &self.trip_keys[*trip_idx];
-                    let dep = times[i].1;
-                    let arr = times[i + 1].0;
+                for (trip_key, times) in &trips_on_route {
+                    let dep = times[seg].1;
+                    let arr = times[seg + 1].0;
                     label.push_str(&format!("\\nT{trip_key:?}: {dep}\u{2192}{arr}"));
                 }
                 graph.add_edge(
                     Edge::new(&format!("s{from_key}"), &format!("s{to_key}"), &label)
-                        .color(Some(color)),
+                        .color(Some(colour)),
                 );
             }
         }
 
-        for (from_idx, targets) in self.footpaths.iter().enumerate() {
-            let from_key = &self.stop_keys[from_idx];
+        for (from_idx, reachable) in self.footpaths.iter().enumerate() {
             let from_typed = StopIdx::new(from_idx as u32);
-            for &to in targets {
+            let from_key = &self.stop_keys[from_idx];
+            for &to in reachable {
                 let to_key = &self.stop_keys[to.idx()];
                 let time = self
                     .transfer_times
                     .get(&(from_typed, to))
                     .copied()
                     .unwrap_or(Duration(1));
+                let label = format!("t={time}");
                 graph.add_edge(
-                    Edge::new(
-                        &format!("s{from_key}"),
-                        &format!("s{to_key}"),
-                        &format!("t={time}"),
-                    )
-                    .style(Style::Dashed)
-                    .color(Some("gray")),
+                    Edge::new(&format!("s{from_key}"), &format!("s{to_key}"), &label)
+                        .style(Style::Dashed)
+                        .color(Some("gray")),
                 );
             }
         }

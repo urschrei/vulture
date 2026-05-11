@@ -12,6 +12,27 @@ macro_rules! plan {
     };
 }
 
+/// Zero-dwell per-stop schedule: `sched![10, 20, 30]` expands to
+/// `&[(SecondOfDay(10), SecondOfDay(10)), (SecondOfDay(20), SecondOfDay(20)),
+/// (SecondOfDay(30), SecondOfDay(30))]`. Used pervasively in the route builders
+/// below where arrival and departure coincide. For explicit dwell, write the
+/// tuple literal directly.
+macro_rules! sched {
+    ($($t:expr),+ $(,)?) => {
+        &[$( (SecondOfDay($t), SecondOfDay($t)) ),+]
+    };
+}
+
+/// Defines a plain-old-enum used as a `SimpleTimetable` key, with the full
+/// `Debug + Copy + Eq + Ord + Hash` derive set the timetable requires.
+/// `keys!(Stop { A, B, C });` expands to a one-line enum definition.
+macro_rules! keys {
+    ($name:ident { $($v:ident),+ $(,)? }) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        enum $name { $($v),+ }
+    };
+}
+
 /// When a faster route reaches a mid-route stop, the algorithm must record
 /// that stop as the boarding stop – not the earlier stop where the route
 /// scan began. See examples/reboarding.rs for the full network.
@@ -21,75 +42,26 @@ fn reboarding_picks_correct_boarding_stop() {
     use Stop::*;
     use Trip::*;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        S,
-        A,
-        B,
-        C,
-        D,
-    }
+    keys!(Stop { S, A, B, C, D });
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-        R2,
-        R3,
-    }
+    keys!(Route { R1, R2, R3 });
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
+    keys!(Trip {
         R1T1,
         R2T1,
         R3Late,
-        R3Early,
-    }
+        R3Early
+    });
 
     let tt = SimpleTimetable::new()
-        .route(
-            R1,
-            &[S, A],
-            &[(
-                R1T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(100), SecondOfDay(100)),
-                ],
-            )],
-        )
-        .route(
-            R2,
-            &[S, B],
-            &[(
-                R2T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(30), SecondOfDay(30)),
-                ],
-            )],
-        )
+        .route(R1, &[S, A], &[(R1T1, sched![0, 100])])
+        .route(R2, &[S, B], &[(R2T1, sched![0, 30])])
         .route(
             R3,
             &[A, B, C, D],
             &[
-                (
-                    R3Late,
-                    &[
-                        (SecondOfDay(105), SecondOfDay(105)),
-                        (SecondOfDay(110), SecondOfDay(110)),
-                        (SecondOfDay(120), SecondOfDay(120)),
-                        (SecondOfDay(130), SecondOfDay(130)),
-                    ],
-                ),
-                (
-                    R3Early,
-                    &[
-                        (SecondOfDay(25), SecondOfDay(25)),
-                        (SecondOfDay(30), SecondOfDay(30)),
-                        (SecondOfDay(40), SecondOfDay(40)),
-                        (SecondOfDay(50), SecondOfDay(50)),
-                    ],
-                ),
+                (R3Late, sched![105, 110, 120, 130]),
+                (R3Early, sched![25, 30, 40, 50]),
             ],
         );
 
@@ -113,47 +85,13 @@ fn reboarding_picks_correct_boarding_stop() {
 
 #[test]
 fn no_journey_disconnected_graph() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-        C,
-        D,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-        T2,
-    }
+    keys!(Stop { A, B, C, D });
+    keys!(Route { R1, R2 });
+    keys!(Trip { T1, T2 });
 
     let tt = SimpleTimetable::new()
-        .route(
-            Route::R1,
-            &[Stop::A, Stop::B],
-            &[(
-                Trip::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(10), SecondOfDay(10)),
-                ],
-            )],
-        )
-        .route(
-            Route::R2,
-            &[Stop::C, Stop::D],
-            &[(
-                Trip::T2,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(10), SecondOfDay(10)),
-                ],
-            )],
-        );
+        .route(Route::R1, &[Stop::A, Stop::B], &[(Trip::T1, sched![0, 10])])
+        .route(Route::R2, &[Stop::C, Stop::D], &[(Trip::T2, sched![0, 10])]);
 
     let journeys = tt
         .query()
@@ -170,35 +108,12 @@ fn no_journey_disconnected_graph() {
 
 #[test]
 fn no_journey_missed_connection() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-        C,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-        T2,
-    }
+    keys!(Stop { A, B, C });
+    keys!(Route { R1, R2 });
+    keys!(Trip { T1, T2 });
 
     let tt = SimpleTimetable::new()
-        .route(
-            Route::R1,
-            &[Stop::A, Stop::B],
-            &[(
-                Trip::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(50), SecondOfDay(50)),
-                ],
-            )],
-        )
+        .route(Route::R1, &[Stop::A, Stop::B], &[(Trip::T1, sched![0, 50])])
         .route(
             Route::R2,
             &[Stop::B, Stop::C],
@@ -226,19 +141,9 @@ fn no_journey_missed_connection() {
 
 #[test]
 fn no_journey_late_departure() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-    }
+    keys!(Stop { A, B });
+    keys!(Route { R1 });
+    keys!(Trip { T1 });
 
     let tt = SimpleTimetable::new().route(
         Route::R1,
@@ -267,31 +172,12 @@ fn no_journey_late_departure() {
 
 #[test]
 fn no_journey_transfers_zero() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-    }
+    keys!(Stop { A, B });
+    keys!(Route { R1 });
+    keys!(Trip { T1 });
 
-    let tt = SimpleTimetable::new().route(
-        Route::R1,
-        &[Stop::A, Stop::B],
-        &[(
-            Trip::T1,
-            &[
-                (SecondOfDay(0), SecondOfDay(0)),
-                (SecondOfDay(10), SecondOfDay(10)),
-            ],
-        )],
-    );
+    let tt =
+        SimpleTimetable::new().route(Route::R1, &[Stop::A, Stop::B], &[(Trip::T1, sched![0, 10])]);
 
     let journeys = tt
         .query()
@@ -305,31 +191,12 @@ fn no_journey_transfers_zero() {
 
 #[test]
 fn source_equals_target() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-    }
+    keys!(Stop { A, B });
+    keys!(Route { R1 });
+    keys!(Trip { T1 });
 
-    let tt = SimpleTimetable::new().route(
-        Route::R1,
-        &[Stop::A, Stop::B],
-        &[(
-            Trip::T1,
-            &[
-                (SecondOfDay(0), SecondOfDay(0)),
-                (SecondOfDay(10), SecondOfDay(10)),
-            ],
-        )],
-    );
+    let tt =
+        SimpleTimetable::new().route(Route::R1, &[Stop::A, Stop::B], &[(Trip::T1, sched![0, 10])]);
 
     let journeys = tt
         .query()
@@ -346,32 +213,14 @@ fn source_equals_target() {
 
 #[test]
 fn direct_journey_single_route() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-        C,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-    }
+    keys!(Stop { A, B, C });
+    keys!(Route { R1 });
+    keys!(Trip { T1 });
 
     let tt = SimpleTimetable::new().route(
         Route::R1,
         &[Stop::A, Stop::B, Stop::C],
-        &[(
-            Trip::T1,
-            &[
-                (SecondOfDay(0), SecondOfDay(0)),
-                (SecondOfDay(10), SecondOfDay(10)),
-                (SecondOfDay(20), SecondOfDay(20)),
-            ],
-        )],
+        &[(Trip::T1, sched![0, 10, 20])],
     );
 
     let journeys = tt
@@ -388,45 +237,17 @@ fn direct_journey_single_route() {
 
 #[test]
 fn direct_journey_picks_fastest_route() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-        T2,
-    }
+    keys!(Stop { A, B });
+    keys!(Route { R1, R2 });
+    keys!(Trip { T1, T2 });
 
     let tt = SimpleTimetable::new()
         .route(
             Route::R1,
             &[Stop::A, Stop::B],
-            &[(
-                Trip::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(100), SecondOfDay(100)),
-                ],
-            )],
+            &[(Trip::T1, sched![0, 100])],
         )
-        .route(
-            Route::R2,
-            &[Stop::A, Stop::B],
-            &[(
-                Trip::T2,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(50), SecondOfDay(50)),
-                ],
-            )],
-        );
+        .route(Route::R2, &[Stop::A, Stop::B], &[(Trip::T2, sched![0, 50])]);
 
     let journeys = tt
         .query()
@@ -441,35 +262,12 @@ fn direct_journey_picks_fastest_route() {
 
 #[test]
 fn exact_time_connection() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-        C,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-        T2,
-    }
+    keys!(Stop { A, B, C });
+    keys!(Route { R1, R2 });
+    keys!(Trip { T1, T2 });
 
     let tt = SimpleTimetable::new()
-        .route(
-            Route::R1,
-            &[Stop::A, Stop::B],
-            &[(
-                Trip::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(20), SecondOfDay(20)),
-                ],
-            )],
-        )
+        .route(Route::R1, &[Stop::A, Stop::B], &[(Trip::T1, sched![0, 20])])
         .route(
             Route::R2,
             &[Stop::B, Stop::C],
@@ -500,21 +298,9 @@ fn exact_time_connection() {
 
 #[test]
 fn multi_trip_picks_earliest_catchable() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-        T2,
-        T3,
-    }
+    keys!(Stop { A, B });
+    keys!(Route { R1 });
+    keys!(Trip { T1, T2, T3 });
 
     let tt = SimpleTimetable::new().route(
         Route::R1,
@@ -558,38 +344,12 @@ fn multi_trip_picks_earliest_catchable() {
 
 #[test]
 fn two_transfer_journey() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-        C,
-        D,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-        R2,
-        R3,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-        T2,
-        T3,
-    }
+    keys!(Stop { A, B, C, D });
+    keys!(Route { R1, R2, R3 });
+    keys!(Trip { T1, T2, T3 });
 
     let tt = SimpleTimetable::new()
-        .route(
-            Route::R1,
-            &[Stop::A, Stop::B],
-            &[(
-                Trip::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(10), SecondOfDay(10)),
-                ],
-            )],
-        )
+        .route(Route::R1, &[Stop::A, Stop::B], &[(Trip::T1, sched![0, 10])])
         .route(
             Route::R2,
             &[Stop::B, Stop::C],
@@ -635,50 +395,19 @@ fn two_transfer_journey() {
 
 #[test]
 fn pareto_optimal_fewer_transfers_vs_faster() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-        D,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-        R2,
-        R3,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-        T2,
-        T3,
-    }
+    keys!(Stop { A, B, D });
+    keys!(Route { R1, R2, R3 });
+    keys!(Trip { T1, T2, T3 });
 
     let tt = SimpleTimetable::new()
         // Direct slow route A→D
         .route(
             Route::R1,
             &[Stop::A, Stop::D],
-            &[(
-                Trip::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(200), SecondOfDay(200)),
-                ],
-            )],
+            &[(Trip::T1, sched![0, 200])],
         )
         // Fast 2-leg: A→B via R2, B→D via R3
-        .route(
-            Route::R2,
-            &[Stop::A, Stop::B],
-            &[(
-                Trip::T2,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(40), SecondOfDay(40)),
-                ],
-            )],
-        )
+        .route(Route::R2, &[Stop::A, Stop::B], &[(Trip::T2, sched![0, 40])])
         .route(
             Route::R3,
             &[Stop::B, Stop::D],
@@ -712,36 +441,12 @@ fn pareto_optimal_fewer_transfers_vs_faster() {
 
 #[test]
 fn footpath_enables_connection() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-        C,
-        D,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-        T2,
-    }
+    keys!(Stop { A, B, C, D });
+    keys!(Route { R1, R2 });
+    keys!(Trip { T1, T2 });
 
     let tt = SimpleTimetable::new()
-        .route(
-            Route::R1,
-            &[Stop::A, Stop::B],
-            &[(
-                Trip::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(10), SecondOfDay(10)),
-                ],
-            )],
-        )
+        .route(Route::R1, &[Stop::A, Stop::B], &[(Trip::T1, sched![0, 10])])
         .route(
             Route::R2,
             &[Stop::C, Stop::D],
@@ -776,36 +481,12 @@ fn footpath_enables_connection() {
 
 #[test]
 fn footpath_transfer_time_causes_miss() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-        C,
-        D,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-        T2,
-    }
+    keys!(Stop { A, B, C, D });
+    keys!(Route { R1, R2 });
+    keys!(Trip { T1, T2 });
 
     let tt = SimpleTimetable::new()
-        .route(
-            Route::R1,
-            &[Stop::A, Stop::B],
-            &[(
-                Trip::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(50), SecondOfDay(50)),
-                ],
-            )],
-        )
+        .route(Route::R1, &[Stop::A, Stop::B], &[(Trip::T1, sched![0, 50])])
         .route(
             Route::R2,
             &[Stop::C, Stop::D],
@@ -835,31 +516,12 @@ fn footpath_transfer_time_causes_miss() {
 
 #[test]
 fn early_termination_no_improvement() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-    }
+    keys!(Stop { A, B });
+    keys!(Route { R1 });
+    keys!(Trip { T1 });
 
-    let tt = SimpleTimetable::new().route(
-        Route::R1,
-        &[Stop::A, Stop::B],
-        &[(
-            Trip::T1,
-            &[
-                (SecondOfDay(0), SecondOfDay(0)),
-                (SecondOfDay(10), SecondOfDay(10)),
-            ],
-        )],
-    );
+    let tt =
+        SimpleTimetable::new().route(Route::R1, &[Stop::A, Stop::B], &[(Trip::T1, sched![0, 10])]);
 
     let j1 = tt
         .query()
@@ -885,44 +547,16 @@ fn early_termination_no_improvement() {
 
 #[test]
 fn dominance_prunes_slower_arrival() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-        T2,
-    }
+    keys!(Stop { A, B });
+    keys!(Route { R1, R2 });
+    keys!(Trip { T1, T2 });
 
     let tt = SimpleTimetable::new()
-        .route(
-            Route::R1,
-            &[Stop::A, Stop::B],
-            &[(
-                Trip::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(50), SecondOfDay(50)),
-                ],
-            )],
-        )
+        .route(Route::R1, &[Stop::A, Stop::B], &[(Trip::T1, sched![0, 50])])
         .route(
             Route::R2,
             &[Stop::A, Stop::B],
-            &[(
-                Trip::T2,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(100), SecondOfDay(100)),
-                ],
-            )],
+            &[(Trip::T2, sched![0, 100])],
         );
 
     let journeys = tt
@@ -939,45 +573,16 @@ fn dominance_prunes_slower_arrival() {
 
 #[test]
 fn raptor_with_cache_matches_fresh_run() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-        C,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-        T2,
-    }
+    keys!(Stop { A, B, C });
+    keys!(Route { R1, R2 });
+    keys!(Trip { T1, T2 });
 
     let tt = SimpleTimetable::new()
-        .route(
-            Route::R1,
-            &[Stop::A, Stop::B],
-            &[(
-                Trip::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(10), SecondOfDay(10)),
-                ],
-            )],
-        )
+        .route(Route::R1, &[Stop::A, Stop::B], &[(Trip::T1, sched![0, 10])])
         .route(
             Route::R2,
             &[Stop::B, Stop::C],
-            &[(
-                Trip::T2,
-                &[
-                    (SecondOfDay(15), SecondOfDay(15)),
-                    (SecondOfDay(25), SecondOfDay(25)),
-                ],
-            )],
+            &[(Trip::T2, sched![15, 25])],
         );
 
     // Run several queries with varying parameters through one cache and
@@ -1028,46 +633,13 @@ fn multi_source_picks_best_origin() {
     use Stop::*;
     use Trip::*;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-        C,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        RFast,
-        RSlow,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        TFast,
-        TSlow,
-    }
+    keys!(Stop { A, B, C });
+    keys!(Route { RFast, RSlow });
+    keys!(Trip { TFast, TSlow });
 
     let tt = SimpleTimetable::new()
-        .route(
-            RFast,
-            &[A, C],
-            &[(
-                TFast,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(10), SecondOfDay(10)),
-                ],
-            )],
-        )
-        .route(
-            RSlow,
-            &[B, C],
-            &[(
-                TSlow,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(30), SecondOfDay(30)),
-                ],
-            )],
-        );
+        .route(RFast, &[A, C], &[(TFast, sched![0, 10])])
+        .route(RSlow, &[B, C], &[(TSlow, sched![0, 30])]);
 
     let a = tt.stop_idx_of(&A);
     let b = tt.stop_idx_of(&B);
@@ -1100,48 +672,15 @@ fn multi_source_walk_offset_changes_best_origin() {
     use Stop::*;
     use Trip::*;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-        C,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        RFast,
-        RSlow,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        TFast,
-        TSlow,
-    }
+    keys!(Stop { A, B, C });
+    keys!(Route { RFast, RSlow });
+    keys!(Trip { TFast, TSlow });
 
     let tt = SimpleTimetable::new()
         // The slow trip needs to depart at 30 (so it leaves later than the
         // user is ready) for the algorithm to actually pick it cleanly.
-        .route(
-            RFast,
-            &[A, C],
-            &[(
-                TFast,
-                &[
-                    (SecondOfDay(30), SecondOfDay(30)),
-                    (SecondOfDay(40), SecondOfDay(40)),
-                ],
-            )],
-        )
-        .route(
-            RSlow,
-            &[B, C],
-            &[(
-                TSlow,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(30), SecondOfDay(30)),
-                ],
-            )],
-        );
+        .route(RFast, &[A, C], &[(TFast, sched![30, 40])])
+        .route(RSlow, &[B, C], &[(TSlow, sched![0, 30])]);
 
     let a = tt.stop_idx_of(&A);
     let b = tt.stop_idx_of(&B);
@@ -1170,45 +709,20 @@ fn multi_source_walk_offset_changes_best_origin() {
 fn multi_target_walk_offset_picks_best_target() {
     // Two targets, T1 reachable at 10 with walk 30 (effective 40), T2
     // reachable at 25 with walk 0 (effective 25). T2 should win.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        T1,
-        T2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        Tr1,
-        Tr2,
-    }
+    keys!(Stop { A, T1, T2 });
+    keys!(Route { R1, R2 });
+    keys!(Trip { Tr1, Tr2 });
 
     let tt = SimpleTimetable::new()
         .route(
             Route::R1,
             &[Stop::A, Stop::T1],
-            &[(
-                Trip::Tr1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(10), SecondOfDay(10)),
-                ],
-            )],
+            &[(Trip::Tr1, sched![0, 10])],
         )
         .route(
             Route::R2,
             &[Stop::A, Stop::T2],
-            &[(
-                Trip::Tr2,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(25), SecondOfDay(25)),
-                ],
-            )],
+            &[(Trip::Tr2, sched![0, 25])],
         );
 
     let a = tt.stop_idx_of(&Stop::A);
@@ -1233,33 +747,12 @@ fn multi_target_walk_offset_picks_best_target() {
 fn query_builder_single_departure() {
     use crate::labels::ArrivalAndWalk;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum S {
-        A,
-        B,
-        C,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum R {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Tr {
-        T1,
-    }
+    keys!(S { A, B, C });
+    keys!(R { R1 });
+    keys!(Tr { T1 });
 
-    let tt = SimpleTimetable::new().route(
-        R::R1,
-        &[S::A, S::B, S::C],
-        &[(
-            Tr::T1,
-            &[
-                (SecondOfDay(0), SecondOfDay(0)),
-                (SecondOfDay(10), SecondOfDay(10)),
-                (SecondOfDay(20), SecondOfDay(20)),
-            ],
-        )],
-    );
+    let tt =
+        SimpleTimetable::new().route(R::R1, &[S::A, S::B, S::C], &[(Tr::T1, sched![0, 10, 20])]);
     let a = tt.stop_idx_of(&S::A);
     let c = tt.stop_idx_of(&S::C);
 
@@ -1301,47 +794,17 @@ fn query_builder_single_departure() {
 
 #[test]
 fn query_builder_range_departure() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum S {
-        A,
-        B,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum R {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Tr {
-        T1,
-        T2,
-        T3,
-    }
+    keys!(S { A, B });
+    keys!(R { R1 });
+    keys!(Tr { T1, T2, T3 });
 
     let tt = SimpleTimetable::new().route(
         R::R1,
         &[S::A, S::B],
         &[
-            (
-                Tr::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(10), SecondOfDay(10)),
-                ],
-            ),
-            (
-                Tr::T2,
-                &[
-                    (SecondOfDay(10), SecondOfDay(10)),
-                    (SecondOfDay(20), SecondOfDay(20)),
-                ],
-            ),
-            (
-                Tr::T3,
-                &[
-                    (SecondOfDay(20), SecondOfDay(20)),
-                    (SecondOfDay(30), SecondOfDay(30)),
-                ],
-            ),
+            (Tr::T1, sched![0, 10]),
+            (Tr::T2, sched![10, 20]),
+            (Tr::T3, sched![20, 30]),
         ],
     );
     let a = tt.stop_idx_of(&S::A);
@@ -1379,33 +842,12 @@ fn query_builder_range_departure() {
 fn into_endpoints_accepts_natural_input_shapes() {
     // The single-stop call is the headline ergonomics win – `start` and
     // `end` go straight in, no slice-of-tuples wrapping.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum S {
-        A,
-        B,
-        C,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum R {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Tr {
-        T1,
-    }
+    keys!(S { A, B, C });
+    keys!(R { R1 });
+    keys!(Tr { T1 });
 
-    let tt = SimpleTimetable::new().route(
-        R::R1,
-        &[S::A, S::B, S::C],
-        &[(
-            Tr::T1,
-            &[
-                (SecondOfDay(0), SecondOfDay(0)),
-                (SecondOfDay(10), SecondOfDay(10)),
-                (SecondOfDay(20), SecondOfDay(20)),
-            ],
-        )],
-    );
+    let tt =
+        SimpleTimetable::new().route(R::R1, &[S::A, S::B, S::C], &[(Tr::T1, sched![0, 10, 20])]);
     let a = tt.stop_idx_of(&S::A);
     let b = tt.stop_idx_of(&S::B);
     let c = tt.stop_idx_of(&S::C);
@@ -1523,38 +965,14 @@ fn closed_path_dispatch_matches_dijkstra() {
         }
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum S {
-        A,
-        B,
-        C,
-        D,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum R {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Tr {
-        T1,
-        T2,
-    }
+    keys!(S { A, B, C, D });
+    keys!(R { R1, R2 });
+    keys!(Tr { T1, T2 });
 
     // A→B by R1, walk B→C, C→D by R2. The walk is a single direct edge
     // so closure is trivially satisfied – both paths must agree.
     let inner = SimpleTimetable::new()
-        .route(
-            R::R1,
-            &[S::A, S::B],
-            &[(
-                Tr::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(10), SecondOfDay(10)),
-                ],
-            )],
-        )
+        .route(R::R1, &[S::A, S::B], &[(Tr::T1, sched![0, 10])])
         .route(
             R::R2,
             &[S::C, S::D],
@@ -1600,43 +1018,16 @@ fn arrival_and_walk_label_tracks_accumulated_walk_time() {
     use crate::RaptorCache;
     use crate::labels::ArrivalAndWalk;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum S {
-        A,
-        B,
-        C,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum R {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Tr {
-        T1,
-        T2,
-    }
+    keys!(S { A, B, C });
+    keys!(R { R1, R2 });
+    keys!(Tr { T1, T2 });
 
     // A→B by R1 (arr 10), walk B→C 7s, then C→D... actually just B→C:
     // we use a R2 from C to test. Walk B→C is 7s; final journey uses
     // 7s of walking.
     let tt = SimpleTimetable::new()
-        .route(
-            R::R1,
-            &[S::A, S::B],
-            &[(
-                Tr::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(10), SecondOfDay(10)),
-                ],
-            )],
-        )
-        .route(
-            R::R2,
-            &[S::C],
-            &[(Tr::T2, &[(SecondOfDay(20), SecondOfDay(20))])],
-        )
+        .route(R::R1, &[S::A, S::B], &[(Tr::T1, sched![0, 10])])
+        .route(R::R2, &[S::C], &[(Tr::T2, sched![20])])
         .footpath(S::B, S::C)
         .transfer_time(S::B, S::C, Duration(7));
 
@@ -1694,47 +1085,17 @@ fn raptor_range_returns_pareto_profile_across_departures() {
     // - depart=15 catches T3, arr=30 (must wait)
     // - depart=20 catches T3, arr=30 – better than depart=15, drop it.
     // Profile: [(0, arr 10), (10, arr 20), (20, arr 30)].
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum S {
-        A,
-        B,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum R {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Tr {
-        T1,
-        T2,
-        T3,
-    }
+    keys!(S { A, B });
+    keys!(R { R1 });
+    keys!(Tr { T1, T2, T3 });
 
     let tt = SimpleTimetable::new().route(
         R::R1,
         &[S::A, S::B],
         &[
-            (
-                Tr::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(10), SecondOfDay(10)),
-                ],
-            ),
-            (
-                Tr::T2,
-                &[
-                    (SecondOfDay(10), SecondOfDay(10)),
-                    (SecondOfDay(20), SecondOfDay(20)),
-                ],
-            ),
-            (
-                Tr::T3,
-                &[
-                    (SecondOfDay(20), SecondOfDay(20)),
-                    (SecondOfDay(30), SecondOfDay(30)),
-                ],
-            ),
+            (Tr::T1, sched![0, 10]),
+            (Tr::T2, sched![10, 20]),
+            (Tr::T3, sched![20, 30]),
         ],
     );
 
@@ -1781,49 +1142,15 @@ fn arrival_and_walk_returns_pareto_front() {
     // query returns only the arrival-min path.
     use crate::labels::ArrivalAndWalk;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum S {
-        A,
-        X,
-        Y,
-        T,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum R {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Tr {
-        T1,
-        T2,
-    }
+    keys!(S { A, X, Y, T });
+    keys!(R { R1, R2 });
+    keys!(Tr { T1, T2 });
 
     // R1 arrives X at t=10; walk X->T is 5s   → (arr 15, walk 5).
     // R2 arrives Y at t=20; walk Y->T is 1s   → (arr 21, walk 1).
     let tt = SimpleTimetable::new()
-        .route(
-            R::R1,
-            &[S::A, S::X],
-            &[(
-                Tr::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(10), SecondOfDay(10)),
-                ],
-            )],
-        )
-        .route(
-            R::R2,
-            &[S::A, S::Y],
-            &[(
-                Tr::T2,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(20), SecondOfDay(20)),
-                ],
-            )],
-        )
+        .route(R::R1, &[S::A, S::X], &[(Tr::T1, sched![0, 10])])
+        .route(R::R2, &[S::A, S::Y], &[(Tr::T2, sched![0, 20])])
         .footpath(S::X, S::T)
         .transfer_time(S::X, S::T, Duration(5))
         .footpath(S::Y, S::T)
@@ -1868,23 +1195,13 @@ fn arrival_and_walk_returns_pareto_front() {
 
 #[test]
 fn with_timing_recovers_per_leg_trip_and_times() {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum S {
-        A,
-        B,
-        C,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum R {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Tr {
+    keys!(S { A, B, C });
+    keys!(R { R1, R2 });
+    keys!(Tr {
         T1Early,
         T1Late,
-        T2,
-    }
+        T2
+    });
 
     // R1 has two trips: T1Early (0->10) and T1Late (50->60). R2 has one
     // trip from B to C (12->25). A query departing at 0 should ride
@@ -1895,34 +1212,9 @@ fn with_timing_recovers_per_leg_trip_and_times() {
         .route(
             R::R1,
             &[S::A, S::B],
-            &[
-                (
-                    Tr::T1Early,
-                    &[
-                        (SecondOfDay(0), SecondOfDay(0)),
-                        (SecondOfDay(10), SecondOfDay(10)),
-                    ],
-                ),
-                (
-                    Tr::T1Late,
-                    &[
-                        (SecondOfDay(50), SecondOfDay(50)),
-                        (SecondOfDay(60), SecondOfDay(60)),
-                    ],
-                ),
-            ],
+            &[(Tr::T1Early, sched![0, 10]), (Tr::T1Late, sched![50, 60])],
         )
-        .route(
-            R::R2,
-            &[S::B, S::C],
-            &[(
-                Tr::T2,
-                &[
-                    (SecondOfDay(12), SecondOfDay(12)),
-                    (SecondOfDay(25), SecondOfDay(25)),
-                ],
-            )],
-        );
+        .route(R::R2, &[S::B, S::C], &[(Tr::T2, sched![12, 25])]);
 
     let a = tt.stop_idx_of(&S::A);
     let b = tt.stop_idx_of(&S::B);
@@ -1969,47 +1261,13 @@ fn with_timing_handles_one_hop_walking_transfer() {
     // from C to D (depart 20, arrive 30). The plan is [(R1, B), (R2, D)];
     // with_timing should detect that C is a one-hop walk neighbour of B
     // serving R2 and use C as leg 2's `board`.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum S {
-        A,
-        B,
-        C,
-        D,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum R {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Tr {
-        T1,
-        T2,
-    }
+    keys!(S { A, B, C, D });
+    keys!(R { R1, R2 });
+    keys!(Tr { T1, T2 });
 
     let tt = SimpleTimetable::new()
-        .route(
-            R::R1,
-            &[S::A, S::B],
-            &[(
-                Tr::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(10), SecondOfDay(10)),
-                ],
-            )],
-        )
-        .route(
-            R::R2,
-            &[S::C, S::D],
-            &[(
-                Tr::T2,
-                &[
-                    (SecondOfDay(20), SecondOfDay(20)),
-                    (SecondOfDay(30), SecondOfDay(30)),
-                ],
-            )],
-        )
+        .route(R::R1, &[S::A, S::B], &[(Tr::T1, sched![0, 10])])
+        .route(R::R2, &[S::C, S::D], &[(Tr::T2, sched![20, 30])])
         .footpath(S::B, S::C)
         .transfer_time(S::B, S::C, Duration(5));
 
@@ -2048,29 +1306,8 @@ fn with_timing_handles_one_hop_walking_transfer() {
 /// Trivial 4-stop, 2-route timetable used by the pool tests below.
 fn pool_test_timetable() -> SimpleTimetable<char, u32, u32> {
     SimpleTimetable::new()
-        .route(
-            1,
-            &['A', 'B', 'C'],
-            &[(
-                10,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(60), SecondOfDay(60)),
-                    (SecondOfDay(120), SecondOfDay(120)),
-                ],
-            )],
-        )
-        .route(
-            2,
-            &['C', 'D'],
-            &[(
-                20,
-                &[
-                    (SecondOfDay(150), SecondOfDay(150)),
-                    (SecondOfDay(210), SecondOfDay(210)),
-                ],
-            )],
-        )
+        .route(1, &['A', 'B', 'C'], &[(10, sched![0, 60, 120])])
+        .route(2, &['C', 'D'], &[(20, sched![150, 210])])
 }
 
 #[test]
@@ -2238,81 +1475,34 @@ fn newly_active_stops_marks_only_in_window() {
     // Two routes, each with three trips at distinct departures.
     // Route 1 stops: A, B (trips depart A at 100, 200, 300).
     // Route 2 stops: C, D (trips depart C at 150, 250, 350).
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum S {
-        A,
-        B,
-        C,
-        D,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum R {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Tr {
+    keys!(S { A, B, C, D });
+    keys!(R { R1, R2 });
+    keys!(Tr {
         T1,
         T2,
         T3,
         T4,
         T5,
-        T6,
-    }
+        T6
+    });
 
     let tt = SimpleTimetable::new()
         .route(
             R::R1,
             &[S::A, S::B],
             &[
-                (
-                    Tr::T1,
-                    &[
-                        (SecondOfDay(100), SecondOfDay(100)),
-                        (SecondOfDay(110), SecondOfDay(110)),
-                    ],
-                ),
-                (
-                    Tr::T2,
-                    &[
-                        (SecondOfDay(200), SecondOfDay(200)),
-                        (SecondOfDay(210), SecondOfDay(210)),
-                    ],
-                ),
-                (
-                    Tr::T3,
-                    &[
-                        (SecondOfDay(300), SecondOfDay(300)),
-                        (SecondOfDay(310), SecondOfDay(310)),
-                    ],
-                ),
+                (Tr::T1, sched![100, 110]),
+                (Tr::T2, sched![200, 210]),
+                (Tr::T3, sched![300, 310]),
             ],
         )
         .route(
             R::R2,
             &[S::C, S::D],
             &[
-                (
-                    Tr::T4,
-                    &[
-                        (SecondOfDay(150), SecondOfDay(150)),
-                        (SecondOfDay(160), SecondOfDay(160)),
-                    ],
-                ),
-                (
-                    Tr::T5,
-                    &[
-                        (SecondOfDay(250), SecondOfDay(250)),
-                        (SecondOfDay(260), SecondOfDay(260)),
-                    ],
-                ),
-                (
-                    Tr::T6,
-                    &[
-                        (SecondOfDay(350), SecondOfDay(350)),
-                        (SecondOfDay(360), SecondOfDay(360)),
-                    ],
-                ),
+                (Tr::T4, sched![150, 160]),
+                (Tr::T5, sched![250, 260]),
+                (Tr::T6, sched![350, 360]),
             ],
         );
 
@@ -2375,35 +1565,15 @@ fn pickup_disallowed_at_boarding_stop_yields_no_journey() {
     // Single route, single trip, pickup forbidden at the only candidate
     // boarding stop. The algorithm has no other trip to fall back to, so
     // get_earliest_trip returns None and no journey is found.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-    }
+    keys!(Stop { A, B });
+    keys!(Route { R1 });
+    keys!(Trip { T1 });
     use Route::*;
     use Stop::*;
     use Trip::*;
 
     let tt = SimpleTimetable::new()
-        .route(
-            R1,
-            &[A, B],
-            &[(
-                T1,
-                &[
-                    (SecondOfDay(100), SecondOfDay(100)),
-                    (SecondOfDay(200), SecondOfDay(200)),
-                ],
-            )],
-        )
+        .route(R1, &[A, B], &[(T1, sched![100, 200])])
         .no_pickup_at(T1, 0);
 
     let journeys = tt
@@ -2426,37 +1596,15 @@ fn drop_off_disallowed_at_target_yields_no_journey_to_that_stop() {
     // algorithm should not record an arrival label at B (the trip
     // passes through but the rider can't disembark), so a query A -> B
     // returns no journey. A query A -> C is unaffected.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-        C,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-    }
+    keys!(Stop { A, B, C });
+    keys!(Route { R1 });
+    keys!(Trip { T1 });
     use Route::*;
     use Stop::*;
     use Trip::*;
 
     let tt = SimpleTimetable::new()
-        .route(
-            R1,
-            &[A, B, C],
-            &[(
-                T1,
-                &[
-                    (SecondOfDay(100), SecondOfDay(100)),
-                    (SecondOfDay(200), SecondOfDay(200)),
-                    (SecondOfDay(300), SecondOfDay(300)),
-                ],
-            )],
-        )
+        .route(R1, &[A, B, C], &[(T1, sched![100, 200, 300])])
         .no_drop_off_at(T1, 1);
 
     let journeys_to_b = tt
@@ -2491,20 +1639,9 @@ fn get_earliest_trip_skips_to_next_pickup_allowed_trip() {
     // Two trips on the same route. The earlier one (T1) forbids
     // pickup at A; the later one (T2) allows it. The algorithm must
     // skip past T1 and board T2 instead.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1Early,
-        T2Late,
-    }
+    keys!(Stop { A, B });
+    keys!(Route { R1 });
+    keys!(Trip { T1Early, T2Late });
     use Route::*;
     use Stop::*;
     use Trip::*;
@@ -2513,22 +1650,7 @@ fn get_earliest_trip_skips_to_next_pickup_allowed_trip() {
         .route(
             R1,
             &[A, B],
-            &[
-                (
-                    T1Early,
-                    &[
-                        (SecondOfDay(100), SecondOfDay(100)),
-                        (SecondOfDay(200), SecondOfDay(200)),
-                    ],
-                ),
-                (
-                    T2Late,
-                    &[
-                        (SecondOfDay(300), SecondOfDay(300)),
-                        (SecondOfDay(400), SecondOfDay(400)),
-                    ],
-                ),
-            ],
+            &[(T1Early, sched![100, 200]), (T2Late, sched![300, 400])],
         )
         .no_pickup_at(T1Early, 0);
 
@@ -2559,20 +1681,12 @@ fn require_wheelchair_skips_inaccessible_trip() {
     // Two trips on one route; the earliest is wheelchair-inaccessible.
     // Without the filter the algorithm boards the earliest; with the
     // filter it skips forward to the accessible one.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
+    keys!(Stop { A, B });
+    keys!(Route { R1 });
+    keys!(Trip {
         T1Inaccessible,
-        T2Accessible,
-    }
+        T2Accessible
+    });
     use Route::*;
     use Stop::*;
     use Trip::*;
@@ -2582,20 +1696,8 @@ fn require_wheelchair_skips_inaccessible_trip() {
             R1,
             &[A, B],
             &[
-                (
-                    T1Inaccessible,
-                    &[
-                        (SecondOfDay(100), SecondOfDay(100)),
-                        (SecondOfDay(200), SecondOfDay(200)),
-                    ],
-                ),
-                (
-                    T2Accessible,
-                    &[
-                        (SecondOfDay(300), SecondOfDay(300)),
-                        (SecondOfDay(400), SecondOfDay(400)),
-                    ],
-                ),
+                (T1Inaccessible, sched![100, 200]),
+                (T2Accessible, sched![300, 400]),
             ],
         )
         .no_wheelchair_on_trip(T1Inaccessible);
@@ -2633,37 +1735,15 @@ fn require_wheelchair_skips_inaccessible_alighting_stop() {
     // Single trip on a three-stop route; the middle stop is marked
     // wheelchair-inaccessible. A query targeting B with the filter
     // returns no journey; a query targeting C still finds the trip.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-        C,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-    }
+    keys!(Stop { A, B, C });
+    keys!(Route { R1 });
+    keys!(Trip { T1 });
     use Route::*;
     use Stop::*;
     use Trip::*;
 
     let tt = SimpleTimetable::new()
-        .route(
-            R1,
-            &[A, B, C],
-            &[(
-                T1,
-                &[
-                    (SecondOfDay(100), SecondOfDay(100)),
-                    (SecondOfDay(200), SecondOfDay(200)),
-                    (SecondOfDay(300), SecondOfDay(300)),
-                ],
-            )],
-        )
+        .route(R1, &[A, B, C], &[(T1, sched![100, 200, 300])])
         .no_wheelchair_at_stop(B);
 
     let to_b = tt
@@ -2699,35 +1779,15 @@ fn require_wheelchair_skips_inaccessible_alighting_stop() {
 fn require_wheelchair_returns_no_journey_when_only_trip_is_inaccessible() {
     // Single inaccessible trip on a single route. Without the filter
     // the journey is found; with the filter no journey exists.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-    }
+    keys!(Stop { A, B });
+    keys!(Route { R1 });
+    keys!(Trip { T1 });
     use Route::*;
     use Stop::*;
     use Trip::*;
 
     let tt = SimpleTimetable::new()
-        .route(
-            R1,
-            &[A, B],
-            &[(
-                T1,
-                &[
-                    (SecondOfDay(100), SecondOfDay(100)),
-                    (SecondOfDay(200), SecondOfDay(200)),
-                ],
-            )],
-        )
+        .route(R1, &[A, B], &[(T1, sched![100, 200])])
         .no_wheelchair_on_trip(T1);
 
     let filtered = tt
@@ -2763,49 +1823,15 @@ fn arrival_and_fare_returns_pareto_front() {
     use crate::labels::{ArrivalAndFare, FareTable};
     use std::collections::HashMap;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum S {
-        A,
-        X,
-        Y,
-        T,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum R {
-        Fast,
-        Slow,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Tr {
-        T1,
-        T2,
-    }
+    keys!(S { A, X, Y, T });
+    keys!(R { Fast, Slow });
+    keys!(Tr { T1, T2 });
 
     // Fast route arrives X at 10, walk X->T 5s -> (arr 15, fare 500).
     // Slow route arrives Y at 20, walk Y->T 1s -> (arr 21, fare 0).
     let tt = SimpleTimetable::new()
-        .route(
-            R::Fast,
-            &[S::A, S::X],
-            &[(
-                Tr::T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(10), SecondOfDay(10)),
-                ],
-            )],
-        )
-        .route(
-            R::Slow,
-            &[S::A, S::Y],
-            &[(
-                Tr::T2,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(20), SecondOfDay(20)),
-                ],
-            )],
-        )
+        .route(R::Fast, &[S::A, S::X], &[(Tr::T1, sched![0, 10])])
+        .route(R::Slow, &[S::A, S::Y], &[(Tr::T2, sched![0, 20])])
         .footpath(S::X, S::T)
         .transfer_time(S::X, S::T, Duration(5))
         .footpath(S::Y, S::T)
@@ -2849,48 +1875,16 @@ fn arrival_and_fare_dominated_route_dropped() {
     use crate::labels::{ArrivalAndFare, FareTable};
     use std::collections::HashMap;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R1,
-        R2,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T1,
-        T2,
-    }
+    keys!(Stop { A, B });
+    keys!(Route { R1, R2 });
+    keys!(Trip { T1, T2 });
     use Route::*;
     use Stop::*;
     use Trip::*;
 
     let tt = SimpleTimetable::new()
-        .route(
-            R1,
-            &[A, B],
-            &[(
-                T1,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(100), SecondOfDay(100)),
-                ],
-            )],
-        )
-        .route(
-            R2,
-            &[A, B],
-            &[(
-                T2,
-                &[
-                    (SecondOfDay(0), SecondOfDay(0)),
-                    (SecondOfDay(150), SecondOfDay(150)),
-                ],
-            )],
-        );
+        .route(R1, &[A, B], &[(T1, sched![0, 100])])
+        .route(R2, &[A, B], &[(T2, sched![0, 150])]);
 
     let r2_route = tt.route_idx_of(&R2);
     let mut per_route = HashMap::new();
@@ -2921,34 +1915,14 @@ fn arrival_and_fare_default_ctx_is_zero_fare() {
     // to ArrivalTime semantics on a single route.
     use crate::labels::ArrivalAndFare;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Stop {
-        A,
-        B,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Route {
-        R,
-    }
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    enum Trip {
-        T,
-    }
+    keys!(Stop { A, B });
+    keys!(Route { R });
+    keys!(Trip { T });
     use Route::*;
     use Stop::*;
     use Trip::*;
 
-    let tt = SimpleTimetable::new().route(
-        R,
-        &[A, B],
-        &[(
-            T,
-            &[
-                (SecondOfDay(0), SecondOfDay(0)),
-                (SecondOfDay(100), SecondOfDay(100)),
-            ],
-        )],
-    );
+    let tt = SimpleTimetable::new().route(R, &[A, B], &[(T, sched![0, 100])]);
 
     let journeys = tt
         .query_with_label::<ArrivalAndFare>()
@@ -2976,17 +1950,7 @@ fn multi_source_target_equal_to_origin_finds_other_origins_journey() {
 
     const A: u8 = 0;
     const B: u8 = 1;
-    let tt = SimpleTimetable::new().route(
-        0u8,
-        &[A, B],
-        &[(
-            0u16,
-            &[
-                (SecondOfDay(0), SecondOfDay(0)),
-                (SecondOfDay(1), SecondOfDay(1)),
-            ],
-        )],
-    );
+    let tt = SimpleTimetable::new().route(0u8, &[A, B], &[(0u16, sched![0, 1])]);
 
     let s_a = tt.stop_idx_of(&A);
     let s_b = tt.stop_idx_of(&B);
@@ -3029,22 +1993,7 @@ fn wheelchair_query_finds_accessible_sibling_at_same_departure() {
         .route(
             0u8,
             &[A, B],
-            &[
-                (
-                    0u16,
-                    &[
-                        (SecondOfDay(50), SecondOfDay(50)),
-                        (SecondOfDay(51), SecondOfDay(51)),
-                    ],
-                ),
-                (
-                    1u16,
-                    &[
-                        (SecondOfDay(50), SecondOfDay(50)),
-                        (SecondOfDay(51), SecondOfDay(51)),
-                    ],
-                ),
-            ],
+            &[(0u16, sched![50, 51]), (1u16, sched![50, 51])],
         )
         .no_wheelchair_on_trip(0u16);
 
@@ -3077,17 +2026,7 @@ fn ffi_entry_points_accept_dyn_timetable() {
 
     const A: u8 = 0;
     const B: u8 = 1;
-    let tt = SimpleTimetable::new().route(
-        0u8,
-        &[A, B],
-        &[(
-            0u16,
-            &[
-                (SecondOfDay(0), SecondOfDay(0)),
-                (SecondOfDay(60), SecondOfDay(60)),
-            ],
-        )],
-    );
+    let tt = SimpleTimetable::new().route(0u8, &[A, B], &[(0u16, sched![0, 60])]);
 
     let s_a = tt.stop_idx_of(&A);
     let s_b = tt.stop_idx_of(&B);

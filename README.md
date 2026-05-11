@@ -149,6 +149,9 @@ let results: Vec<_> = queries.par_iter().map(|q| {
 
 Synthetic-network examples in `vulture/examples/`:
 
+- `cargo run --example quickstart` – smallest viable RAPTOR query against a hand-built `SimpleTimetable`.
+- `cargo run --example reboarding` – multi-route query where the recorded boarding stop is mid-route, not the route's first call.
+- `cargo run --example constraints` – wheelchair, no-pickup, and no-drop-off boarding constraints.
 - `cargo run --release --example custom_label` – custom `Label` with its own `Ctx`, route-preference scoring.
 - `cargo run --release --example fare_aware` – fare-aware Pareto routing via `ArrivalAndFare` and a `FareTable` context.
 - `cargo run --release --example range_query` – `depart_in_window(...)`; serial rRAPTOR vs parallel naïve batch, with an equality assertion.

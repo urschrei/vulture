@@ -1,26 +1,25 @@
 use clap::{Parser, Subcommand};
-use vulture::manual::builders;
+use vulture::manual::{SimpleTimetable, builders};
 
+/// Render one of the synthetic networks from `vulture::manual::builders` as
+/// Graphviz DOT. Pipe the output into `dot -Tpng` (or similar) to view.
 #[derive(Parser)]
-#[command(
-    name = "vulture-dotgraph",
-    about = "Render the bench-harness synthetic transit networks as Graphviz DOT"
-)]
+#[command(name = "vulture-dotgraph", about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    shape: Shape,
 }
 
 #[derive(Subcommand)]
-enum Command {
-    /// Single route with N stops and M trips
+enum Shape {
+    /// Single route with N stops and M trips.
     Linear {
         #[arg(long, short)]
         stops: usize,
         #[arg(long, short)]
         trips: usize,
     },
-    /// Grid of horizontal routes with vertical connectors
+    /// Grid of horizontal routes joined by vertical connectors.
     Grid {
         #[arg(long, short)]
         routes: usize,
@@ -29,21 +28,21 @@ enum Command {
         #[arg(long)]
         connectors: usize,
     },
-    /// Hub-and-spoke network with footpath-connected hubs
+    /// Hub-and-spoke network with footpath-connected hubs.
     HubSpoke {
-        #[arg(long, short)]
+        #[arg(long)]
         hubs: usize,
         #[arg(long, short = 'r')]
         routes_per_hub: usize,
         #[arg(long, short = 's')]
         stops_per_spoke: usize,
     },
-    /// Chain of single-leg routes forcing transfers
+    /// Chain of single-leg routes that force a transfer at every segment.
     Chain {
         #[arg(long, short)]
         segments: usize,
     },
-    /// Parallel paths from source to target with varying legs
+    /// Parallel paths from source to target, each with a different leg count.
     ParallelPaths {
         #[arg(long, short = 'p')]
         path_count: usize,
@@ -52,39 +51,40 @@ enum Command {
     },
 }
 
-fn main() {
-    let cli = Cli::parse();
-
-    let (tt, name) = match cli.command {
-        Command::Linear { stops, trips } => {
-            (builders::build_linear(stops, trips), "linear".to_string())
+impl Shape {
+    fn build(self) -> (SimpleTimetable<usize, usize, usize>, &'static str) {
+        match self {
+            Self::Linear { stops, trips } => (builders::build_linear(stops, trips), "linear"),
+            Self::Grid {
+                routes,
+                stops_per_route,
+                connectors,
+            } => (
+                builders::build_grid(routes, stops_per_route, connectors),
+                "grid",
+            ),
+            Self::HubSpoke {
+                hubs,
+                routes_per_hub,
+                stops_per_spoke,
+            } => (
+                builders::build_hub_spoke(hubs, routes_per_hub, stops_per_spoke),
+                "hub_spoke",
+            ),
+            Self::Chain { segments } => (builders::build_chain(segments), "chain"),
+            Self::ParallelPaths {
+                path_count,
+                max_legs,
+            } => (
+                builders::build_parallel_paths(path_count, max_legs),
+                "parallel_paths",
+            ),
         }
-        Command::Grid {
-            routes,
-            stops_per_route,
-            connectors,
-        } => (
-            builders::build_grid(routes, stops_per_route, connectors),
-            "grid".to_string(),
-        ),
-        Command::HubSpoke {
-            hubs,
-            routes_per_hub,
-            stops_per_spoke: stop_per_spoke,
-        } => (
-            builders::build_hub_spoke(hubs, routes_per_hub, stop_per_spoke),
-            "hub_spoke".to_string(),
-        ),
-        Command::Chain { segments } => (builders::build_chain(segments), "chain".to_string()),
-        Command::ParallelPaths {
-            path_count,
-            max_legs,
-        } => (
-            builders::build_parallel_paths(path_count, max_legs),
-            "parallel_paths".to_string(),
-        ),
-    };
+    }
+}
 
-    let dot = tt.to_dot(&name).expect("failed to generate DOT graph");
+fn main() {
+    let (timetable, name) = Cli::parse().shape.build();
+    let dot = timetable.to_dot(name).expect("rendering DOT failed");
     print!("{dot}");
 }
