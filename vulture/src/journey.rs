@@ -20,7 +20,12 @@ use crate::time::SecondOfDay;
 ///
 /// `origin` and `target` are the stops the algorithm actually picked from
 /// the user-supplied origin / target sets (relevant for multi-source /
-/// multi-target queries such as parent-station expansion).
+/// multi-target queries such as parent-station expansion). `target_walk`
+/// is the walk offset that was paired with `target` in the query — for a
+/// query like `.to([(stop_1, 0_s), (stop_1, 30_s)])` the same `target`
+/// can appear with different `target_walk`s, and journeys to those two
+/// `(target, target_walk)` slots are kept separate by the output Pareto
+/// filter.
 ///
 /// `L` defaults to [`ArrivalTime`] for single-criterion routing.
 #[derive(Debug, Clone)]
@@ -31,6 +36,12 @@ pub struct Journey<L: Label = ArrivalTime> {
     /// The target stop this journey ends at, picked from the user-supplied
     /// target set.
     pub target: StopIdx,
+    /// The walk-offset for the `target` slot in the query's targets list.
+    /// The walk has already been folded into `label` (via the label's
+    /// [`Label::extend_by_footpath`] / equivalent), so this field is
+    /// recovered metadata rather than something callers need to apply
+    /// themselves.
+    pub target_walk: Duration,
     /// Sequence of steps, each a (route, alight stop) pair.
     ///
     /// The origin stop is implicit – it is not part of the plan. Each entry

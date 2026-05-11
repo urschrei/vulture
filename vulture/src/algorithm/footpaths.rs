@@ -36,7 +36,7 @@ pub(crate) fn relax_footpaths_round_closed<T: Timetable + ?Sized, L: Label>(
     best_arrival: &mut [LabelBag<L>],
     board_detail: &mut BoardingTree,
     sources: &FixedBitSet,
-    pt_threshold: &LabelBag<L>,
+    targets: &[(StopIdx, crate::time::Duration)],
     out: &mut Vec<StopIdx>,
     ever_reached: &mut FixedBitSet,
 ) {
@@ -64,7 +64,7 @@ pub(crate) fn relax_footpaths_round_closed<T: Timetable + ?Sized, L: Label>(
                     board_detail,
                     out,
                     ever_reached,
-                    pt_threshold,
+                    targets,
                     k,
                     p_dash,
                     via_walk,
@@ -92,8 +92,9 @@ pub(crate) fn relax_footpaths_round_closed<T: Timetable + ?Sized, L: Label>(
 /// round and reaches C with the combined walk time.
 ///
 /// Stops that should be added to the marked set for the next round are
-/// pushed onto `out`, gated by `pt_threshold` (the current best effective
-/// arrival at any target). Caller drains `out` between calls.
+/// pushed onto `out`. Inserts at any stop are filtered by `targets` via
+/// the all-targets-dominate predicate in `insert_into_bag`. Caller
+/// drains `out` between calls.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn relax_footpaths_round<T: Timetable + ?Sized, L: Label>(
     timetable: &T,
@@ -103,7 +104,7 @@ pub(crate) fn relax_footpaths_round<T: Timetable + ?Sized, L: Label>(
     best_arrival: &mut [LabelBag<L>],
     board_detail: &mut BoardingTree,
     sources: &FixedBitSet,
-    pt_threshold: &LabelBag<L>,
+    targets: &[(StopIdx, crate::time::Duration)],
     out: &mut Vec<StopIdx>,
     heap: &mut BinaryHeap<Reverse<(SecondOfDay, u32)>>,
     ever_reached: &mut FixedBitSet,
@@ -149,7 +150,7 @@ pub(crate) fn relax_footpaths_round<T: Timetable + ?Sized, L: Label>(
                     board_detail,
                     out,
                     ever_reached,
-                    pt_threshold,
+                    targets,
                     k,
                     p_dash,
                     via_walk,

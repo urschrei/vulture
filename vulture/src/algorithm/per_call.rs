@@ -12,9 +12,7 @@ use crate::RaptorCache;
 use crate::Timetable;
 use crate::algorithm::boarding::BoardingTree;
 use crate::algorithm::boarding::Step;
-use crate::algorithm::boarding::best_to_any_target;
 use crate::algorithm::boarding::extract_target_journeys;
-use crate::algorithm::boarding::tighten_pt_threshold;
 use crate::algorithm::footpaths::relax_footpaths_round;
 use crate::algorithm::footpaths::relax_footpaths_round_closed;
 use crate::algorithm::label_bag::LabelBag;
@@ -63,25 +61,21 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
     walked_buf: &mut Vec<StopIdx>,
     relax_heap: &mut BinaryHeap<Reverse<(SecondOfDay, u32)>>,
     ever_reached: &mut FixedBitSet,
-    is_dest: &FixedBitSet,
     transfers: usize,
     require_wheelchair_accessible: bool,
     targets: &[(StopIdx, Duration)],
 ) {
-    // `pt_threshold` is the Pareto front of effective target labels
-    // (each target's bag extended by its walk-offset). A candidate label
-    // is rejected by `insert_into_bag` / the route-scan check when the
-    // bag weakly dominates it. The route-scan inner loop tightens the
-    // bag incrementally on every successful insert at a target stop via
-    // `tighten_pt_threshold`; the bag valued representation lets that
-    // tightening preserve Pareto-incomparable multi-criterion front
-    // entries, where the previous scalar threshold would have silently
-    // dropped them. Footpath relaxation does not tighten in-line —
-    // recomputed once per round-boundary, after each relax pass — to
-    // keep the relax routines simple, but the bag-valued threshold makes
-    // in-line tightening safe to enable in a future change if its perf
-    // cost is acceptable.
-    let mut pt_threshold = best_to_any_target(ctx, best_arrival, targets);
+    // Pruning bound: a candidate label is rejected by `insert_into_bag`
+    // and the route-scan alight check when *every* target slot's
+    // `best_arrival` bag already weakly dominates the candidate (see
+    // `label_bag::all_targets_dominate`). With per-target output
+    // semantics — where same-stop-different-walk targets and different-
+    // stop targets are distinct destinations — this is the correct
+    // analog of the older scalar cross-target `pt_threshold`: a label
+    // can still produce a non-dominated journey at *some* target if
+    // that target's bag does not dominate it, even when a different
+    // target is reached faster. `target_walk` cancels out of the
+    // dominance comparison so the check operates on raw labels.
 
     // Pick the per-round footpath relaxation strategy once. Closed
     // graphs use a single-pass O(E) walk; non-closed graphs need
@@ -97,7 +91,7 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
             best_arrival,
             board_detail,
             marked_stops,
-            &pt_threshold,
+            targets,
             walked_buf,
             ever_reached,
         );
@@ -110,7 +104,7 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
             best_arrival,
             board_detail,
             marked_stops,
-            &pt_threshold,
+            targets,
             walked_buf,
             relax_heap,
             ever_reached,
@@ -119,7 +113,6 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
     for s in walked_buf.drain(..) {
         marked_stops.insert(s.idx());
     }
-    pt_threshold = best_to_any_target(ctx, best_arrival, targets);
 
     for k in 1..=transfers {
         // Sparse carry-forward: only clone bags at stops ever
@@ -203,16 +196,21 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
                             arrival: arr,
                         },
                     );
-                    // Pareto-aware prune: skip when either the bag at
-                    // `pi` or the target-threshold bag already weakly
-                    // dominates `new_label`. For single-criterion
-                    // `ArrivalTime` each bag has exactly one entry and
-                    // this reduces to two `<=` comparisons (same as the
-                    // previous scalar `arr >= min(best_to_pi,
-                    // pt_threshold)` check); for multi-criterion impls
-                    // it preserves Pareto-incomparable front entries.
+                    // Pareto-aware prune: skip when the bag at `pi`
+                    // already weakly dominates `new_label`, or when every
+                    // target slot's `best_arrival` bag does (the per-
+                    // target equivalent of the older scalar
+                    // `pt_threshold` cross-target check). For single-
+                    // criterion `ArrivalTime` each bag has exactly one
+                    // entry and the check reduces to a small number of
+                    // `<=` comparisons; for multi-criterion impls it
+                    // preserves Pareto-incomparable front entries.
                     if best_arrival[pi.idx()].dominates_label(&new_label)
-                        || pt_threshold.dominates_label(&new_label)
+                        || crate::algorithm::label_bag::all_targets_dominate(
+                            best_arrival,
+                            targets,
+                            &new_label,
+                        )
                     {
                         continue;
                     }
@@ -228,14 +226,6 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
                         );
                         marked_stops.insert(pi.idx());
                         ever_reached.insert(pi.idx());
-                        tighten_pt_threshold(
-                            ctx,
-                            &mut pt_threshold,
-                            pi,
-                            &new_label,
-                            is_dest,
-                            targets,
-                        );
                     }
                 }
 
@@ -292,10 +282,6 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
             q_entry[r.idx()] = None;
         }
 
-        // The route-scan loop tightened `pt_threshold` incrementally
-        // on every successful insert at a target stop, so the relax
-        // pass already sees the tightest known bound; no mid-round
-        // refresh needed.
         if footpaths_closed {
             relax_footpaths_round_closed(
                 tt,
@@ -305,7 +291,7 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
                 best_arrival,
                 board_detail,
                 marked_stops,
-                &pt_threshold,
+                targets,
                 walked_buf,
                 ever_reached,
             );
@@ -318,7 +304,7 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
                 best_arrival,
                 board_detail,
                 marked_stops,
-                &pt_threshold,
+                targets,
                 walked_buf,
                 relax_heap,
                 ever_reached,
@@ -327,12 +313,6 @@ pub(crate) fn run_raptor_rounds<T: Timetable + ?Sized, L: Label>(
         for s in walked_buf.drain(..) {
             marked_stops.insert(s.idx());
         }
-        // Refresh the threshold to capture any target reached during
-        // footpath relaxation. The relax pass does not tighten in line
-        // (kept simple; in-line tightening is now bag-safe and could be
-        // added in a future change), so the next round's route scan
-        // inherits a bound stale by at most one round.
-        pt_threshold = best_to_any_target(ctx, best_arrival, targets);
 
         if marked_stops.is_clear() {
             break;
@@ -372,7 +352,6 @@ pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
         origin_set,
         relax_heap,
         ever_reached,
-        is_dest,
         ..
     } = cache;
 
@@ -380,13 +359,6 @@ pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
     origin_set.clear();
     for &(o, _) in origins {
         origin_set.insert(o.idx());
-    }
-
-    // Populate the destination bitset from the targets slice. The
-    // rounds loop uses this for an O(1) "is this an interesting stop
-    // for the threshold?" check on every successful insert.
-    for &(t, _) in targets {
-        is_dest.insert(t.idx());
     }
 
     // Seed labels for each origin at depart + its walk-time offset.
@@ -414,7 +386,6 @@ pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
         walked_buf,
         relax_heap,
         ever_reached,
-        is_dest,
         transfers,
         require_wheelchair_accessible,
         targets,
@@ -424,37 +395,51 @@ pub(crate) fn run_per_call_query<T: Timetable + ?Sized, L: Label>(
     // in the target's bag at every round and reconstruct its plan.
     // Effective label = bag label extended by the target's walk
     // time offset.
-    let mut journeys =
+    let journeys =
         extract_target_journeys(ctx, labels, board_detail, origin_set, targets, transfers);
 
-    // Output-side Pareto filter on (trip count, label). For any two
-    // returned journeys neither weakly dominates the other on the
-    // pair (plan.len, label). For single-criterion `ArrivalTime`
-    // this collapses to "strictly decreasing arrival as trip count
-    // increases" (the v0.10 contract); for multi-criterion impls
-    // it preserves Pareto-incomparable journeys (e.g. faster but
-    // more walking vs. slower but less walking).
+    // Per-`(target, target_walk)` Pareto filter. Each `(target_stop,
+    // target_walk)` slot in the query's targets list represents a
+    // distinct user destination — same `target_stop` with different
+    // `target_walk`s, or different stops, are not directly comparable.
+    // Cross-target dominance is intentionally NOT applied: the
+    // `pt_threshold` mechanism already drops trip-based journeys whose
+    // raw arrival cannot beat *any* walk-only effective at insert time,
+    // so surviving journeys are per-target Pareto-non-dominated and the
+    // cross-target collapse the previous filter did would lose valid
+    // options whenever two slots in the targets list differ on
+    // `target_walk` (the multi-target same-stop-different-walks case)
+    // or whenever a multi-criterion label is Pareto-incomparable across
+    // destinations.
     //
-    // Sorted by plan.len ascending, then by `arrival()` ascending
-    // as a tiebreaker so the iteration order is deterministic.
+    // Within each slot the comparison is on `(plan.len, label)`. For
+    // single-criterion `ArrivalTime` this collapses to "strictly
+    // decreasing arrival as trip count increases" within the slot; for
+    // multi-criterion impls it preserves Pareto-incomparable journeys
+    // (faster-but-more-walking vs. slower-but-less-walking) at this
+    // slot.
     //
-    // Cross-target dominance is intentionally NOT applied: each target
-    // represents a different destination from the user's perspective,
-    // and a journey to one destination is not dominated by a faster
-    // journey to a different destination. The pt_threshold mechanism
-    // already drops trip-based journeys that cannot beat *any* walk-
-    // only path at insert time (single-criterion-conservative), so
-    // surviving journeys are per-target Pareto-non-dominated.
-    journeys.sort_by_key(|j| (j.plan.len(), j.arrival()));
+    // Journeys are sorted within each slot by (plan.len ascending,
+    // `arrival()` ascending) so the iteration order is deterministic.
     let mut front: Vec<Journey<L>> = Vec::with_capacity(journeys.len());
-    'outer: for j in journeys {
-        for f in &front {
-            if f.plan.len() <= j.plan.len() && f.label.dominates(&j.label) {
-                continue 'outer;
+    for &(slot_target, slot_walk) in targets {
+        let mut slot_journeys: Vec<Journey<L>> = journeys
+            .iter()
+            .filter(|j| j.target == slot_target && j.target_walk == slot_walk)
+            .cloned()
+            .collect();
+        slot_journeys.sort_by_key(|j| (j.plan.len(), j.arrival()));
+        let mut slot_front: Vec<Journey<L>> = Vec::with_capacity(slot_journeys.len());
+        'outer: for j in slot_journeys {
+            for f in &slot_front {
+                if f.plan.len() <= j.plan.len() && f.label.dominates(&j.label) {
+                    continue 'outer;
+                }
             }
+            slot_front.retain(|f| !(j.plan.len() <= f.plan.len() && j.label.dominates(&f.label)));
+            slot_front.push(j);
         }
-        front.retain(|f| !(j.plan.len() <= f.plan.len() && j.label.dominates(&f.label)));
-        front.push(j);
+        front.extend(slot_front);
     }
     front
 }

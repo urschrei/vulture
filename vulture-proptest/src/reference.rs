@@ -145,7 +145,7 @@ pub fn reference_solve(
     tau: u16,
     max_trips: u8,
     require_wheelchair_accessible: bool,
-) -> BTreeSet<(u16, u8)> {
+) -> BTreeSet<(u32, u32, u16, u8)> {
     // Use the first origin as Prep's nominal start; Prep's job is to
     // enumerate candidate timepoints, and adding more sources only
     // grows that set — Prep handles all reachable starts uniformly.
@@ -257,52 +257,40 @@ pub fn reference_solve(
         }
     }
 
-    // RAPTOR's pt_threshold = min over targets of (walk-only arrival at
-    // target_stop + target_walk). Mirrors the algorithm's local/target
-    // pruning, which uses strict inequality on raw arrival vs threshold:
-    // a trip-based journey is dropped if its raw arrival at the target
-    // stop is ≥ τ*. Computed in raw-arrival space (not effective).
-    let walk_only_tau_star: u16 = targets
-        .iter()
-        .map(|&(target_stop, target_walk)| {
-            best_t_at[target_stop as usize][0].saturating_add(target_walk)
-        })
-        .min()
-        .unwrap_or(u16::MAX);
-
-    // For each target × k, emit a journey iff:
-    // 1. `best_t_at[target][k]` strictly improves on
-    //    `best_t_at[target][k-1]` — vulture's bag carries forward, so
-    //    no improvement at this k means no boarding-tree step at
-    //    (k, target, raw_arr) and reconstruction yields nothing.
-    // 2. The raw arrival is strictly less than the walk-only τ*, the
-    //    algorithm's local-pruning threshold.
-    // Walk-only journeys (k = 0) are never emitted: RAPTOR cannot
-    // produce empty plans.
-    let mut out: BTreeSet<(u16, u8)> = BTreeSet::new();
+    // Per-`(target_stop, target_walk)` slot output. For each slot × k,
+    // emit a journey iff `best_t_at[target_stop][k]` strictly improves
+    // on `best_t_at[target_stop][k-1]` — vulture's bag carries forward,
+    // so no improvement at this k means no boarding-tree step at
+    // (k, target_stop, raw_arr) and reconstruction yields nothing. The
+    // carry-forward (`row[k] = min(row[k], row[k-1])` for k >= 1) means
+    // `row[k] < row[k-1]` already implies `row[k] < row[0]`, so the
+    // walk-only-at-this-target dominance check is subsumed.
+    //
+    // No cross-target dominance is applied: per-target output semantics
+    // treat each `(target_stop, target_walk)` slot as a distinct
+    // destination, matching the algorithm's `all_targets_dominate`
+    // predicate which keeps trip-based labels that beat at least one
+    // target's walk-only / best.
+    let mut out: BTreeSet<(u32, u32, u16, u8)> = BTreeSet::new();
     for &(target_stop, target_walk) in targets {
         let row = &best_t_at[target_stop as usize];
+        let mut slot_entries: Vec<(u16, u8)> = Vec::new();
         for k in 1..=max_k {
-            if row[k] < row[k - 1] && row[k] < walk_only_tau_star {
+            if row[k] < row[k - 1] {
                 let eff = row[k].saturating_add(target_walk);
-                out.insert((eff, k as u8));
+                slot_entries.push((eff, k as u8));
+            }
+        }
+        slot_entries.sort_by_key(|&(t, k)| (k, t));
+        let mut best = u16::MAX;
+        for (t, k) in slot_entries {
+            if t < best {
+                best = t;
+                out.insert((u32::from(target_stop), u32::from(target_walk), t, k));
             }
         }
     }
-
-    // Pareto-filter across the union of (target, k) emissions: sort by
-    // (k, t), keep strictly-decreasing arrival.
-    let mut entries: Vec<(u16, u8)> = out.into_iter().collect();
-    entries.sort_by_key(|&(t, k)| (k, t));
-    let mut best = u16::MAX;
-    let mut pareto: BTreeSet<(u16, u8)> = BTreeSet::new();
-    for (t, k) in entries {
-        if t < best {
-            best = t;
-            pareto.insert((t, k));
-        }
-    }
-    pareto
+    out
 }
 
 /// Brute-force reference for the `ArrivalAndWalk` two-criterion label.
@@ -332,7 +320,7 @@ pub fn reference_solve_arrival_and_walk(
     tau: u16,
     max_trips: u8,
     require_wheelchair_accessible: bool,
-) -> BTreeSet<(u16, u16, u8)> {
+) -> BTreeSet<(u32, u32, u16, u16, u8)> {
     let nominal_start = origins.first().map(|&(s, _)| s).unwrap_or(0);
     let prep = Prep::build(spec, nominal_start, tau);
     let inaccessible_stops = &spec.inaccessible_stops;
@@ -422,44 +410,16 @@ pub fn reference_solve_arrival_and_walk(
         }
     }
 
-    // Build a `pt_threshold` Pareto bag from walk-only labels (k = 0) at
-    // each target, extended by that target's walk-offset. Mirrors the
-    // algorithm's cross-target pt_threshold mechanism (boarding.rs's
-    // best_to_any_target): trip-based labels at any stop whose RAW (arr,
-    // walk_time) is weakly dominated by any entry in this bag are filtered
-    // out, matching the algorithm's raw-vs-effective conservative check.
-    let mut pt_threshold_bag: Vec<(u16, u16)> = Vec::new();
-    for &(target_stop, target_walk) in targets {
-        for (&(s, t), bag) in &bags {
-            if s != target_stop {
-                continue;
-            }
-            for &(w, k) in bag {
-                if k != 0 {
-                    continue;
-                }
-                let eff_arr = t.saturating_add(target_walk);
-                let eff_walk = w.saturating_add(target_walk);
-                // Pareto insert.
-                let dominated = pt_threshold_bag
-                    .iter()
-                    .any(|&(a, v)| a <= eff_arr && v <= eff_walk);
-                if dominated {
-                    continue;
-                }
-                pt_threshold_bag.retain(|&(a, v)| !(eff_arr <= a && eff_walk <= v));
-                pt_threshold_bag.push((eff_arr, eff_walk));
-            }
-        }
-    }
-
-    // Per-target Pareto filter. Each target is a different destination from
-    // the user's perspective; trip-based journeys to different targets are
-    // not directly compared. Within each target, walk-only labels at the
-    // same target participate in dominance so a trip-based journey that
-    // ends up worse than just walking to *this* target gets dropped. Drop
+    // Per-`(target_stop, target_walk)` slot Pareto filter. Each slot is
+    // a distinct destination; trip-based journeys to different slots are
+    // not directly compared. Within each slot, walk-only labels at the
+    // same target participate in dominance — a trip-based journey worse
+    // than just walking to *this* destination gets dropped — but the
+    // algorithm's `all_targets_dominate` predicate uses each target's
+    // own best_arrival rather than a cross-target Pareto bag, so the
+    // reference does not apply any pre-filter across targets here. Drop
     // k = 0 from the output to match RAPTOR's empty-plan emission rule.
-    let mut front: BTreeSet<(u16, u16, u8)> = BTreeSet::new();
+    let mut front: BTreeSet<(u32, u32, u16, u16, u8)> = BTreeSet::new();
     for &(target_stop, target_walk) in targets {
         let mut per_target: Vec<(u16, u16, u8)> = Vec::new();
         for (&(s, t), bag) in &bags {
@@ -467,23 +427,13 @@ pub fn reference_solve_arrival_and_walk(
                 continue;
             }
             for &(w, k) in bag {
-                if k > 0 {
-                    // Algorithm-equivalent cross-target pt_threshold filter:
-                    // raw (t, w) is dropped if any pt_threshold bag entry
-                    // (effective form) weakly dominates it.
-                    let dominated_by_threshold =
-                        pt_threshold_bag.iter().any(|&(a, v)| a <= t && v <= w);
-                    if dominated_by_threshold {
-                        continue;
-                    }
-                }
                 let eff_arrival = t.saturating_add(target_walk);
                 let eff_walk_time = w.saturating_add(target_walk);
                 per_target.push((eff_arrival, eff_walk_time, k));
             }
         }
 
-        // 3-D Pareto filter within this target's candidates: keep `c` iff
+        // 3-D Pareto filter within this slot's candidates: keep `c` iff
         // no other `c'` weakly dominates `c` on every component AND
         // strictly dominates on at least one.
         'outer: for &c in &per_target {
@@ -498,20 +448,27 @@ pub fn reference_solve_arrival_and_walk(
             if c.2 == 0 {
                 continue;
             }
-            front.insert(c);
+            front.insert((
+                u32::from(target_stop),
+                u32::from(target_walk),
+                c.0,
+                c.1,
+                c.2,
+            ));
         }
     }
     front
 }
 
 /// Range-query reference: runs `reference_solve` once per departure
-/// and applies the same 3-D Pareto filter vulture's
-/// `filter_range_pareto_front` uses — drop any `(depart, arrival, k)`
-/// triple weakly dominated by another on `(later depart, fewer
-/// transfers, earlier arrival)`.
+/// and applies a per-`(target_stop, target_walk)` 3-D Pareto filter
+/// matching vulture's `filter_range_pareto_front` shape — within each
+/// slot, drop any `(depart, arrival, k)` triple weakly dominated by
+/// another on `(later depart, fewer transfers, earlier arrival)`.
+/// Slots are kept separate so multi-target same-stop-different-walks
+/// queries don't collapse.
 ///
-/// Output is a `BTreeSet<(depart, arrival, k)>` so the proptest can
-/// compare order-independently against vulture's `Vec<RangeJourney>`.
+/// Output: `BTreeSet<(depart, target_stop, target_walk, arrival, k)>`.
 pub fn reference_range_solve(
     spec: &NetworkSpec,
     origins: &[(u8, u16)],
@@ -519,10 +476,13 @@ pub fn reference_range_solve(
     departures: &[u16],
     max_trips: u8,
     require_wheelchair_accessible: bool,
-) -> BTreeSet<(u16, u16, u8)> {
-    let mut all: Vec<(u16, u16, u8)> = Vec::new();
+) -> BTreeSet<(u16, u32, u32, u16, u8)> {
+    // Group by (target_stop, target_walk) slot; apply 3-D Pareto
+    // (depart desc, k asc, arrival asc) within each slot.
+    type Triple = (u16, u16, u8);
+    let mut by_slot: BTreeMap<(u32, u32), Vec<Triple>> = BTreeMap::new();
     for &tau in departures {
-        let front = reference_solve(
+        let single = reference_solve(
             spec,
             origins,
             targets,
@@ -530,30 +490,36 @@ pub fn reference_range_solve(
             max_trips,
             require_wheelchair_accessible,
         );
-        for (arrival, k) in front {
-            all.push((tau, arrival, k));
+        for (stop, walk, arrival, k) in single {
+            by_slot
+                .entry((stop, walk))
+                .or_default()
+                .push((tau, arrival, k));
         }
     }
 
-    // Sort matching vulture's filter_range_pareto_front: descending
-    // depart, ascending plan_len (= k), ascending arrival. Earlier
-    // entries are preferred so equal-on-all-three duplicates resolve
-    // to the first one in.
-    all.sort_by(|a, b| b.0.cmp(&a.0).then(a.2.cmp(&b.2)).then(a.1.cmp(&b.1)));
+    let mut out: BTreeSet<(u16, u32, u32, u16, u8)> = BTreeSet::new();
+    for ((stop, walk), mut all) in by_slot {
+        // Sort matching vulture's filter_range_pareto_front: descending
+        // depart, ascending plan_len (= k), ascending arrival.
+        all.sort_by(|a, b| b.0.cmp(&a.0).then(a.2.cmp(&b.2)).then(a.1.cmp(&b.1)));
 
-    let mut front: Vec<(u16, u16, u8)> = Vec::with_capacity(all.len());
-    'outer: for r in all {
-        let (rd, ra, rk) = r;
-        for &(fd, fa, fk) in &front {
-            if fd >= rd && fk <= rk && fa <= ra {
-                continue 'outer;
+        let mut front: Vec<(u16, u16, u8)> = Vec::with_capacity(all.len());
+        'outer: for r in all {
+            let (rd, ra, rk) = r;
+            for &(fd, fa, fk) in &front {
+                if fd >= rd && fk <= rk && fa <= ra {
+                    continue 'outer;
+                }
             }
+            front.retain(|&(fd, fa, fk)| !(rd >= fd && rk <= fk && ra <= fa));
+            front.push(r);
         }
-        front.retain(|&(fd, fa, fk)| !(rd >= fd && rk <= fk && ra <= fa));
-        front.push(r);
+        for (depart, arrival, k) in front {
+            out.insert((depart, stop, walk, arrival, k));
+        }
     }
-
-    front.into_iter().collect()
+    out
 }
 
 #[cfg(test)]
@@ -561,7 +527,7 @@ mod tests {
     use super::*;
     use crate::spec::*;
 
-    fn front(items: &[(u16, u8)]) -> BTreeSet<(u16, u8)> {
+    fn front(items: &[(u32, u32, u16, u8)]) -> BTreeSet<(u32, u32, u16, u8)> {
         items.iter().copied().collect()
     }
 
@@ -630,7 +596,7 @@ mod tests {
             },
         };
         let r = reference_solve(&spec, &[(0, 0)], &[(1, 0)], 0, 3, false);
-        assert_eq!(r, front(&[(30, 1)]));
+        assert_eq!(r, front(&[(1, 0, 30, 1)]));
     }
 
     #[test]
@@ -691,7 +657,7 @@ mod tests {
             },
         };
         let r = reference_solve(&spec, &[(0, 0)], &[(2, 0)], 0, 3, false);
-        assert_eq!(r, front(&[(70, 1)]));
+        assert_eq!(r, front(&[(2, 0, 70, 1)]));
     }
 
     #[test]
@@ -737,7 +703,7 @@ mod tests {
             },
         };
         let r = reference_solve(&spec, &[(0, 0)], &[(1, 0)], 0, 3, false);
-        assert_eq!(r, front(&[(80, 1)]));
+        assert_eq!(r, front(&[(1, 0, 80, 1)]));
     }
 
     #[test]

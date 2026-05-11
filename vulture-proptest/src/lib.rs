@@ -21,62 +21,78 @@ use std::collections::BTreeSet;
 use vulture::Journey;
 use vulture::labels::ArrivalAndWalk;
 
-/// Project the algorithm's `Vec<Journey>` to a Pareto front of
-/// `(arrival, trip_count)`, sorted by trip count ascending, keeping only
-/// points where arrival is *strictly* less than the best seen so far.
+/// Project the algorithm's `Vec<Journey>` to a per-`(target_stop,
+/// target_walk)` Pareto front of `(arrival, trip_count)`. Each unique
+/// `(target_stop, target_walk)` slot in the query's targets list is its
+/// own destination from the user's perspective; journeys to different
+/// slots are not directly comparable. Within each slot, journeys are
+/// sorted by trip count ascending and only points whose arrival is
+/// strictly less than the best seen so far within the slot are kept.
 ///
-/// This applies the output-side Pareto filter the algorithm should be doing
-/// itself (soundness issue F). Filtering on the harness side intentionally
-/// masks F so the front-equality property isolates issues A, B, C, D.
-pub fn raptor_front(journeys: &[Journey]) -> BTreeSet<(u16, u8)> {
-    let mut points: Vec<(u16, u8)> = journeys
-        .iter()
-        .map(|j| {
-            let arr = u16::try_from(j.arrival().0)
-                .expect("arrival exceeds u16::MAX – generator range exceeded?");
-            let k = u8::try_from(j.plan.len())
-                .expect("plan length exceeds u8::MAX – should never happen");
-            (arr, k)
-        })
-        .collect();
-    points.sort_by_key(|&(t, k)| (k, t));
-    let mut best = u16::MAX;
+/// Output tuple: `(target_stop, target_walk_secs, arrival, trip_count)`.
+pub fn raptor_front(journeys: &[Journey]) -> BTreeSet<(u32, u32, u16, u8)> {
+    let mut by_slot: std::collections::BTreeMap<(u32, u32), Vec<(u16, u8)>> =
+        std::collections::BTreeMap::new();
+    for j in journeys {
+        let arr = u16::try_from(j.arrival().0)
+            .expect("arrival exceeds u16::MAX – generator range exceeded?");
+        let k =
+            u8::try_from(j.plan.len()).expect("plan length exceeds u8::MAX – should never happen");
+        by_slot
+            .entry((j.target.get(), j.target_walk.0))
+            .or_default()
+            .push((arr, k));
+    }
     let mut out = BTreeSet::new();
-    for (arr, k) in points {
-        if arr < best {
-            best = arr;
-            out.insert((arr, k));
+    for ((stop, walk), mut points) in by_slot {
+        points.sort_by_key(|&(t, k)| (k, t));
+        let mut best = u16::MAX;
+        for (arr, k) in points {
+            if arr < best {
+                best = arr;
+                out.insert((stop, walk, arr, k));
+            }
         }
     }
     out
 }
 
-/// Project an `ArrivalAndWalk` journey list to its 3-D Pareto front of
-/// `(effective_arrival, effective_walk_time, trip_count)`. The algorithm
-/// emits one entry per `(round, target, bag-label)` triple, unfiltered;
-/// this helper applies the strict Pareto filter the harness uses to
-/// compare against the reference.
-pub fn arrival_and_walk_front(journeys: &[Journey<ArrivalAndWalk>]) -> BTreeSet<(u16, u16, u8)> {
-    let triples: Vec<(u16, u16, u8)> = journeys
-        .iter()
-        .map(|j| {
-            let arr = u16::try_from(j.label.arrival.0).expect("arrival fits u16 in proptest");
-            let walk = u16::try_from(j.label.walk_time.0).expect("walk_time fits u16 in proptest");
-            let k = u8::try_from(j.plan.len()).expect("plan length fits u8 in proptest");
-            (arr, walk, k)
-        })
-        .collect();
+/// Project an `ArrivalAndWalk` journey list to a per-`(target_stop,
+/// target_walk)` 3-D Pareto front of `(effective_arrival,
+/// effective_walk_time, trip_count)`. Each `(target_stop, target_walk)`
+/// slot in the query's targets list is its own destination; journeys
+/// to different slots are not directly comparable.
+///
+/// Output tuple: `(target_stop, target_walk_secs, arrival, walk_time,
+/// trip_count)`.
+pub fn arrival_and_walk_front(
+    journeys: &[Journey<ArrivalAndWalk>],
+) -> BTreeSet<(u32, u32, u16, u16, u8)> {
+    type Triple = (u16, u16, u8);
+    let mut by_slot: std::collections::BTreeMap<(u32, u32), Vec<Triple>> =
+        std::collections::BTreeMap::new();
+    for j in journeys {
+        let arr = u16::try_from(j.label.arrival.0).expect("arrival fits u16 in proptest");
+        let walk = u16::try_from(j.label.walk_time.0).expect("walk_time fits u16 in proptest");
+        let k = u8::try_from(j.plan.len()).expect("plan length fits u8 in proptest");
+        by_slot
+            .entry((j.target.get(), j.target_walk.0))
+            .or_default()
+            .push((arr, walk, k));
+    }
     let mut front = BTreeSet::new();
-    'outer: for &c in &triples {
-        for &other in &triples {
-            if other == c {
-                continue;
+    for ((stop, walk_off), triples) in by_slot {
+        'outer: for &c in &triples {
+            for &other in &triples {
+                if other == c {
+                    continue;
+                }
+                if other.0 <= c.0 && other.1 <= c.1 && other.2 <= c.2 {
+                    continue 'outer;
+                }
             }
-            if other.0 <= c.0 && other.1 <= c.1 && other.2 <= c.2 {
-                continue 'outer;
-            }
+            front.insert((stop, walk_off, c.0, c.1, c.2));
         }
-        front.insert(c);
     }
     front
 }
@@ -256,36 +272,13 @@ fn parallel_naive_matches_serial_rrap(tc: hegel::TestCase) {
 }
 
 /// Property check for the [`ArrivalAndWalk`] label: vulture's
-/// `query_with_label::<ArrivalAndWalk>()` Pareto front of
-/// `(arrival, walk_time, trip_count)` should equal the brute-force
-/// reference's. Stays on `layer2_bounds`: layer 2 has footpaths (so
-/// walking accumulates non-trivially) but neither fares nor accessibility
-/// flags, keeping the property focused on `ArrivalAndWalk`'s arithmetic
-/// and dominance behaviour.
-///
-/// **Currently `#[ignore]`d.** After the pt_threshold bag fix the
-/// algorithm correctly admits Pareto-incomparable multi-criterion
-/// labels, but successive Hegel runs surfaced two more semantic gaps
-/// that an equality property against a brute-force reference would
-/// need to model precisely:
-///
-/// 1. **Multi-target same-stop-different-walks queries.** Targets like
-///    `[(1, 0), (1, 1)]` represent two distinct user destinations
-///    (stop 1 itself + stop 1 with a 1-second walk), but the output
-///    Pareto filter compares journeys on `(plan.len, label)` only and
-///    collapses them into a single Pareto-dominant entry.
-/// 2. **Cross-target pt_threshold conservatism.** The threshold
-///    mechanism uses a raw-vs-effective comparison that single-criterion
-///    accepts but multi-criterion can over-permit, while the same
-///    pt_threshold semantics under-emit per-target Pareto fronts in
-///    a different way.
-///
-/// Either bug-shape requires more design work than fits in this PR.
-/// The reference solver and projector stay in tree as infrastructure;
-/// the property runs cleanly once the algorithm's multi-target +
-/// multi-criterion emission semantics are nailed down.
+/// `query_with_label::<ArrivalAndWalk>()` per-`(target_stop,
+/// target_walk)` Pareto front of `(arrival, walk_time, trip_count)`
+/// equals the brute-force reference's. Stays on `layer2_bounds`: layer
+/// 2 has footpaths (so walking accumulates non-trivially) but neither
+/// fares nor accessibility flags, keeping the property focused on
+/// `ArrivalAndWalk`'s arithmetic and dominance behaviour.
 #[hegel::test(crate::proptest_settings(), test_cases = 500)]
-#[ignore = "multi-target same-stop-different-walks + cross-target pt_threshold semantics; future work"]
 fn arrival_and_walk_matches_reference(tc: hegel::TestCase) {
     let spec = tc.draw(spec::network_spec(spec::layer2_bounds()));
     let timetable = spec::render(&spec);
@@ -477,11 +470,13 @@ fn range_query_matches_reference(tc: hegel::TestCase) {
         .depart_in_window(departures_secondofday.iter().copied())
         .run();
 
-    let our_set: std::collections::BTreeSet<(u16, u16, u8)> = ours
+    let our_set: std::collections::BTreeSet<(u16, u32, u32, u16, u8)> = ours
         .iter()
         .map(|rj| {
             (
                 u16::try_from(rj.depart.0).unwrap_or(u16::MAX),
+                rj.journey.target.get(),
+                rj.journey.target_walk.0,
                 u16::try_from(rj.journey.arrival().0).unwrap_or(u16::MAX),
                 u8::try_from(rj.journey.plan.len()).unwrap_or(u8::MAX),
             )
@@ -516,6 +511,7 @@ mod tests {
         Journey {
             origin: StopIdx::new(0),
             target: StopIdx::new(0),
+            target_walk: Duration::ZERO,
             plan: plan
                 .into_iter()
                 .map(|(r, s)| (RouteIdx::new(r), StopIdx::new(s)))
@@ -526,13 +522,18 @@ mod tests {
 
     #[test]
     fn raptor_front_drops_dominated_higher_trip_journeys() {
+        // All three journeys are at the same `(target, target_walk)`
+        // slot (StopIdx(0), Duration::ZERO).
         let journeys = vec![
             j(100, vec![(0, 1)]),
             j(100, vec![(0, 2), (1, 3)]),
             j(80, vec![(0, 2), (1, 3)]),
         ];
         let f = raptor_front(&journeys);
-        let expected: BTreeSet<(u16, u8)> = [(100u16, 1u8), (80u16, 2u8)].into_iter().collect();
+        let expected: BTreeSet<(u32, u32, u16, u8)> =
+            [(0u32, 0u32, 100u16, 1u8), (0u32, 0u32, 80u16, 2u8)]
+                .into_iter()
+                .collect();
         assert_eq!(f, expected);
     }
 
@@ -546,7 +547,8 @@ mod tests {
     fn raptor_front_strict_monotonicity_drops_ties() {
         let journeys = vec![j(50, vec![(0, 1)]), j(50, vec![(0, 1), (1, 2)])];
         let f = raptor_front(&journeys);
-        let expected: BTreeSet<(u16, u8)> = [(50u16, 1u8)].into_iter().collect();
+        let expected: BTreeSet<(u32, u32, u16, u8)> =
+            [(0u32, 0u32, 50u16, 1u8)].into_iter().collect();
         assert_eq!(f, expected);
     }
 }
