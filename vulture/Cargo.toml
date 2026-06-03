@@ -45,9 +45,9 @@ dot_graph = { version = "0.2", optional = true }
 fixedbitset = "0.5"
 gtfs-structures = { version = "0.47.0", default-features = false }
 jiff = "0.2"
-log = "0.4.29"
+log = "0.4.31"
 rayon = { version = "1.10", optional = true }
-rstar = "0.12"
+rstar = "0.13"
 rustc-hash = "2"
 smallvec = { version = "1.15.1", features = ["const_generics"] }
 thiserror = "2.0.18"
