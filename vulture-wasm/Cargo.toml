@@ -23,7 +23,7 @@ wasm-opt = ["-Oz"]
 
 [dependencies]
 vulture = { path = "../vulture", default-features = false }
-gtfs-structures = { version = "0.47.0", default-features = false }
+gtfs-structures = { version = "0.48.2", default-features = false }
 jiff = "0.2"
 js-sys = "0.3"
 wasm-bindgen = "0.2"
